@@ -46,11 +46,10 @@ Grab the latest `Otto.app.zip` from the
 
 1. Download `Otto.app.zip` and unzip it.
 2. Drag `Otto.app` into `/Applications`.
-3. **First launch:** the build is unsigned, so macOS Gatekeeper will block it.
-   Either:
-   - Right-click `Otto.app` → **Open** → click **Open** in the warning dialog.
-     macOS remembers the choice. *Or*
-   - In Terminal: `xattr -cr /Applications/Otto.app`, then double-click.
+3. Open it.
+
+Builds are signed with an Apple Developer ID and notarized, so Gatekeeper
+launches them without warnings.
 
 Then jump to [SETUP.md](SETUP.md) to install the Claude Code or Codex CLI and
 sign in.
