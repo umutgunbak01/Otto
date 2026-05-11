@@ -15,6 +15,7 @@ struct IntegrationsView: View {
         case googleDrive = "Google Drive"
         case todoist = "Todoist"
         case notion = "Notion"
+        case tally = "Tally"
         case linkedin = "LinkedIn"
         case twitter = "X (Twitter)"
         case supabase = "Custom Database"
@@ -29,6 +30,7 @@ struct IntegrationsView: View {
             case .googleDrive: return "folder.badge.gearshape"
             case .todoist: return "checkmark.circle"
             case .notion: return "doc.text"
+            case .tally: return "list.bullet.rectangle"
             case .linkedin: return "person.2"
             case .twitter: return "text.bubble"
             case .supabase: return "externaldrive.connected.to.line.below"
@@ -45,6 +47,7 @@ struct IntegrationsView: View {
             case .googleDrive: return "Read, search, and create Drive files via Google's official Drive MCP server"
             case .todoist: return "Sync tasks from your Todoist projects"
             case .notion: return "Sync pages as notes from your Notion workspace"
+            case .tally: return "Manage forms and analyze submissions via Tally's official MCP server"
             case .linkedin: return "Import connections from LinkedIn CSV export"
             case .twitter: return "Import tweets, DMs, followers, and bookmarks"
             case .supabase: return "Read/write your own Supabase projects via the official MCP server"
@@ -92,6 +95,9 @@ struct IntegrationsView: View {
         }
         .sheet(isPresented: $showingGenmediaSetup) {
             genmediaSetupSheet
+        }
+        .sheet(isPresented: $showingTallyKeyInput) {
+            tallyKeyInputSheet
         }
     }
 
@@ -335,6 +341,7 @@ struct IntegrationsView: View {
         case .googleDrive: return .blue
         case .todoist: return .red
         case .notion: return .gray
+        case .tally: return .pink
         case .linkedin: return .indigo
         case .twitter: return .primary
         case .supabase: return .green
@@ -368,6 +375,11 @@ struct IntegrationsView: View {
             return appState.isTodoistConnected
         case .notion:
             return appState.isNotionConnected
+        case .tally:
+            // Bound to a tick so paste/clear flips the card without
+            // requiring SwiftUI to observe the Keychain directly.
+            let _ = tallyRefreshTick
+            return TallyService.shared.hasAPIKey()
         case .linkedin:
             return !appState.connections.isEmpty
         case .twitter:
@@ -395,6 +407,8 @@ struct IntegrationsView: View {
             return true // API token based
         case .notion:
             return true // Integration token based
+        case .tally:
+            return true // API key based
         case .linkedin:
             return true // CSV import available
         case .twitter:
@@ -459,6 +473,11 @@ struct IntegrationsView: View {
             showingTodoistTokenInput = true
         case .notion:
             showingNotionTokenInput = true
+        case .tally:
+            // Pre-fill the input with whatever's currently stored so the
+            // user can edit instead of blindly retyping.
+            tallyKeyInput = TallyService.shared.apiKey() ?? ""
+            showingTallyKeyInput = true
         case .linkedin:
             // LinkedIn import opens an NSOpenPanel directly instead of
             // SwiftUI's .fileImporter. Reason: this view lives inside a
@@ -505,6 +524,8 @@ struct IntegrationsView: View {
             todoistExpandedContent
         case .notion:
             notionExpandedContent
+        case .tally:
+            tallyExpandedContent
         case .linkedin:
             linkedInExpandedContent
         case .twitter:
@@ -649,6 +670,15 @@ struct IntegrationsView: View {
     // OAuth flows (rare, but cheap to model right).
     @State private var isReauthorizingCalendarMcp: Bool = false
     @State private var calendarMcpReauthError: String?
+
+    // MARK: - Tally State
+
+    @State private var showingTallyKeyInput = false
+    @State private var tallyKeyInput = ""
+    @State private var showingTallyKey = false
+    /// Bumped on save / clear so isConnected(.tally) re-evaluates without
+    /// SwiftUI observing the Keychain directly.
+    @State private var tallyRefreshTick: Int = 0
 
     // MARK: - Supabase Custom Project State
 
@@ -1934,6 +1964,158 @@ struct IntegrationsView: View {
             }
             calendarMcpReauthError = error.localizedDescription
         }
+    }
+
+    // MARK: - Tally Expanded Content
+
+    private var tallyExpandedContent: some View {
+        let _ = tallyRefreshTick
+        let connected = TallyService.shared.hasAPIKey()
+
+        return VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(connected ? .green : .orange)
+                Text(connected
+                     ? "Connected — Tally MCP server wired into chat."
+                     : "Not connected yet. Click Set API key to paste a tly-… token.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Button {
+                    tallyKeyInput = TallyService.shared.apiKey() ?? ""
+                    showingTallyKeyInput = true
+                } label: {
+                    Text(connected ? "Change API key" : "Set API key")
+                        .font(Theme.Typography.caption)
+                }
+                .buttonStyle(GhostButtonStyle())
+
+                if connected {
+                    Button {
+                        TallyService.shared.clearAPIKey()
+                        tallyRefreshTick &+= 1
+                    } label: {
+                        Text("Disconnect")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.priorityUrgent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Removes the stored API key. The Tally MCP server stops being injected into chats.")
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "wrench.adjustable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Agent tools: form discovery (`tally__list_forms`, `tally__get_form`), submissions (`tally__fetch_submissions`, `tally__fetch_insights`), and form CRUD (`tally__create_new_form`, `tally__save_form`, `tally__update_settings`, etc.). Exact tool set is discovered from Tally's MCP server at chat-turn start.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Free on all Tally plans. Get a `tly-…` API key from tally.so → Workspace settings → API keys. The key is stored in macOS Keychain (`com.otto.tally.apikey`); never written to disk in plain text.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    // MARK: - Tally Key Input Sheet
+
+    private var tallyKeyInputSheet: some View {
+        VStack(spacing: Theme.Spacing.xl) {
+            HStack {
+                Text("Connect Tally")
+                    .font(Theme.Typography.title)
+                Spacer()
+                Button {
+                    showingTallyKeyInput = false
+                    tallyKeyInput = ""
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("Paste your Tally API key:")
+                    .font(Theme.Typography.body)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("1. Open tally.so → top-right menu → Workspace settings")
+                    Text("2. Open the API keys section, create a new key")
+                    Text("3. Copy the token — it starts with `tly-…`")
+                    Text("4. Paste here and click Save")
+                }
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                if showingTallyKey {
+                    TextField("tly-…", text: $tallyKeyInput)
+                        .textFieldStyle(.plain)
+                        .font(Theme.Typography.body)
+                } else {
+                    SecureField("tly-…", text: $tallyKeyInput)
+                        .textFieldStyle(.plain)
+                        .font(Theme.Typography.body)
+                }
+                Button {
+                    showingTallyKey.toggle()
+                } label: {
+                    Image(systemName: showingTallyKey ? "eye.slash" : "eye")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(Theme.Spacing.md)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+            )
+
+            Button {
+                let trimmed = tallyKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                _ = TallyService.shared.setAPIKey(trimmed)
+                tallyRefreshTick &+= 1
+                showingTallyKeyInput = false
+                tallyKeyInput = ""
+            } label: {
+                Text("Save")
+                    .font(Theme.Typography.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Theme.Spacing.md)
+                    .background(tallyKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+            .buttonStyle(.plain)
+            .disabled(tallyKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Spacer()
+        }
+        .padding(Theme.Spacing.xl)
+        .frame(width: 460, height: 380)
+        .background(Theme.Colors.background)
     }
 
     private func presentLinkedInImportPanel() {

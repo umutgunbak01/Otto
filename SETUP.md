@@ -24,6 +24,7 @@ app is usable. Everything else is optional and can be added later.
   - [GenMedia (fal.ai)](#genmedia-falai)
   - [Todoist](#todoist)
   - [Notion](#notion)
+  - [Tally (forms)](#tally-forms)
   - [Fireflies (meeting transcripts)](#fireflies-meeting-transcripts)
   - [X (Twitter)](#x-twitter)
   - [LinkedIn](#linkedin)
@@ -48,6 +49,7 @@ Before you paste any credentials, know where they go.
 | Google OAuth Client ID + access/refresh tokens | UserDefaults (client id, non-secret) + macOS Keychain (tokens) | macOS Keychain (signed in user) |
 | X (Twitter) Client ID + OAuth tokens | macOS Keychain under `com.otto.x.*` | macOS Keychain (signed in user) |
 | Supabase Personal Access Tokens | macOS Keychain under `com.otto.supabase` — one entry per registered project | macOS Keychain (signed in user) |
+| Tally API key | macOS Keychain under `com.otto.tally.apikey`. Passed to Tally's MCP server (`https://api.tally.so/mcp`) as a Bearer header at chat-turn start. | macOS Keychain (signed in user) |
 
 **No credential is ever sent to any server other than the official endpoint it's
 intended for** (anthropic.com, openai.com, googleapis.com, fal.run,
@@ -429,6 +431,31 @@ search them like any other notes via `search_items`.
    with them. In Notion, for each page/database you want Otto to see, click
    the `…` menu (top right) → **Connect to** → pick your Otto integration.
    Children of shared pages are included automatically.
+
+### Tally (forms)
+
+**What this unlocks:** the agent can manage your Tally forms and analyze
+submissions through [Tally's official MCP server][tally-mcp] at
+`https://api.tally.so/mcp`. Typical asks: "show me submissions to the
+contact form from last week", "how many people RSVP'd to the event
+form", "create a new feedback form with these questions". Tally's MCP
+server is free on all plans.
+
+[tally-mcp]: https://developers.tally.so/api-reference/mcp
+
+1. Sign in at <https://tally.so/>.
+2. Top-right menu → **Workspace settings** → **API keys**.
+3. Click **Create API key**, give it a name, copy the token (starts
+   with `tly-…`).
+4. In Otto: **Integrations** → click **Connect** on **Tally** → paste
+   the key, click Save.
+5. The card flips to "Connected." From the next chat turn the agent
+   has the Tally tools (`tally__list_forms`, `tally__fetch_submissions`,
+   `tally__create_new_form`, etc.) in its tool list.
+
+**Where the key lives:** macOS Keychain under `com.otto.tally.apikey`.
+Never written to disk in plain text. Disconnect at any time via
+Integrations → Tally → Disconnect — the key is deleted from Keychain.
 
 ### Fireflies (meeting transcripts)
 

@@ -183,6 +183,17 @@ actor CodexCLIService {
                 NSLog("[CodexCLI] Calendar MCP skipped — token unavailable: %@", error.localizedDescription)
             }
         }
+        // Tally — same shape as Supabase below, single shared key from
+        // TallyService.apiKey() instead of a per-project PAT.
+        if let tallyKey = TallyService.shared.apiKey(), !tallyKey.isEmpty {
+            let envVarName = "OTTO_TALLY_BEARER_TOKEN"
+            args.append(contentsOf: [
+                "-c", "mcp_servers.tally.url=\"https://api.tally.so/mcp\"",
+                "-c", "mcp_servers.tally.transport=\"streamable_http\"",
+                "-c", "mcp_servers.tally.bearer_token_env_var=\"\(envVarName)\""
+            ])
+            env[envVarName] = tallyKey
+        }
         for project in SupabaseProjectsService.shared.allProjects() {
             guard let pat = SupabaseProjectsService.shared.pat(for: project.id) else { continue }
             let envVarName = "OTTO_SUPABASE_PAT_\(project.id.uuidString.replacingOccurrences(of: "-", with: ""))"

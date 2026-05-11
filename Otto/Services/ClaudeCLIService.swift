@@ -169,6 +169,16 @@ actor ClaudeCLIService {
                 NSLog("[ClaudeCLI] Calendar MCP skipped — token unavailable: %@", error.localizedDescription)
             }
         }
+        // Tally — remote MCP server at api.tally.so/mcp. Auth is a stored
+        // `tly-…` API key the user pasted in Integrations; no OAuth dance,
+        // no per-turn refresh needed.
+        if let tallyKey = TallyService.shared.apiKey(), !tallyKey.isEmpty {
+            mcpServers["tally"] = [
+                "type": "http",
+                "url": "https://api.tally.so/mcp",
+                "headers": ["Authorization": "Bearer \(tallyKey)"]
+            ]
+        }
         for project in SupabaseProjectsService.shared.allProjects() {
             guard let pat = SupabaseProjectsService.shared.pat(for: project.id) else { continue }
             mcpServers["supabase_\(project.slug)"] = [

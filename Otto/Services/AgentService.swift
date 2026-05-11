@@ -334,6 +334,15 @@ actor AgentService {
             parts.append("The user has connected their Google Drive. Use `drive__search_files` to find files by name or content, `drive__list_recent_files` for 'what did I work on lately'-style queries, `drive__get_file_metadata` for size / owner / modified info, `drive__get_file_permissions` to inspect sharing, `drive__read_file_content` to pull the actual contents of Docs / Sheets / Slides into your context, and `drive__download_file_content` for raw file bytes. `drive__create_file` writes new files into the user's Drive — only invoke it when the user explicitly asks to save something there. All tools are scoped to the user's own Drive via OAuth; the agent never sees files outside their grant.")
         }
 
+        // Tally — remote MCP server hosted by Tally at api.tally.so/mcp,
+        // gives the agent access to the user's Tally workspaces (form
+        // catalogue, submissions, form CRUD). Advertise only when the
+        // user has pasted a tly-* API key.
+        if TallyService.shared.hasAPIKey() {
+            parts.append("\n## Tally (forms)")
+            parts.append("The user has connected their Tally account. Use the `tally__*` MCP tools to list their workspaces and forms, retrieve form definitions and submissions, filter submissions by date or status, and create / update forms. Typical asks: 'show submissions from last week to the contact form', 'how many submissions did each of my forms get in October', 'create a new form for event RSVPs'. Tools available via the tally MCP server include form discovery (list forms / get form), submissions retrieval (fetch_submissions / insights), and form CRUD (create_new_form, save_form, update_settings, etc.). Discover the exact tool set on first use via the MCP server's tool list.")
+        }
+
         // Google Calendar (live) — Google's Calendar MCP server. Distinct
         // from the periodic event sync that already populates
         // appState.calendarEvents: those events are synced into Otto's

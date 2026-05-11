@@ -30,8 +30,9 @@ Nothing leaves your device unless you explicitly connect an integration.
 - **Integrations** — Gmail, Google Calendar, Google Calendar (live, via
   Google's official Calendar MCP server — agent can schedule, edit,
   suggest meeting times), Google Drive (read/search/create via Google's
-  official Drive MCP server), Todoist (two-way sync), Notion, Fireflies,
-  LinkedIn CSV import
+  official Drive MCP server), Tally (manage forms + analyze submissions
+  via Tally's official MCP server), Todoist (two-way sync), Notion,
+  Fireflies, LinkedIn CSV import
 - **Local persistence** — single JSON file you can back up, inspect, or move
 - **Habits, ideas, bookmarks with link metadata, meeting transcripts**,
   PDF export, screen capture for context
