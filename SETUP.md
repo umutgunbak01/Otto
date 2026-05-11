@@ -18,6 +18,7 @@ app is usable. Everything else is optional and can be added later.
 - [Step 1: Pick an agent backend (required)](#step-1-pick-an-agent-backend-required)
 - [Step 2: Optional integrations](#step-2-optional-integrations)
   - [Gmail & Google Calendar](#gmail--google-calendar)
+  - [Google Drive](#google-drive)
   - [Voice mode (fal.ai)](#voice-mode-falai)
   - [GenMedia (fal.ai)](#genmedia-falai)
   - [Todoist](#todoist)
@@ -270,6 +271,39 @@ this easily.
 **If you get an error like "Access blocked: Otto's request is invalid":**
 your OAuth consent screen is still missing scopes, or you didn't add yourself
 as a test user. Step 4 above fixes both.
+
+### Google Drive
+
+**What this unlocks:** the agent can search, list, read, and create files
+in your Google Drive via [Google's official Drive MCP server][drive-mcp]
+at `https://drivemcp.googleapis.com/mcp/v1`. Ask the chat "find my Q3 OKRs
+doc and summarise it" — it'll call `drive__search_files` and
+`drive__read_file_content` end-to-end without you copying anything in.
+
+[drive-mcp]: https://developers.google.com/workspace/drive/api/guides/configure-mcp-server
+
+This shares the OAuth client you already set up for Gmail / Calendar.
+You only need a small one-time Google Cloud add-on:
+
+1. Go back to your Google Cloud project (the one from the Gmail / Calendar
+   step above).
+2. **APIs & Services → Library** — search for and **enable** *both*:
+   - `Google Drive API` (`drive.googleapis.com`)
+   - `Google Drive MCP API` (`drivemcp.googleapis.com`)
+3. **APIs & Services → OAuth consent screen → Edit** — under Scopes, add:
+   - `https://www.googleapis.com/auth/drive.readonly`
+   - `https://www.googleapis.com/auth/drive.file`
+4. In Otto: **Integrations** → click **Connect** on **Google Drive**.
+   An ephemeral Safari window opens with a fresh consent screen that now
+   lists the two Drive scopes alongside the Gmail / Calendar ones. Approve.
+5. The card flips to "Connected — Drive scopes granted." From this point
+   on, every chat turn injects the Drive MCP server into the agent's tool
+   list (`drive__search_files`, `drive__read_file_content`, etc.).
+
+**Where Drive content lives:** never in `otto_data.json`. The agent fetches
+contents on-demand through the MCP server; they stay in chat-turn context
+only. Disconnect at any time via Integrations → Google Drive → Disconnect
+Drive — Gmail and Calendar keep working unaffected.
 
 ### Voice mode (fal.ai)
 

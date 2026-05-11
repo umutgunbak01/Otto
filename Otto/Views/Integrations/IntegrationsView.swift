@@ -11,6 +11,7 @@ struct IntegrationsView: View {
         case fireflies = "Fireflies"
         case gmail = "Gmail"
         case googleCalendar = "Google Calendar"
+        case googleDrive = "Google Drive"
         case todoist = "Todoist"
         case notion = "Notion"
         case linkedin = "LinkedIn"
@@ -23,6 +24,7 @@ struct IntegrationsView: View {
             case .fireflies: return "waveform"
             case .gmail: return "envelope"
             case .googleCalendar: return "calendar"
+            case .googleDrive: return "folder.badge.gearshape"
             case .todoist: return "checkmark.circle"
             case .notion: return "doc.text"
             case .linkedin: return "person.2"
@@ -37,6 +39,7 @@ struct IntegrationsView: View {
             case .fireflies: return "Import meeting transcripts and action items"
             case .gmail: return "Sync emails and create tasks from messages"
             case .googleCalendar: return "Import calendar events and meetings"
+            case .googleDrive: return "Read, search, and create Drive files via Google's official Drive MCP server"
             case .todoist: return "Sync tasks from your Todoist projects"
             case .notion: return "Sync pages as notes from your Notion workspace"
             case .linkedin: return "Import connections from LinkedIn CSV export"
@@ -325,6 +328,7 @@ struct IntegrationsView: View {
         case .fireflies: return .purple
         case .gmail: return .red
         case .googleCalendar: return .blue
+        case .googleDrive: return .blue
         case .todoist: return .red
         case .notion: return .gray
         case .linkedin: return .indigo
@@ -342,6 +346,13 @@ struct IntegrationsView: View {
             return appState.isGmailConnected || appState.needsGoogleReauth
         case .googleCalendar:
             return appState.isCalendarConnected || appState.needsGoogleReauth
+        case .googleDrive:
+            // Reads through GoogleAuthService — flipped on by the user via
+            // `connectIntegration(.googleDrive)` after a successful
+            // reauthorisation. driveRefreshTick is observed so the card
+            // re-renders the moment reauthorize() returns.
+            let _ = driveRefreshTick
+            return GoogleAuthService.shared.hasDriveScopes()
         case .todoist:
             return appState.isTodoistConnected
         case .notion:
@@ -365,6 +376,8 @@ struct IntegrationsView: View {
             return true // Can connect via OAuth
         case .googleCalendar:
             return true // Uses same OAuth as Gmail
+        case .googleDrive:
+            return true // Shares the Gmail/Calendar OAuth client + extra scopes
         case .todoist:
             return true // API token based
         case .notion:
@@ -402,6 +415,20 @@ struct IntegrationsView: View {
             } else {
                 googleClientIdInput = ""
                 googleClientIdNextAction = .calendar
+                showingGoogleClientIdInput = true
+            }
+        case .googleDrive:
+            // Drive piggybacks on the Gmail/Calendar OAuth client. If the
+            // user hasn't pasted one yet, route them through the existing
+            // client-id sheet first — the new `.drive` next-action makes
+            // its Save handler call reauthorize() with the expanded scope
+            // set. If a client ID is already on file, jump straight to the
+            // reauth flow so Google's consent screen lists the Drive scopes.
+            if GoogleAuthService.shared.hasClientId {
+                Task { await runDriveReauthorize() }
+            } else {
+                googleClientIdInput = ""
+                googleClientIdNextAction = .drive
                 showingGoogleClientIdInput = true
             }
         case .todoist:
@@ -446,6 +473,8 @@ struct IntegrationsView: View {
             gmailExpandedContent
         case .googleCalendar:
             calendarExpandedContent
+        case .googleDrive:
+            googleDriveExpandedContent
         case .todoist:
             todoistExpandedContent
         case .notion:
@@ -575,7 +604,16 @@ struct IntegrationsView: View {
     @State private var googleClientIdInput = ""
     @State private var googleClientIdNextAction: GoogleConnectTarget = .gmail
 
-    enum GoogleConnectTarget { case gmail, calendar }
+    enum GoogleConnectTarget { case gmail, calendar, drive }
+
+    // MARK: - Google Drive State
+
+    /// Bumped after a successful reauthorize() / disconnect so the Drive card
+    /// re-renders without an app restart. GoogleAuthService stores state in
+    /// UserDefaults + Keychain, which SwiftUI doesn't observe directly.
+    @State private var driveRefreshTick: Int = 0
+    @State private var isReauthorizingDrive: Bool = false
+    @State private var driveReauthError: String?
 
     // MARK: - Supabase Custom Project State
 
@@ -1469,6 +1507,7 @@ struct IntegrationsView: View {
                     switch googleClientIdNextAction {
                     case .gmail: await appState.connectGmail()
                     case .calendar: await appState.connectCalendar()
+                    case .drive: await runDriveReauthorize()
                     }
                 }
             } label: {
@@ -1619,6 +1658,131 @@ struct IntegrationsView: View {
     /// Used in place of SwiftUI's `.fileImporter` because IntegrationsView
     /// is presented inside a `.sheet`, which suppresses `.fileImporter`
     /// presentations on macOS.
+    // MARK: - Google Drive Expanded Content
+
+    private var googleDriveExpandedContent: some View {
+        // Reading the tick forces the view to re-evaluate after reauthorize()
+        // and disconnect — neither mutate SwiftUI-observable state, they just
+        // bump a UserDefaults bool.
+        let _ = driveRefreshTick
+        let connected = GoogleAuthService.shared.hasDriveScopes()
+
+        return VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            // Status row
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(connected ? .green : .orange)
+                Text(connected
+                     ? "Connected — Drive scopes granted to Otto's OAuth token."
+                     : "Drive scopes not granted yet. Click Re-authorize to add them to your Google grant.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                Spacer(minLength: 0)
+            }
+
+            if let error = driveReauthError {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            // Re-auth / disconnect row
+            HStack(spacing: Theme.Spacing.sm) {
+                Button {
+                    Task { await runDriveReauthorize() }
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        if isReauthorizingDrive {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11))
+                        }
+                        Text(connected ? "Re-authorize" : "Connect Drive")
+                            .font(Theme.Typography.caption)
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(isReauthorizingDrive)
+
+                if connected {
+                    Button {
+                        GoogleAuthService.shared.driveEnabled = false
+                        driveRefreshTick &+= 1
+                    } label: {
+                        Text("Disconnect Drive")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.priorityUrgent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the Drive MCP server from being injected into chats. Doesn't touch your Gmail/Calendar connection.")
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            // Tools advert
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "wrench.adjustable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Agent tools: `drive__search_files`, `drive__list_recent_files`, `drive__get_file_metadata`, `drive__get_file_permissions`, `drive__read_file_content`, `drive__download_file_content`, `drive__create_file`.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            // GCP setup reminder
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("One-time GCP setup")
+                        .font(Theme.Typography.small.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("Enable both `drive.googleapis.com` and `drivemcp.googleapis.com` in your Cloud project, then add `drive.readonly` and `drive.file` to the OAuth consent screen. (Uses the same OAuth client as Gmail / Calendar.)")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+        }
+    }
+
+    /// Run the OAuth re-consent flow that adds Drive scopes to the existing
+    /// Google grant. Sets the `driveEnabled` flag *before* the flow so the
+    /// scope-builder includes the Drive scopes; clears it on cancel/error
+    /// so we don't end up advertising Drive in chats without a usable token.
+    @MainActor
+    private func runDriveReauthorize() async {
+        isReauthorizingDrive = true
+        driveReauthError = nil
+        GoogleAuthService.shared.driveEnabled = true
+        defer {
+            isReauthorizingDrive = false
+            driveRefreshTick &+= 1
+        }
+        do {
+            _ = try await GoogleAuthService.shared.reauthorize()
+            // hasDriveScopes() now reads true; the card flips green on the
+            // tick bump in the defer above.
+        } catch {
+            // Roll back the flag — Drive isn't actually granted, and leaving
+            // it on would make the MCP injection fire with a stale token.
+            GoogleAuthService.shared.driveEnabled = false
+            // Suppress the cancel-by-user error from the UI; nothing to say.
+            if case GoogleAuthError.userCancelled = error {
+                return
+            }
+            driveReauthError = error.localizedDescription
+        }
+    }
+
     private func presentLinkedInImportPanel() {
         let panel = NSOpenPanel()
         panel.title = "Import LinkedIn Connections"

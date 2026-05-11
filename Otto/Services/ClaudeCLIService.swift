@@ -138,6 +138,24 @@ actor ClaudeCLIService {
         } else {
             NSLog("[ClaudeCLI] MCP server unavailable — Otto tools disabled this turn")
         }
+        // Google Drive — Google hosts a remote MCP server that takes the
+        // user's OAuth access token as a Bearer header. Inject it whenever
+        // the user has flipped on the Drive integration. Token refresh
+        // happens at fetch time (within getValidAccessToken's 5-minute
+        // buffer); if the refresh fails, skip the Drive server for this
+        // turn rather than crashing the whole chat.
+        if GoogleAuthService.shared.hasDriveScopes() {
+            do {
+                let driveToken = try await GoogleAuthService.shared.getValidAccessToken()
+                mcpServers["drive"] = [
+                    "type": "http",
+                    "url": "https://drivemcp.googleapis.com/mcp/v1",
+                    "headers": ["Authorization": "Bearer \(driveToken)"]
+                ]
+            } catch {
+                NSLog("[ClaudeCLI] Drive MCP skipped — token unavailable: %@", error.localizedDescription)
+            }
+        }
         for project in SupabaseProjectsService.shared.allProjects() {
             guard let pat = SupabaseProjectsService.shared.pat(for: project.id) else { continue }
             mcpServers["supabase_\(project.slug)"] = [

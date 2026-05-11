@@ -25,7 +25,49 @@ final class GoogleAuthService: @unchecked Sendable {
         !clientId.isEmpty
     }
 
-    private let scope = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly"
+    // Scopes are computed at OAuth-URL-build time so additional integrations
+    // (e.g. Drive) can opt the user into extra grants without rewriting the
+    // Gmail/Calendar OAuth path. The user always gets gmail.readonly and
+    // calendar.readonly; Drive scopes are added when `driveEnabled` is on.
+    private static let baseScopes: [String] = [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly"
+    ]
+    private static let driveScopes: [String] = [
+        // Google's Drive MCP server requires both of these (the readonly grant
+        // covers list/search/read; drive.file lets the agent create files in
+        // folders Otto has been granted access to).
+        // See: https://developers.google.com/workspace/drive/api/guides/configure-mcp-server
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file"
+    ]
+
+    private var requestedScopes: String {
+        var scopes = Self.baseScopes
+        if driveEnabled {
+            scopes.append(contentsOf: Self.driveScopes)
+        }
+        return scopes.joined(separator: " ")
+    }
+
+    /// True iff the user has opted into Drive in Integrations and successfully
+    /// re-consented to the expanded scope set. Best-effort flag — flipped on
+    /// after `reauthorize()` returns a fresh token; flipped off on Disconnect
+    /// Drive. We don't introspect the actual token's scopes (Google doesn't
+    /// reliably echo them back); the cost of a wrong flag is a 401 from the
+    /// Drive MCP server, surfaced as a tool-error chip in chat.
+    var driveEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "google_drive_enabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "google_drive_enabled") }
+    }
+
+    /// Compact predicate for callers (IntegrationsView card, system-prompt
+    /// gate, MCP-server injector). Requires both an OAuth token AND the
+    /// `driveEnabled` flag — if either is missing, Drive doesn't get wired
+    /// into the chat.
+    func hasDriveScopes() -> Bool {
+        driveEnabled && isAuthenticated()
+    }
 
     // For iOS/Desktop client types, use reverse client ID as redirect URI
     private var redirectUri: String {
@@ -197,13 +239,25 @@ final class GoogleAuthService: @unchecked Sendable {
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "redirect_uri", value: redirectUri),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scope),
+            URLQueryItem(name: "scope", value: requestedScopes),
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent"),
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
         return components?.url
+    }
+
+    /// Re-run the full OAuth flow, requesting whatever the current scope set
+    /// is. Used when the user toggles Drive on — the existing token covers
+    /// Gmail/Calendar but doesn't include Drive scopes, so we need a fresh
+    /// consent screen that lists the additional grants. Drops the old token
+    /// first so the flow is a full reauthorisation (Google's consent screen
+    /// re-shows even with `prompt=consent` set above, just to be sure).
+    @MainActor
+    func reauthorize() async throws -> (accessToken: String, refreshToken: String?) {
+        signOut()
+        return try await startOAuthFlow()
     }
 
     // MARK: - PKCE helpers

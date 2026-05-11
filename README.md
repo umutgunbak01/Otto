@@ -27,7 +27,8 @@ Nothing leaves your device unless you explicitly connect an integration.
 - **Generative media (fal.ai genmedia)** — the agent can generate images,
   video, audio, music, and speech via fal's model catalog. Outputs land
   straight in your Files tab with the prompt saved on the file.
-- **Integrations** — Gmail, Google Calendar, Todoist (two-way sync), Notion,
+- **Integrations** — Gmail, Google Calendar, Google Drive (read/search/create
+  via Google's official Drive MCP server), Todoist (two-way sync), Notion,
   Fireflies, LinkedIn CSV import
 - **Local persistence** — single JSON file you can back up, inspect, or move
 - **Habits, ideas, bookmarks with link metadata, meeting transcripts**,

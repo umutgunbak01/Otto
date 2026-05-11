@@ -150,6 +150,25 @@ actor CodexCLIService {
         if authMode == .apiKey, let key = CodexAuthService.shared.apiKey() {
             env["OPENAI_API_KEY"] = key
         }
+        // Google Drive — same MCP injection pattern as Supabase below, but
+        // the bearer token comes from GoogleAuthService instead of a stored
+        // PAT. Token refreshes lazily within a 5-minute expiry buffer.
+        // Skip the server entirely if the token isn't fetchable so a stale
+        // Google grant doesn't block the rest of the turn.
+        if GoogleAuthService.shared.hasDriveScopes() {
+            do {
+                let driveToken = try await GoogleAuthService.shared.getValidAccessToken()
+                let envVarName = "OTTO_DRIVE_BEARER_TOKEN"
+                args.append(contentsOf: [
+                    "-c", "mcp_servers.drive.url=\"https://drivemcp.googleapis.com/mcp/v1\"",
+                    "-c", "mcp_servers.drive.transport=\"streamable_http\"",
+                    "-c", "mcp_servers.drive.bearer_token_env_var=\"\(envVarName)\""
+                ])
+                env[envVarName] = driveToken
+            } catch {
+                NSLog("[CodexCLI] Drive MCP skipped — token unavailable: %@", error.localizedDescription)
+            }
+        }
         for project in SupabaseProjectsService.shared.allProjects() {
             guard let pat = SupabaseProjectsService.shared.pat(for: project.id) else { continue }
             let envVarName = "OTTO_SUPABASE_PAT_\(project.id.uuidString.replacingOccurrences(of: "-", with: ""))"

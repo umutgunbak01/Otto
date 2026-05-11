@@ -325,6 +325,15 @@ actor AgentService {
             }
         }
 
+        // Google Drive — advertise only when the user has flipped the Drive
+        // integration on (and consequently re-consented to the Drive scopes).
+        // Otherwise the agent would confidently invoke drive__* tools that
+        // simply aren't wired into the MCP config for the turn.
+        if GoogleAuthService.shared.hasDriveScopes() {
+            parts.append("\n## Google Drive")
+            parts.append("The user has connected their Google Drive. Use `drive__search_files` to find files by name or content, `drive__list_recent_files` for 'what did I work on lately'-style queries, `drive__get_file_metadata` for size / owner / modified info, `drive__get_file_permissions` to inspect sharing, `drive__read_file_content` to pull the actual contents of Docs / Sheets / Slides into your context, and `drive__download_file_content` for raw file bytes. `drive__create_file` writes new files into the user's Drive — only invoke it when the user explicitly asks to save something there. All tools are scoped to the user's own Drive via OAuth; the agent never sees files outside their grant.")
+        }
+
         // GenMedia (fal.ai) — only advertise if both prereqs are satisfied,
         // otherwise the agent will confidently invoke tools that return
         // errors. The executor still maps notInstalled / noAPIKey to clean
