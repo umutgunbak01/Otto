@@ -2776,23 +2776,37 @@ final class AppState {
         defer { isLoadingX = false }
 
         do {
-            let result = try await XAuthService.shared.startOAuthFlow()
+            _ = try await XAuthService.shared.startOAuthFlow()
             isXConnected = true
-
-            // Fetch user info and store user ID
-            let me = try await XService.shared.fetchMe()
-            XAuthService.shared.setUserId(me.id)
-
-            // Auto-sync after connecting
-            await syncX()
         } catch {
             if case XAuthError.userCancelled = error {
                 // User cancelled — not an error
             } else {
                 xSyncError = error.localizedDescription
             }
-            isXConnected = false
+            // Trust the keychain over the thrown error: a parallel callback
+            // path may have already exchanged the code and stored a valid
+            // token even though startOAuthFlow's ASWebAuthenticationSession
+            // ended with `canceledLogin`.
+            isXConnected = XAuthService.shared.isAuthenticated()
+            return
         }
+
+        // Try to learn the user's numeric ID — needed for the per-user
+        // tweets/followers endpoints. On the Free tier `/2/users/me`
+        // returns 403; swallow that, leave the user ID unset, and let
+        // syncX fall through to endpoints that accept the `/users/me`
+        // path shortcut (e.g. bookmarks).
+        do {
+            let me = try await XService.shared.fetchMe()
+            XAuthService.shared.setUserId(me.id)
+        } catch let error as XServiceError where error.isAccessDenied {
+            print("[X] /users/me blocked by tier — bookmarks will use the `me` shortcut")
+        } catch {
+            print("[X] fetchMe failed (non-fatal): \(error.localizedDescription)")
+        }
+
+        await syncX()
     }
 
     /// Disconnect from X — clears tokens and removes synced data
@@ -2826,82 +2840,95 @@ final class AppState {
             return
         }
 
-        guard let userId = XAuthService.shared.getUserId() else {
-            // Try to fetch user ID
+        // Try to resolve the numeric user ID — required by posts/followers
+        // endpoints. On the Free tier `/users/me` returns 403, in which
+        // case we proceed with nil and only run endpoints that accept the
+        // `/users/me/...` path shortcut (bookmarks).
+        var userId = XAuthService.shared.getUserId()
+        if userId == nil {
             do {
                 let me = try await XService.shared.fetchMe()
                 XAuthService.shared.setUserId(me.id)
-                await syncXWithUserId(me.id)
+                userId = me.id
             } catch {
-                xSyncError = "Failed to get X user info: \(error.localizedDescription)"
+                print("[X] Skipping user-ID-keyed endpoints — /users/me unavailable: \(error.localizedDescription)")
             }
-            return
         }
 
         await syncXWithUserId(userId)
     }
 
     @MainActor
-    private func syncXWithUserId(_ userId: String) async {
+    private func syncXWithUserId(_ userId: String?) async {
         isLoadingX = true
         xSyncError = nil
         defer { isLoadingX = false }
 
         var tierWarnings: [String] = []
 
-        do {
-            // Fetch posts
-            let newPosts = try await XService.shared.fetchMyTweets(userId: userId)
-            // Merge: keep existing, add new (by xPostId)
-            let existingPostIds = Set(xPosts.map { $0.xPostId })
-            let uniqueNewPosts = newPosts.filter { !existingPostIds.contains($0.xPostId) }
-            xPosts.insert(contentsOf: uniqueNewPosts, at: 0)
-            // Update existing posts with fresh engagement data
-            for newPost in newPosts {
-                if let idx = xPosts.firstIndex(where: { $0.xPostId == newPost.xPostId }) {
-                    xPosts[idx].likeCount = newPost.likeCount
-                    xPosts[idx].retweetCount = newPost.retweetCount
-                    xPosts[idx].replyCount = newPost.replyCount
-                    xPosts[idx].syncUpdatedAt = Date()
+        if let userId = userId {
+            do {
+                // Fetch posts
+                let newPosts = try await XService.shared.fetchMyTweets(userId: userId)
+                // Merge: keep existing, add new (by xPostId)
+                let existingPostIds = Set(xPosts.map { $0.xPostId })
+                let uniqueNewPosts = newPosts.filter { !existingPostIds.contains($0.xPostId) }
+                xPosts.insert(contentsOf: uniqueNewPosts, at: 0)
+                // Update existing posts with fresh engagement data
+                for newPost in newPosts {
+                    if let idx = xPosts.firstIndex(where: { $0.xPostId == newPost.xPostId }) {
+                        xPosts[idx].likeCount = newPost.likeCount
+                        xPosts[idx].retweetCount = newPost.retweetCount
+                        xPosts[idx].replyCount = newPost.replyCount
+                        xPosts[idx].syncUpdatedAt = Date()
+                    }
                 }
+                xPosts.sort { $0.createdAt > $1.createdAt }
+                try? await persistence.updateXPosts(xPosts)
+            } catch let error as XServiceError where error.isAccessDenied {
+                tierWarnings.append("Posts (needs Basic tier)")
+                print("[X] Posts: access denied - needs higher API tier")
+            } catch {
+                if case XServiceError.rateLimited = error {
+                    tierWarnings.append("Posts (rate limited, try later)")
+                }
+                print("[X] Failed to sync posts: \(error)")
             }
-            xPosts.sort { $0.createdAt > $1.createdAt }
-            try? await persistence.updateXPosts(xPosts)
-        } catch let error as XServiceError where error.isAccessDenied {
-            tierWarnings.append("Posts (needs Basic tier)")
-            print("[X] Posts: access denied - needs higher API tier")
-        } catch {
-            if case XServiceError.rateLimited = error {
-                tierWarnings.append("Posts (rate limited, try later)")
+
+            do {
+                // Fetch mutual followers
+                let newFollowers = try await XService.shared.fetchMutualFollowers(userId: userId)
+                // Merge: keep linked connections, update follower data
+                for newFollower in newFollowers {
+                    if let idx = xFollowers.firstIndex(where: { $0.xUserId == newFollower.xUserId }) {
+                        // Update existing — preserve linkedConnectionId
+                        let linkedId = xFollowers[idx].linkedConnectionId
+                        xFollowers[idx] = newFollower
+                        xFollowers[idx].linkedConnectionId = linkedId
+                    } else {
+                        xFollowers.append(newFollower)
+                    }
+                }
+                xFollowers.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
+                try? await persistence.updateXFollowers(xFollowers)
+            } catch let error as XServiceError where error.isAccessDenied {
+                tierWarnings.append("Followers (needs Basic tier)")
+                print("[X] Followers: access denied - needs higher API tier")
+            } catch {
+                print("[X] Failed to sync followers: \(error)")
             }
-            print("[X] Failed to sync posts: \(error)")
+        } else {
+            // No numeric user ID resolved — /users/me is gated on the
+            // Free tier. Posts and followers both require the ID, so
+            // surface a single warning and fall through to endpoints
+            // that accept the `/users/me/…` path shortcut.
+            tierWarnings.append("Posts & followers (needs Basic tier — /users/me blocked)")
         }
 
         do {
-            // Fetch mutual followers
-            let newFollowers = try await XService.shared.fetchMutualFollowers(userId: userId)
-            // Merge: keep linked connections, update follower data
-            for newFollower in newFollowers {
-                if let idx = xFollowers.firstIndex(where: { $0.xUserId == newFollower.xUserId }) {
-                    // Update existing — preserve linkedConnectionId
-                    let linkedId = xFollowers[idx].linkedConnectionId
-                    xFollowers[idx] = newFollower
-                    xFollowers[idx].linkedConnectionId = linkedId
-                } else {
-                    xFollowers.append(newFollower)
-                }
-            }
-            xFollowers.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
-            try? await persistence.updateXFollowers(xFollowers)
-        } catch let error as XServiceError where error.isAccessDenied {
-            tierWarnings.append("Followers (needs Basic tier)")
-            print("[X] Followers: access denied - needs higher API tier")
-        } catch {
-            print("[X] Failed to sync followers: \(error)")
-        }
-
-        do {
-            // Fetch bookmarks and merge into existing bookmarks
+            // Fetch bookmarks. Pass nil userId to use the `/users/me/bookmarks`
+            // path shortcut — keeps bookmark sync working on the Free tier
+            // even when /users/me itself is blocked.
             let newBookmarks = try await XService.shared.fetchBookmarks(userId: userId)
             let existingUrls = Set(bookmarks.map { $0.url.lowercased() })
             let uniqueNewBookmarks = newBookmarks.filter { !existingUrls.contains($0.url.lowercased()) }

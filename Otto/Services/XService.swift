@@ -170,7 +170,12 @@ actor XService {
 
     // MARK: - Fetch Bookmarks
 
-    func fetchBookmarks(userId: String) async throws -> [Bookmark] {
+    /// Fetches the authenticated user's bookmarks. Pass `nil` for `userId`
+    /// to use the `/users/me/bookmarks` path shortcut — needed on the Free
+    /// API tier where `/users/me` is blocked but the bookmarks endpoint
+    /// itself is accessible.
+    func fetchBookmarks(userId: String?) async throws -> [Bookmark] {
+        let userPath = userId ?? "me"
         var allBookmarks: [Bookmark] = []
         var nextToken: String? = nil
 
@@ -188,7 +193,7 @@ actor XService {
             }
 
             let data = try await makeRequest(
-                path: "/users/\(userId)/bookmarks",
+                path: "/users/\(userPath)/bookmarks",
                 queryItems: queryItems
             )
 

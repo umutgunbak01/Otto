@@ -13,9 +13,6 @@ struct OttoApp: App {
             MainView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
-                .onOpenURL { url in
-                    handleOpenURL(url)
-                }
                 .task {
                     configureWakeWord()
                     configureNotifications()
@@ -77,27 +74,4 @@ struct OttoApp: App {
         }
     }
 
-    private func handleOpenURL(_ url: URL) {
-        // Handle otto://x-callback OAuth redirect
-        guard url.scheme == "otto" else { return }
-
-        if url.host == "x-callback" {
-            Task {
-                do {
-                    _ = try await XAuthService.shared.handleCallback(url: url)
-                    await MainActor.run {
-                        appState.isXConnected = true
-                    }
-                    // Fetch user info and start sync
-                    let me = try await XService.shared.fetchMe()
-                    UserDefaults.standard.set(me.id, forKey: "x_user_id")
-                    await appState.syncX()
-                } catch {
-                    await MainActor.run {
-                        appState.xSyncError = error.localizedDescription
-                    }
-                }
-            }
-        }
-    }
 }
