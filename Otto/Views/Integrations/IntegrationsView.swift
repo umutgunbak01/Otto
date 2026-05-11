@@ -1535,7 +1535,7 @@ struct IntegrationsView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.Colors.tertiaryText)
 
-                    Text("Free: bookmarks only. Basic ($100/mo): + posts & followers. Pro ($5k/mo): + DMs.")
+                    Text("X removed free reads in 2026. Pay-per-use: ~$0.001/bookmark, ~$0.005/post. Legacy Basic ($200/mo): unlimited reads. Pro ($5k/mo): + DMs.")
                         .font(Theme.Typography.small)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }

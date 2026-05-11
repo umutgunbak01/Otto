@@ -341,6 +341,15 @@ the agent to query.
 You need your own X Developer app — X requires per-app registration just
 like Google.
 
+**Heads-up on cost:** as of 2026, X removed all free read access. Connecting
+the OAuth flow is free, but actually pulling any data requires either
+pay-per-use billing (the new default — ~$0.001 per bookmark, ~$0.005 per
+post read) or a legacy paid tier (Basic at $200/mo, Pro at $5,000/mo for
+DM access). Otto will connect successfully on a free-only developer app,
+but every sync will return tier errors. Enable pay-per-use at
+<https://developer.x.com/en/account/billing> if you actually want to
+pull data.
+
 1. Apply for a free developer account at <https://developer.x.com/>.
 2. Once approved, create a **Project + App**.
 3. App Settings → **User authentication settings** → set up OAuth 2.0:

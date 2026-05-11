@@ -353,7 +353,7 @@ enum XServiceError: LocalizedError {
         case .notAuthenticated:
             return "Not authenticated with X. Please sign in."
         case .insufficientTier(let endpoint):
-            return "Your X API plan doesn't include access to \(endpoint). Upgrade at developer.x.com."
+            return "Your X API plan doesn't include read access to \(endpoint). Enable pay-per-use billing or upgrade your tier at developer.x.com."
         }
     }
 

@@ -2886,7 +2886,7 @@ final class AppState {
                 xPosts.sort { $0.createdAt > $1.createdAt }
                 try? await persistence.updateXPosts(xPosts)
             } catch let error as XServiceError where error.isAccessDenied {
-                tierWarnings.append("Posts (needs Basic tier)")
+                tierWarnings.append("Posts (needs paid X API access)")
                 print("[X] Posts: access denied - needs higher API tier")
             } catch {
                 if case XServiceError.rateLimited = error {
@@ -2912,7 +2912,7 @@ final class AppState {
                 xFollowers.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
                 try? await persistence.updateXFollowers(xFollowers)
             } catch let error as XServiceError where error.isAccessDenied {
-                tierWarnings.append("Followers (needs Basic tier)")
+                tierWarnings.append("Followers (needs paid X API access)")
                 print("[X] Followers: access denied - needs higher API tier")
             } catch {
                 print("[X] Failed to sync followers: \(error)")
@@ -2922,7 +2922,7 @@ final class AppState {
             // Free tier. Posts and followers both require the ID, so
             // surface a single warning and fall through to endpoints
             // that accept the `/users/me/…` path shortcut.
-            tierWarnings.append("Posts & followers (needs Basic tier — /users/me blocked)")
+            tierWarnings.append("Posts & followers (needs paid X API access — /users/me blocked)")
         }
 
         do {
@@ -2939,7 +2939,7 @@ final class AppState {
                 fetchBookmarkMetadata(for: bookmark.id)
             }
         } catch let error as XServiceError where error.isAccessDenied {
-            tierWarnings.append("Bookmarks (needs Basic tier)")
+            tierWarnings.append("Bookmarks (needs paid X API access)")
             print("[X] Bookmarks: access denied - needs higher API tier")
         } catch {
             print("[X] Failed to sync bookmarks: \(error)")
@@ -2954,7 +2954,7 @@ final class AppState {
             xDirectMessages.sort { $0.createdAt > $1.createdAt }
             try? await persistence.updateXDirectMessages(xDirectMessages)
         } catch let error as XServiceError where error.isAccessDenied {
-            tierWarnings.append("DMs (needs Pro tier)")
+            tierWarnings.append("DMs (needs X API Pro tier)")
             print("[X] DMs: access denied - needs Pro API tier")
         } catch {
             print("[X] Failed to sync DMs: \(error)")
