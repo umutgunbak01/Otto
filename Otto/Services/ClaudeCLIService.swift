@@ -183,6 +183,7 @@ actor ClaudeCLIService {
         if authMode == .apiKey, let key = ClaudeAuthService.shared.apiKey() {
             env["ANTHROPIC_API_KEY"] = key
         }
+        env["PATH"] = Self.augmentedPath(inheriting: env["PATH"])
         proc.environment = env
 
         let stdinPipe = Pipe()
@@ -247,6 +248,25 @@ actor ClaudeCLIService {
     }
 
     // MARK: - Helpers
+
+    /// Prepend common user-binary directories to the inherited PATH so the
+    /// agent's built-in Bash tool can find binaries the user installed via
+    /// install scripts, Homebrew, etc. — `genmedia`, `gh`, `jq`, `brew`,
+    /// anything in `~/.local/bin`, etc. Without this, Otto's spawned
+    /// subprocess only sees `/bin:/usr/bin:/usr/ucb:/usr/local/bin` (the
+    /// macOS Launch Services default), which excludes virtually every
+    /// user-installed tool the agent might want to shell out to.
+    private static func augmentedPath(inheriting inherited: String?) -> String {
+        let home = NSHomeDirectory()
+        let prefix = [
+            "\(home)/.genmedia/bin",   // genmedia CLI installer's default
+            "\(home)/.local/bin",      // common user-bin convention
+            "/opt/homebrew/bin",       // Apple Silicon Homebrew
+            "/usr/local/bin"           // Intel Homebrew + generic /usr/local
+        ].joined(separator: ":")
+        let tail = inherited ?? "/usr/bin:/bin"
+        return "\(prefix):\(tail)"
+    }
 
     /// Heuristic match against the CLI's stderr to pick out the
     /// "your API key is bad" failure shape, so the user gets a clear
