@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct IntegrationsView: View {
     @Environment(AppState.self) private var appState
@@ -397,8 +398,13 @@ struct IntegrationsView: View {
         case .notion:
             showingNotionTokenInput = true
         case .linkedin:
-            // LinkedIn import is done via CSV file picker
-            isLinkedInImporting = true
+            // LinkedIn import opens an NSOpenPanel directly instead of
+            // SwiftUI's .fileImporter. Reason: this view lives inside a
+            // .sheet (MainView), and macOS SwiftUI has a long-standing
+            // bug where .fileImporter bindings attached to a sheet's
+            // content silently never present. NSOpenPanel sidesteps the
+            // sheet-presentation context entirely.
+            presentLinkedInImportPanel()
         case .twitter:
             if XAuthService.shared.hasClientId {
                 Task { await appState.connectX() }
@@ -527,10 +533,6 @@ struct IntegrationsView: View {
 
     @State private var showingXClientIdInput = false
     @State private var xClientIdInput = ""
-
-    // MARK: - LinkedIn State
-
-    @State private var isLinkedInImporting = false
 
     // MARK: - Todoist State
 
@@ -1129,7 +1131,7 @@ struct IntegrationsView: View {
             // Import Button and Stats
             HStack(spacing: Theme.Spacing.md) {
                 Button {
-                    isLinkedInImporting = true
+                    presentLinkedInImportPanel()
                 } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         if appState.isLoadingConnections {
@@ -1175,13 +1177,6 @@ struct IntegrationsView: View {
             .padding(Theme.Spacing.sm)
             .background(Color.primary.opacity(0.03))
             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-        }
-        .fileImporter(
-            isPresented: $isLinkedInImporting,
-            allowedContentTypes: [.commaSeparatedText, .plainText],
-            allowsMultipleSelection: false
-        ) { result in
-            handleLinkedInImport(result)
         }
     }
 
@@ -1541,8 +1536,29 @@ struct IntegrationsView: View {
                 }
             }
 
-            // Disconnect option
-            HStack {
+            // Client ID + Disconnect row
+            HStack(spacing: Theme.Spacing.md) {
+                if !XAuthService.shared.clientId.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "key")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                        Text("Client ID: \(xClientIdSuffix)")
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                }
+
+                Button {
+                    xClientIdInput = XAuthService.shared.clientId
+                    showingXClientIdInput = true
+                } label: {
+                    Text("Change Client ID")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+                .buttonStyle(.plain)
+
                 Spacer()
 
                 Button {
@@ -1557,19 +1573,52 @@ struct IntegrationsView: View {
         }
     }
 
-    private func handleLinkedInImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            guard let url = urls.first else { return }
+    /// Short visual identifier for the currently-stored X Client ID
+    /// (first 4 + last 4 chars). Client IDs aren't secrets, but the full
+    /// value is long and noisy in the UI.
+    private var xClientIdSuffix: String {
+        let id = XAuthService.shared.clientId
+        guard id.count > 8 else { return id }
+        let prefix = id.prefix(4)
+        let suffix = id.suffix(4)
+        return "\(prefix)…\(suffix)"
+    }
+
+    /// Open a native AppKit file panel for the LinkedIn Connections CSV.
+    /// Used in place of SwiftUI's `.fileImporter` because IntegrationsView
+    /// is presented inside a `.sheet`, which suppresses `.fileImporter`
+    /// presentations on macOS.
+    private func presentLinkedInImportPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import LinkedIn Connections"
+        panel.message = "Pick the Connections.csv from your LinkedIn data export."
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        if let csv = UTType(filenameExtension: "csv") {
+            panel.allowedContentTypes = [csv, .commaSeparatedText, .plainText]
+        } else {
+            panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        }
+
+        // Bring the host window forward so the modal panel actually appears
+        // attached to a key window rather than hanging behind the sheet.
+        let host = NSApp.keyWindow ?? NSApp.mainWindow
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
             Task {
                 do {
                     try await appState.importConnectionsFromCSV(url: url)
                 } catch {
-                    // Error is handled in AppState
+                    print("LinkedIn import error: \(error)")
                 }
             }
-        case .failure(let error):
-            print("LinkedIn import error: \(error)")
+        }
+
+        if let host {
+            panel.beginSheetModal(for: host, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
         }
     }
 
