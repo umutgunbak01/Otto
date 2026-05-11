@@ -37,6 +37,8 @@ actor ClaudeCLIService {
 
     enum CLIError: LocalizedError {
         case notFound
+        case notSignedIn
+        case apiKeyRejected
         case launchFailed(String)
         case crashed(Int32, String)
         case timeout
@@ -45,6 +47,10 @@ actor ClaudeCLIService {
             switch self {
             case .notFound:
                 return "Claude CLI not found. Install Claude Code or set its path."
+            case .notSignedIn:
+                return "Not signed in to Claude. Run `claude` in Terminal, or paste an Anthropic API key in Settings."
+            case .apiKeyRejected:
+                return "Your Anthropic API key was rejected. Check Settings → Agent."
             case .launchFailed(let m): return "Failed to launch claude CLI: \(m)"
             case .crashed(let code, let stderr):
                 return "claude CLI exited \(code): \(stderr)"
@@ -63,6 +69,11 @@ actor ClaudeCLIService {
         onDelta: @escaping @MainActor (String) -> Void,
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> [ChatTurn] {
+
+        let authMode = ClaudeAuthService.shared.effectiveAuthMode()
+        guard authMode != .none else {
+            throw CLIError.notSignedIn
+        }
 
         let bin = try resolveClaudeBinary()
         let prompt = flattenTurns(turns)
@@ -166,6 +177,12 @@ actor ClaudeCLIService {
         var env = ProcessInfo.processInfo.environment
         // Force ANSI-free output; stream-json should be clean but safety first.
         env["NO_COLOR"] = "1"
+        // When the user has set an Anthropic API key in Otto's Settings,
+        // forward it to the CLI. The CLI prefers this over its stored OAuth
+        // credentials, so the subscription path is bypassed automatically.
+        if authMode == .apiKey, let key = ClaudeAuthService.shared.apiKey() {
+            env["ANTHROPIC_API_KEY"] = key
+        }
         proc.environment = env
 
         let stdinPipe = Pipe()
@@ -208,6 +225,9 @@ actor ClaudeCLIService {
         if proc.terminationStatus != 0 {
             let msg = String(data: stderrBuffer, encoding: .utf8) ?? "(no stderr)"
             NSLog("[ClaudeCLI] exited \(proc.terminationStatus): \(msg)")
+            if authMode == .apiKey && Self.looksLikeBadAPIKey(msg) {
+                throw CLIError.apiKeyRejected
+            }
             throw CLIError.crashed(proc.terminationStatus, msg)
         }
 
@@ -227,6 +247,17 @@ actor ClaudeCLIService {
     }
 
     // MARK: - Helpers
+
+    /// Heuristic match against the CLI's stderr to pick out the
+    /// "your API key is bad" failure shape, so the user gets a clear
+    /// pointer back to Settings instead of a raw subprocess dump.
+    private static func looksLikeBadAPIKey(_ stderr: String) -> Bool {
+        let needle = stderr.lowercased()
+        return needle.contains("invalid api key")
+            || needle.contains("invalid_api_key")
+            || needle.contains("authentication_error")
+            || needle.contains("401")
+    }
 
     private func resolveClaudeBinary() throws -> String {
         if let p = resolvedPath { return p }

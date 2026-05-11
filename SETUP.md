@@ -39,7 +39,8 @@ Before you paste any credentials, know where they go.
 |---|---|---|
 | Your chat history, todos, notes, ideas, reminders, bookmarks, habits, meetings, emails, calendar events, files metadata, X data | `~/Library/Application Support/Otto/otto_data.json` (a single JSON file on disk) | Only the Otto app + you |
 | Imported file binaries (PDFs, CSVs, images, etc.) | `~/Documents/OttoFiles/` | Only the Otto app + you |
-| Agent (Claude / Codex) OAuth tokens | The CLI's keychain entry — Otto just reads what the CLI has stored. You manage these via `claude` or `codex login`. | macOS Keychain (signed in user) |
+| Agent (Claude / Codex) credentials | Owned by the CLI — `Claude Code-credentials` Keychain entry or `~/.codex/auth.json`. Otto invokes the CLI as a subprocess and never reads or writes those entries; it only checks whether they exist to show a sign-in badge. You manage them via `claude` or `codex login`. | macOS Keychain / file (signed in user) |
+| Anthropic / OpenAI API keys (optional, set in Settings) | macOS Keychain under `com.otto.anthropic.apikey` and `com.otto.openai.apikey`. Passed to the CLI subprocess as `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when set. | macOS Keychain (signed in user) |
 | API keys for fal.ai, Fireflies, Todoist, Notion | `UserDefaults` for the per-app preferences scope (which lives at `~/Library/Preferences/com.example.Otto.plist`). Not synced to iCloud. | macOS Keychain-like protection on this user account |
 | Google OAuth Client ID + access/refresh tokens | UserDefaults (client id, non-secret) + macOS Keychain (tokens) | macOS Keychain (signed in user) |
 | X (Twitter) Client ID + OAuth tokens | macOS Keychain under `com.otto.x.*` | macOS Keychain (signed in user) |
@@ -93,6 +94,23 @@ chat UX, same voice mode — but they cost different things, run different
 models, and have different latency profiles. Pick whichever you're already
 paying for (or both, and switch in Settings).
 
+For each backend, Otto supports two auth paths:
+
+- **CLI login** — you sign in with `claude` or `codex login` and the CLI
+  stores its own credentials. Otto invokes the CLI as a subprocess; the CLI
+  uses its own credentials and handles its own token rotation. Otto never
+  reads, writes, or refreshes those credentials. Usage is billed against
+  your Claude / ChatGPT subscription (Pro / Max / Plus / Business).
+- **API key** — you paste an Anthropic or OpenAI API key into Otto's
+  Settings. Otto stores it in macOS Keychain (`com.otto.anthropic.apikey`
+  / `com.otto.openai.apikey`) and passes it to the CLI subprocess as
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`. The CLI uses the env-var key
+  instead of its stored OAuth credentials. Usage is billed against your
+  API account at console.anthropic.com / platform.openai.com, not your
+  subscription.
+
+When both are set for a given backend, the API key wins.
+
 ### Option A — Claude Code (default)
 
 Recommended if you have a Claude Max or Pro subscription, or you've added
@@ -107,17 +125,17 @@ credits at console.anthropic.com.
    claude
    ```
    This opens a browser tab for OAuth. After signing in, the CLI stores the
-   token in macOS Keychain (service: `Claude Code-credentials`).
+   credentials in macOS Keychain (service: `Claude Code-credentials`).
+   Otto never touches that entry — it only checks that it exists.
 3. **Launch Otto.** Chat should work immediately. The chat-empty-state banner
    ("No agent backend signed in") should disappear.
 
-To verify Otto sees the token: open **Settings → Agent → Claude Code**. You
-should see a green checkmark badge saying "Connected — using Claude Code
-credentials."
+To verify Otto sees the sign-in: open **Settings → Agent → Claude Code**.
+You should see "Connected via Claude Code CLI."
 
-**Token refresh:** the CLI rotates tokens automatically. If you ever see "401"
-errors in chat, click **Refresh token** in Settings, or run `claude` in
-Terminal again to force a re-login.
+**Token refresh:** the `claude` CLI rotates its own tokens automatically
+each time Otto invokes it. If chat fails with an auth error, re-run
+`claude` in Terminal to force a re-login.
 
 **Model picker:** the default is `claude-opus-4-6`. Settings has a dropdown
 with the current preset list (Opus, Sonnet, Haiku variants) and accepts any
@@ -139,7 +157,8 @@ Recommended if you have a ChatGPT Plus/Pro subscription that includes Codex.
    ```sh
    codex login
    ```
-   Tokens go to `~/.codex/auth.json` (mode 0600).
+   Credentials go to `~/.codex/auth.json` (mode 0600). Otto only checks
+   that the file exists — it never reads its contents.
 3. **Switch Otto to Codex:** Settings → Agent → toggle the segmented picker
    from "Claude Code" to "Codex".
 
@@ -150,9 +169,29 @@ match wins.
 **Model picker:** default is `gpt-5.5`. Settings lists `gpt-5`, `gpt-5-codex`,
 `o3`, `o4` as presets and accepts any custom Codex model id.
 
-**Refresh:** the **Refresh token** button in Settings forces a rotation
-against `https://auth.openai.com/oauth/token` and writes the new tokens back
-to `~/.codex/auth.json`.
+**Token refresh:** the `codex` CLI rotates its own tokens automatically
+each time Otto invokes it. If chat fails with an auth error, re-run
+`codex login` in Terminal to force a re-login.
+
+### Option C — Paste an API key (either backend)
+
+If you'd rather pay by API usage than route through a subscription, or
+you want a hard guarantee that Otto isn't touching your CLI's stored
+credentials at all:
+
+1. Get an API key:
+   - Anthropic: <https://console.anthropic.com/> → API Keys → Create Key
+     (`sk-ant-…`).
+   - OpenAI: <https://platform.openai.com/api-keys> → Create new secret key
+     (`sk-…`).
+2. Open Otto → **Settings → Agent**, pick the right backend, and paste the
+   key into the "API key (optional)" field. Click **Save key**.
+3. Settings will show "Using stored Anthropic API key" /
+   "Using stored OpenAI API key" instead of the CLI-login status.
+
+The CLI still has to be installed locally (Otto needs the binary to
+subprocess into) but it does **not** need to be signed in. To revert to
+CLI auth, click **Clear stored key** in Settings.
 
 You can switch backends mid-session — flip the picker, the next chat message
 routes through the new CLI. Voice mode follows the same setting.
@@ -416,11 +455,18 @@ A few prompts that exercise different features:
 
 **Chat is empty / banner says "No agent backend signed in"**
 - Did you run `claude` (or `codex login`) in Terminal first? Open Settings
-  → Agent → check both tabs for the green "Connected" badge.
+  → Agent → check both tabs for the "Connected" badge. Alternatively, paste
+  an Anthropic / OpenAI API key into the "API key (optional)" field.
 
-**Chat returns 401 errors**
-- Click **Refresh token** in Settings → Agent. If that fails, re-run `claude`
-  (or `codex login`) in Terminal.
+**Chat returns 401 / auth errors**
+- Re-run `claude` (or `codex login`) in Terminal to refresh the CLI's
+  stored credentials, or paste a fresh API key into Settings → Agent.
+  Otto doesn't refresh tokens itself — that's the CLI's job.
+
+**"Your Anthropic / OpenAI API key was rejected"**
+- The pasted key is invalid, revoked, or for the wrong product. Verify it
+  at console.anthropic.com / platform.openai.com, then paste a working key
+  into Settings → Agent. Clearing the stored key falls back to CLI login.
 
 **Gmail/Calendar "Access blocked: this app's request is invalid"**
 - Your Google Cloud OAuth consent screen needs the right scopes and your
@@ -463,7 +509,12 @@ correct format"**
   for non-secret config). Nothing is committed to disk in plaintext outside
   the app sandbox or Keychain.
 - **Agent CLIs (Claude/Codex)** have their own auth in their own Keychain
-  entries; Otto reads but doesn't manage those.
+  / `~/.codex/auth.json` entries; Otto invokes the CLI as a subprocess and
+  never reads, writes, or refreshes those credentials. If you paste an
+  Anthropic / OpenAI API key into Otto's Settings, it's stored in macOS
+  Keychain under `com.otto.anthropic.apikey` / `com.otto.openai.apikey`
+  and passed to the CLI subprocess via `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY` so the CLI bypasses its stored OAuth credentials.
 - **Imported file binaries** stay in `~/Documents/OttoFiles/`; they're
   never uploaded anywhere unless you ask the agent to (e.g. "post this PDF
   to Notion").

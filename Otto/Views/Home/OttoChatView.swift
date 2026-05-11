@@ -209,11 +209,13 @@ struct OttoChatView: View {
 
     // MARK: - Empty State
 
-    /// True iff neither of the supported agent backends has credentials on
-    /// disk. We don't block use — the user can still type — but show a
-    /// banner pointing at Settings so first-runs aren't a dead-end.
+    /// True iff neither agent backend has any usable auth — neither CLI
+    /// login nor a pasted API key. We don't block use — the user can still
+    /// type — but show a banner pointing at Settings so first-runs aren't
+    /// a dead-end.
     private var noBackendSignedIn: Bool {
-        !ClaudeAuthService.shared.isSignedIn() && !CodexAuthService.shared.isSignedIn()
+        ClaudeAuthService.shared.effectiveAuthMode() == .none
+            && CodexAuthService.shared.effectiveAuthMode() == .none
     }
 
     private var emptyState: some View {

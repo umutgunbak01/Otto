@@ -9,9 +9,12 @@ struct SettingsView: View {
     @State private var selectedVoiceId: String = FalAIService.shared.getVoiceId()
     @State private var claudeModelId: String = AgentService.Claude.getRawModel()
     @State private var codexModelId: String = AgentService.Codex.getRawModel()
-    @State private var isRefreshingToken: Bool = false
-    @State private var refreshResultMessage: String?
-    @State private var refreshResultIsError: Bool = false
+    @State private var anthropicApiKeyDraft: String = ""
+    @State private var openaiApiKeyDraft: String = ""
+    @State private var anthropicApiKeySaved: Bool = ClaudeAuthService.shared.apiKey() != nil
+    @State private var openaiApiKeySaved: Bool = CodexAuthService.shared.apiKey() != nil
+    @State private var showingAnthropicKey: Bool = false
+    @State private var showingOpenaiKey: Bool = false
 
     /// Bound to the same UserDefaults key everything else reads from
     /// (`AgentBackend.defaultsKey`) so a backend switch in Settings flips the
@@ -69,12 +72,6 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .onChange(of: rawBackend) { _, _ in
-                        // Don't carry a "Token refreshed" message from the
-                        // other backend onto this panel — different auth
-                        // file, different action.
-                        refreshResultMessage = nil
-                    }
 
                     if selectedBackend == .claude {
                         claudeBackendBlock
@@ -242,56 +239,70 @@ struct SettingsView: View {
 
     private var claudeBackendBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Otto uses your Claude Code credentials for AI features. Sign in via the Claude Code CLI to enable Ask.")
+            Text("Otto invokes the `claude` CLI as a subprocess; the CLI manages its own credentials. Optionally paste an Anthropic API key below to bypass CLI login and bill against your API account instead.")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.secondaryText)
 
-            if ClaudeAuthService.shared.isSignedIn() {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.purple)
-                    Text("Connected — using Claude Code credentials")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(.purple)
-                }
-            } else {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.orange)
-                    Text("Not signed in — run `claude` in Terminal")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
+            claudeAuthStatusRow
 
-            // Refresh token button — useful after upgrading/changing plan
-            HStack(spacing: Theme.Spacing.sm) {
-                Button {
-                    Task { await refreshClaudeToken() }
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        if isRefreshingToken {
-                            ProgressView().controlSize(.small)
+            // API key (optional) — overrides CLI login when set.
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("Anthropic API key (optional)")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                HStack(spacing: Theme.Spacing.sm) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        if showingAnthropicKey {
+                            TextField("sk-ant-…", text: $anthropicApiKeyDraft)
+                                .textFieldStyle(.plain)
+                                .font(Theme.Typography.body)
                         } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11))
+                            SecureField("sk-ant-…", text: $anthropicApiKeyDraft)
+                                .textFieldStyle(.plain)
+                                .font(Theme.Typography.body)
                         }
-                        Text(isRefreshingToken ? "Refreshing…" : "Refresh token")
-                            .font(Theme.Typography.caption)
+                        Button {
+                            showingAnthropicKey.toggle()
+                        } label: {
+                            Image(systemName: showingAnthropicKey ? "eye.slash" : "eye")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.borderSubtle.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                    )
                 }
-                .buttonStyle(GhostButtonStyle())
-                .disabled(isRefreshingToken || !ClaudeAuthService.shared.isSignedIn())
 
-                if let msg = refreshResultMessage {
-                    Text(msg)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(refreshResultIsError ? .orange : Theme.Colors.personal)
+                HStack(spacing: Theme.Spacing.sm) {
+                    Button("Save key") {
+                        let ok = ClaudeAuthService.shared.setAPIKey(anthropicApiKeyDraft)
+                        anthropicApiKeySaved = ok && !anthropicApiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        if anthropicApiKeySaved { anthropicApiKeyDraft = "" }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(anthropicApiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if anthropicApiKeySaved {
+                        Button("Clear stored key") {
+                            ClaudeAuthService.shared.clearAPIKey()
+                            anthropicApiKeySaved = false
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+                    Spacer()
                 }
 
-                Spacer()
+                Text("Billed via your Anthropic API account at console.anthropic.com, not your Claude subscription. Overrides CLI login when set.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
             }
             .padding(.top, Theme.Spacing.xs)
 
@@ -337,57 +348,70 @@ struct SettingsView: View {
 
     private var codexBackendBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Otto uses your Codex credentials for AI features. Sign in via the Codex app (or `codex login` in Terminal) to enable Ask.")
+            Text("Otto invokes the `codex` CLI as a subprocess; the CLI manages its own credentials. Optionally paste an OpenAI API key below to bypass CLI login and bill against your API account instead.")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.secondaryText)
 
-            if CodexAuthService.shared.isSignedIn() {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.cyan)
-                    Text("Connected — using Codex credentials")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.cyan)
-                }
-            } else {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.orange)
-                    Text("Not signed in — open the Codex app or run `codex login`")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
+            codexAuthStatusRow
 
-            // Refresh token button — useful after upgrading/changing plan,
-            // same role as Claude's button next to it on the other tab.
-            HStack(spacing: Theme.Spacing.sm) {
-                Button {
-                    Task { await refreshCodexToken() }
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        if isRefreshingToken {
-                            ProgressView().controlSize(.small)
+            // API key (optional) — overrides CLI login when set.
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("OpenAI API key (optional)")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                HStack(spacing: Theme.Spacing.sm) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        if showingOpenaiKey {
+                            TextField("sk-…", text: $openaiApiKeyDraft)
+                                .textFieldStyle(.plain)
+                                .font(Theme.Typography.body)
                         } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11))
+                            SecureField("sk-…", text: $openaiApiKeyDraft)
+                                .textFieldStyle(.plain)
+                                .font(Theme.Typography.body)
                         }
-                        Text(isRefreshingToken ? "Refreshing…" : "Refresh token")
-                            .font(Theme.Typography.caption)
+                        Button {
+                            showingOpenaiKey.toggle()
+                        } label: {
+                            Image(systemName: showingOpenaiKey ? "eye.slash" : "eye")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.borderSubtle.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                    )
                 }
-                .buttonStyle(GhostButtonStyle())
-                .disabled(isRefreshingToken || !CodexAuthService.shared.isSignedIn())
 
-                if let msg = refreshResultMessage {
-                    Text(msg)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(refreshResultIsError ? .orange : Theme.Colors.personal)
+                HStack(spacing: Theme.Spacing.sm) {
+                    Button("Save key") {
+                        let ok = CodexAuthService.shared.setAPIKey(openaiApiKeyDraft)
+                        openaiApiKeySaved = ok && !openaiApiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        if openaiApiKeySaved { openaiApiKeyDraft = "" }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(openaiApiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if openaiApiKeySaved {
+                        Button("Clear stored key") {
+                            CodexAuthService.shared.clearAPIKey()
+                            openaiApiKeySaved = false
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+                    Spacer()
                 }
 
-                Spacer()
+                Text("Billed via your OpenAI API account at platform.openai.com, not your ChatGPT subscription. Overrides CLI login when set.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
             }
             .padding(.top, Theme.Spacing.xs)
 
@@ -431,43 +455,75 @@ struct SettingsView: View {
         }
     }
 
-    @MainActor
-    private func refreshClaudeToken() async {
-        isRefreshingToken = true
-        refreshResultMessage = nil
-        defer { isRefreshingToken = false }
-        do {
-            _ = try await ClaudeAuthService.shared.refreshAccessToken()
-            refreshResultMessage = "Token refreshed"
-            refreshResultIsError = false
-        } catch {
-            refreshResultMessage = error.localizedDescription
-            refreshResultIsError = true
+    // MARK: - Auth status rows
+
+    @ViewBuilder
+    private var claudeAuthStatusRow: some View {
+        let mode = ClaudeAuthService.shared.effectiveAuthMode()
+        switch mode {
+        case .apiKey:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.purple)
+                Text("Using stored Anthropic API key")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.purple)
+            }
+        case .cliLogin:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.purple)
+                Text("Connected via Claude Code CLI")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.purple)
+            }
+        case .none:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                Text("Not signed in — run `claude` in Terminal, or paste an API key below")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
-    @MainActor
-    private func refreshCodexToken() async {
-        isRefreshingToken = true
-        refreshResultMessage = nil
-        defer { isRefreshingToken = false }
-        do {
-            _ = try await CodexAuthService.shared.refreshAccessToken()
-            refreshResultMessage = "Token refreshed"
-            refreshResultIsError = false
-        } catch {
-            refreshResultMessage = error.localizedDescription
-            refreshResultIsError = true
+    @ViewBuilder
+    private var codexAuthStatusRow: some View {
+        let mode = CodexAuthService.shared.effectiveAuthMode()
+        switch mode {
+        case .apiKey:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.cyan)
+                Text("Using stored OpenAI API key")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.cyan)
+            }
+        case .cliLogin:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.cyan)
+                Text("Connected via Codex CLI")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.cyan)
+            }
+        case .none:
+            HStack(spacing: Theme.Spacing.xs) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                Text("Not signed in — run `codex login` in Terminal, or paste an API key below")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.orange)
+            }
         }
     }
-
-    private var dateFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter
-    }
-
 }
 
 #Preview {

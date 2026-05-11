@@ -11,7 +11,10 @@ import Foundation
 ///     session tmpDir before launch).
 ///
 /// Auth: the CLI reads `~/.codex/auth.json` itself; we just verify the file
-/// is present (`CodexAuthService.isSignedIn`) and surface a clean error if not.
+/// is present (`CodexAuthService.isCLISignedIn`) — or that an API key is
+/// set in Settings — and surface a clean error if neither is true. When an
+/// API key is present, it's passed via `OPENAI_API_KEY` so the CLI bypasses
+/// its stored OAuth credentials.
 ///
 /// Streaming caveat: `codex exec --json` emits message-level events
 /// (`item.completed` with `agent_message` items), not per-token deltas. The
@@ -42,6 +45,7 @@ actor CodexCLIService {
     enum CLIError: LocalizedError {
         case notFound
         case notSignedIn
+        case apiKeyRejected
         case launchFailed(String)
         case crashed(Int32, String)
         case timeout
@@ -51,7 +55,9 @@ actor CodexCLIService {
             case .notFound:
                 return "Codex CLI not found. Install the Codex desktop app from openai.com/codex."
             case .notSignedIn:
-                return "Not signed in to Codex. Open the Codex app or run `codex login` first."
+                return "Not signed in to Codex. Open the Codex app, run `codex login`, or paste an OpenAI API key in Settings."
+            case .apiKeyRejected:
+                return "Your OpenAI API key was rejected. Check Settings → Agent."
             case .launchFailed(let m): return "Failed to launch codex CLI: \(m)"
             case .crashed(let code, let stderr):
                 return "codex CLI exited \(code): \(stderr)"
@@ -71,7 +77,8 @@ actor CodexCLIService {
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> [ChatTurn] {
 
-        guard CodexAuthService.shared.isSignedIn() else {
+        let authMode = CodexAuthService.shared.effectiveAuthMode()
+        guard authMode != .none else {
             throw CLIError.notSignedIn
         }
 
@@ -137,6 +144,12 @@ actor CodexCLIService {
         // (before assigning to `proc.environment`).
         var env = ProcessInfo.processInfo.environment
         env["NO_COLOR"] = "1"
+        // When the user has set an OpenAI API key in Otto's Settings,
+        // forward it to the CLI. The CLI prefers this over its stored
+        // OAuth credentials, so the subscription path is bypassed.
+        if authMode == .apiKey, let key = CodexAuthService.shared.apiKey() {
+            env["OPENAI_API_KEY"] = key
+        }
         for project in SupabaseProjectsService.shared.allProjects() {
             guard let pat = SupabaseProjectsService.shared.pat(for: project.id) else { continue }
             let envVarName = "OTTO_SUPABASE_PAT_\(project.id.uuidString.replacingOccurrences(of: "-", with: ""))"
@@ -195,6 +208,9 @@ actor CodexCLIService {
         if proc.terminationStatus != 0 {
             let msg = String(data: stderrBuffer, encoding: .utf8) ?? "(no stderr)"
             NSLog("[CodexCLI] exited \(proc.terminationStatus): \(msg)")
+            if authMode == .apiKey && Self.looksLikeBadAPIKey(msg) {
+                throw CLIError.apiKeyRejected
+            }
             throw CLIError.crashed(proc.terminationStatus, msg)
         }
 
@@ -214,6 +230,18 @@ actor CodexCLIService {
     }
 
     // MARK: - Helpers
+
+    /// Heuristic match against the CLI's stderr to pick out the
+    /// "your API key is bad" failure shape, so the user gets a clear
+    /// pointer back to Settings instead of a raw subprocess dump.
+    private static func looksLikeBadAPIKey(_ stderr: String) -> Bool {
+        let needle = stderr.lowercased()
+        return needle.contains("invalid api key")
+            || needle.contains("invalid_api_key")
+            || needle.contains("incorrect api key")
+            || needle.contains("unauthorized")
+            || needle.contains("401")
+    }
 
     private func resolveCodexBinary() throws -> String {
         if let p = resolvedPath { return p }

@@ -33,9 +33,10 @@ Nothing leaves your device unless you explicitly connect an integration.
 ## Requirements
 
 - macOS 15.4 (Sequoia) or newer
-- Either the **Claude Code CLI** or the **Codex CLI** installed and signed in
-  (see [SETUP.md](SETUP.md) — Otto reads tokens directly from whichever CLI
-  is configured; you don't paste keys into Otto itself)
+- Either the **Claude Code CLI** or the **Codex CLI** installed and signed in,
+  **or** an Anthropic / OpenAI API key pasted into Settings (see
+  [SETUP.md](SETUP.md) — Otto invokes the CLI as a subprocess; the CLI
+  manages its own credentials and Otto never touches them)
 - Xcode 16+ **only if building from source** (not needed for the prebuilt
   download below)
 
