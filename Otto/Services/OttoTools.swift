@@ -15,6 +15,7 @@ enum OttoTools {
         case open_url
         case create_habit, log_habit_entry, complete_habit, list_habits
         case read_file
+        case genmedia_search_models, genmedia_get_model_schema, genmedia_run, genmedia_upload_file
     }
 
     /// The array of tool definitions sent with every chat request.
@@ -321,6 +322,61 @@ enum OttoTools {
                     "max_chars": ["type": "integer", "description": "Cap the returned extracted text to this many characters. Default 20000, max 200000. Use to keep responses bounded for very large PDFs."]
                 ],
                 required: ["id"]
+            )
+        ],
+
+        // MARK: GenMedia (fal.ai)
+        //
+        // Available only when the genmedia CLI is installed AND the user has
+        // set a fal API key. AgentService.buildSystemPrompt gates the prose
+        // hint on those preconditions; if the agent tries to call these
+        // tools without them, the executor returns a friendly error pointing
+        // at Integrations → GenMedia.
+        [
+            "name": Name.genmedia_search_models.rawValue,
+            "description": "Search fal.ai's model catalog through the genmedia CLI. Use this first when the user asks to generate, draw, render, animate, or produce any media — search for an appropriate model, then inspect its schema with `genmedia_get_model_schema`, then call `genmedia_run`. Returns up to `limit` matches as id/name/category triples.",
+            "input_schema": objectSchema(
+                properties: [
+                    "query": stringProp("Free-text query, e.g. 'flux', 'image-to-video', 'speech', 'logo'."),
+                    "category": stringProp("Optional category filter. Common values: image, video, audio, text-to-speech, music, vision."),
+                    "limit": ["type": "integer", "description": "Max results (default 10, max 50).", "minimum": 1, "maximum": 50]
+                ],
+                required: []
+            )
+        ],
+        [
+            "name": Name.genmedia_get_model_schema.rawValue,
+            "description": "Inspect a fal.ai model's input fields via `genmedia schema`. Returns the JSON schema for the model's parameters so you know exactly what to pass to `genmedia_run` (required fields, types, enums, defaults). Always call this before `genmedia_run` for any unfamiliar model.",
+            "input_schema": objectSchema(
+                properties: [
+                    "model_id": stringProp("Full fal model id, e.g. 'fal-ai/flux/dev' or 'fal-ai/veo3.1' (from `genmedia_search_models`).")
+                ],
+                required: ["model_id"]
+            )
+        ],
+        [
+            "name": Name.genmedia_run.rawValue,
+            "description": "Generate media synchronously via `genmedia run`. Saves outputs into Otto's Files tab and returns the new file ids — call `attach_item_preview` with type=`file` afterwards to give the user click-through previews in your reply. Generation can take 5-120 seconds depending on the model (videos especially); if it times out, fall back to a faster model. The user's fal account is billed directly.",
+            "input_schema": objectSchema(
+                properties: [
+                    "model_id": stringProp("Full fal model id, e.g. 'fal-ai/flux/dev'."),
+                    "inputs": [
+                        "type": "object",
+                        "description": "Model-specific inputs. Match the field names returned by `genmedia_get_model_schema`. Typical examples: prompt, image_url, num_images, image_size, seed, duration. Nested objects/arrays are passed through as JSON."
+                    ],
+                    "prompt_summary": stringProp("Short human-readable summary of what's being generated (used as the file's notes field). Optional but recommended.")
+                ],
+                required: ["model_id", "inputs"]
+            )
+        ],
+        [
+            "name": Name.genmedia_upload_file.rawValue,
+            "description": "Upload one of the user's existing Otto files to fal's CDN via `genmedia upload`. Returns a CDN URL you can pass into another model's inputs (e.g. as `image_url` for an image-to-image flow). Use when the user references an image/video they already have in Files.",
+            "input_schema": objectSchema(
+                properties: [
+                    "file_id": stringProp("UUID of an Otto File (from `search_items` with type=file).")
+                ],
+                required: ["file_id"]
             )
         ]
     ]

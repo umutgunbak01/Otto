@@ -24,6 +24,9 @@ Nothing leaves your device unless you explicitly connect an integration.
   per-schema Swift glue.
 - **Voice mode** — push-to-talk or wake-word, powered by fal.ai (Wizper for
   transcription, ElevenLabs v3 for speech)
+- **Generative media (fal.ai genmedia)** — the agent can generate images,
+  video, audio, music, and speech via fal's model catalog. Outputs land
+  straight in your Files tab with the prompt saved on the file.
 - **Integrations** — Gmail, Google Calendar, Todoist (two-way sync), Notion,
   Fireflies, LinkedIn CSV import
 - **Local persistence** — single JSON file you can back up, inspect, or move
@@ -47,10 +50,11 @@ Grab the latest `Otto.app.zip` from the
 
 1. Download `Otto.app.zip` and unzip it.
 2. Drag `Otto.app` into `/Applications`.
-3. Open it.
-
-Builds are signed with an Apple Developer ID and notarized, so Gatekeeper
-launches them without warnings.
+3. **First launch:** the build is unsigned, so macOS Gatekeeper will block it.
+   Either:
+   - Right-click `Otto.app` → **Open** → click **Open** in the warning dialog.
+     macOS remembers the choice. *Or*
+   - In Terminal: `xattr -cr /Applications/Otto.app`, then double-click.
 
 Then jump to [SETUP.md](SETUP.md) to install the Claude Code or Codex CLI and
 sign in.

@@ -325,6 +325,15 @@ actor AgentService {
             }
         }
 
+        // GenMedia (fal.ai) — only advertise if both prereqs are satisfied,
+        // otherwise the agent will confidently invoke tools that return
+        // errors. The executor still maps notInstalled / noAPIKey to clean
+        // messages if a determined turn manages to bypass this hint.
+        if FalAIService.shared.hasAPIKey() && GenMediaService.shared.isInstalled() {
+            parts.append("\n## Generative media via fal.ai (genmedia)")
+            parts.append("If the user asks to generate, draw, render, animate, or produce any kind of media (images, video, audio, music, speech), use the `genmedia_*` tools. Recommended flow: call `genmedia_search_models` first to find an appropriate fal model, then `genmedia_get_model_schema` to learn its exact input fields, then `genmedia_run` to generate. Each successful generation lands as a `file` in Otto's Files tab — finish your reply by calling `attach_item_preview` with type=`file` for each returned file id so the user gets a click-through card. For image-to-image / video-to-video chains, call `genmedia_upload_file` on an existing Otto File to get a CDN URL you can pass into the next model's inputs. The user's fal account is billed directly.")
+        }
+
         let activeHabits = appState.habits.filter { !$0.isArchived }
         if !activeHabits.isEmpty {
             parts.append("\n## Habits (\(activeHabits.count) active)")

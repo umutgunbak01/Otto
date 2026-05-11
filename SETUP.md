@@ -19,6 +19,7 @@ app is usable. Everything else is optional and can be added later.
 - [Step 2: Optional integrations](#step-2-optional-integrations)
   - [Gmail & Google Calendar](#gmail--google-calendar)
   - [Voice mode (fal.ai)](#voice-mode-falai)
+  - [GenMedia (fal.ai)](#genmedia-falai)
   - [Todoist](#todoist)
   - [Notion](#notion)
   - [Fireflies (meeting transcripts)](#fireflies-meeting-transcripts)
@@ -283,6 +284,37 @@ v3 handles text-to-speech, both routed through fal.ai's API.
 5. Pick a voice from the dropdown below (Adam, Charlotte, etc.).
 
 Costs: roughly a few cents per minute of conversation depending on model.
+
+### GenMedia (fal.ai)
+
+**What this unlocks:** the agent can generate images, video, audio, music, and
+speech via fal.ai's full model catalog. Ask the chat to "generate a logo for
+Nimbus" or "make a 5-second clip of waves at sunset" and the result lands as a
+file in Otto's Files tab, with a clickable preview attached to the reply.
+
+Otto reuses the same fal API key as voice mode, so if you already did the
+Voice mode step above you only need to install the `genmedia` CLI on top.
+
+1. **Set your fal API key first** (see Voice mode above).
+2. **Install the CLI** — open Terminal and paste:
+   ```sh
+   curl https://genmedia.sh/install -fsS | bash
+   ```
+   The script writes the binary to `~/.genmedia/bin/genmedia` and updates
+   your shell rc so subsequent terminal sessions can call it directly.
+3. **Verify in Otto** — open **Integrations** → **GenMedia (fal.ai)** →
+   click **Setup** → **Verify**. The status row should flip to "genmedia
+   CLI installed" with the binary path. Hit **Test connection** to confirm
+   the key + binary can reach fal.
+
+Once both are green, ask the chat to generate something. Otto picks an
+appropriate fal model, fills in the inputs, runs the generation
+synchronously, and imports the output into your Files tab with the prompt
+saved in the file's notes.
+
+Costs: fal bills your account directly. Image generations are typically a
+few cents each; video is more. Check pricing for a given model at
+<https://fal.ai/models> before kicking off heavy jobs.
 
 ### Todoist
 

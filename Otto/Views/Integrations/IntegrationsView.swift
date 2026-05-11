@@ -16,6 +16,7 @@ struct IntegrationsView: View {
         case linkedin = "LinkedIn"
         case twitter = "X (Twitter)"
         case supabase = "Custom Database"
+        case genmedia = "GenMedia (fal.ai)"
 
         var icon: String {
             switch self {
@@ -27,6 +28,7 @@ struct IntegrationsView: View {
             case .linkedin: return "person.2"
             case .twitter: return "text.bubble"
             case .supabase: return "externaldrive.connected.to.line.below"
+            case .genmedia: return "wand.and.stars"
             }
         }
 
@@ -40,6 +42,7 @@ struct IntegrationsView: View {
             case .linkedin: return "Import connections from LinkedIn CSV export"
             case .twitter: return "Import tweets, DMs, followers, and bookmarks"
             case .supabase: return "Read/write your own Supabase projects via the official MCP server"
+            case .genmedia: return "Generate images, video, audio, and music with fal.ai models"
             }
         }
     }
@@ -80,6 +83,9 @@ struct IntegrationsView: View {
         }
         .sheet(isPresented: $showingSupabaseInput) {
             supabaseProjectInputSheet
+        }
+        .sheet(isPresented: $showingGenmediaSetup) {
+            genmediaSetupSheet
         }
     }
 
@@ -324,6 +330,7 @@ struct IntegrationsView: View {
         case .linkedin: return .indigo
         case .twitter: return .primary
         case .supabase: return .green
+        case .genmedia: return .pink
         }
     }
 
@@ -345,6 +352,8 @@ struct IntegrationsView: View {
             return appState.isXConnected
         case .supabase:
             return !SupabaseProjectsService.shared.allProjects().isEmpty
+        case .genmedia:
+            return FalAIService.shared.hasAPIKey() && GenMediaService.shared.isInstalled()
         }
     }
 
@@ -366,6 +375,8 @@ struct IntegrationsView: View {
             return true // OAuth + Client ID
         case .supabase:
             return true // PAT-based, one or more projects
+        case .genmedia:
+            return true // Existing fal key + CLI install detection
         }
     }
 
@@ -416,6 +427,11 @@ struct IntegrationsView: View {
             // are managed inline via the expanded content (`supabaseExpandedContent`).
             resetSupabaseInputs()
             showingSupabaseInput = true
+        case .genmedia:
+            // The "Connect" button is just a status nudge — the card is fully
+            // controlled by external state (fal key + binary presence). Show
+            // the install instructions sheet so the user knows what to do.
+            showingGenmediaSetup = true
         }
     }
 
@@ -440,6 +456,8 @@ struct IntegrationsView: View {
             twitterExpandedContent
         case .supabase:
             supabaseExpandedContent
+        case .genmedia:
+            genmediaExpandedContent
         }
     }
 
@@ -571,6 +589,19 @@ struct IntegrationsView: View {
     /// UserDefaults + Keychain (no @Published source of truth), so we bump
     /// this to invalidate the view tree after a mutation.
     @State private var supabaseProjectsRevision = 0
+
+    // MARK: - GenMedia state
+
+    @State private var showingGenmediaSetup = false
+    /// Bumped after the user hits "Verify" in the install sheet so the
+    /// `isInstalled()` probe re-runs and the card flips to "connected"
+    /// without an app relaunch.
+    @State private var genmediaInstallRevision = 0
+    /// Surfaces the result of the "Test generation" probe in the expanded
+    /// card. nil = haven't tried; non-empty = last test message.
+    @State private var genmediaTestMessage: String? = nil
+    @State private var genmediaTestIsError = false
+    @State private var isRunningGenmediaTest = false
 
     private func resetSupabaseInputs() {
         supabaseNameInput = ""
@@ -1837,6 +1868,210 @@ struct IntegrationsView: View {
         !supabaseNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !supabaseRefInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !supabasePatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - GenMedia Expanded Content
+
+    private var genmediaExpandedContent: some View {
+        // Reading the revision counter forces re-evaluation after "Verify".
+        let _ = genmediaInstallRevision
+        let installed = GenMediaService.shared.isInstalled()
+        let binaryPath = GenMediaService.shared.binaryPath()
+        let hasKey = FalAIService.shared.hasAPIKey()
+
+        return VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            // CLI status
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: installed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(installed ? .green : .orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(installed ? "genmedia CLI installed" : "genmedia CLI not installed")
+                        .font(Theme.Typography.caption)
+                    if let path = binaryPath {
+                        Text(path)
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    } else {
+                        Text("Install with: curl https://genmedia.sh/install -fsS | bash")
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                }
+                Spacer()
+                Button("Setup") {
+                    showingGenmediaSetup = true
+                }
+                .buttonStyle(GhostButtonStyle())
+            }
+
+            // API key status
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: hasKey ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(hasKey ? .green : .orange)
+                Text(hasKey ? "fal API key set" : "No fal key — set in Settings → Voice Mode")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(hasKey ? Theme.Colors.text : .orange)
+                Spacer()
+            }
+
+            // Test generation button — visible only when both prereqs are met
+            if installed && hasKey {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Button {
+                        Task { await runGenmediaTest() }
+                    } label: {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            if isRunningGenmediaTest {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "play.circle")
+                                    .font(.system(size: 11))
+                            }
+                            Text(isRunningGenmediaTest ? "Testing…" : "Test connection")
+                                .font(Theme.Typography.caption)
+                        }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(isRunningGenmediaTest)
+
+                    if let msg = genmediaTestMessage {
+                        Text(msg)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(genmediaTestIsError ? .orange : .green)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Once connected, ask the chat to generate images, video, audio, or music. Results land in your Files tab. Browse models at fal.ai/models.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    /// Lightweight probe: `genmedia models flux --json --limit 1`. Confirms
+    /// the binary + key combo can actually reach fal before the user invests
+    /// in a real generation from the chat.
+    @MainActor
+    private func runGenmediaTest() async {
+        isRunningGenmediaTest = true
+        genmediaTestMessage = nil
+        defer { isRunningGenmediaTest = false }
+        do {
+            _ = try await GenMediaService.shared.searchModels(query: "flux", limit: 1)
+            genmediaTestMessage = "Connection OK"
+            genmediaTestIsError = false
+        } catch {
+            genmediaTestMessage = error.localizedDescription
+            genmediaTestIsError = true
+        }
+    }
+
+    // MARK: - GenMedia Setup Sheet
+
+    private var genmediaSetupSheet: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+            // Header
+            HStack {
+                Text("Install genmedia CLI")
+                    .font(Theme.Typography.title)
+                Spacer()
+                Button {
+                    showingGenmediaSetup = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                Text("genmedia is fal.ai's CLI for running generative media models. Otto reuses your existing fal API key (set in Settings → Voice Mode); no extra config needed once the CLI is on your machine.")
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    Text("1. Open Terminal and paste:")
+                        .font(Theme.Typography.body)
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text("curl https://genmedia.sh/install -fsS | bash")
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(Theme.Spacing.md)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                        Button {
+                            #if os(macOS)
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(
+                                "curl https://genmedia.sh/install -fsS | bash",
+                                forType: .string
+                            )
+                            #endif
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .padding(8)
+                                .background(Color.primary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Copy")
+                    }
+
+                    Text("2. Once the install finishes, click Verify below. No restart needed.")
+                        .font(Theme.Typography.body)
+
+                    Text("3. (Optional) Run a quick test from Terminal:")
+                        .font(Theme.Typography.body)
+                    Text("genmedia models flux --json --limit 1")
+                        .font(.system(size: 12, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(Theme.Spacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                }
+
+                // Verify row
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: GenMediaService.shared.isInstalled()
+                          ? "checkmark.circle.fill"
+                          : "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(GenMediaService.shared.isInstalled() ? .green : .orange)
+                    Text(GenMediaService.shared.binaryPath()
+                         ?? "Binary not detected yet — install above, then click Verify.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                    Spacer()
+                    Button("Verify") {
+                        // Force a re-render of any view reading `isInstalled()`.
+                        genmediaInstallRevision &+= 1
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+            }
+
+            Spacer()
+        }
+        .padding(Theme.Spacing.xl)
+        .frame(width: 520, height: 480)
+        .background(Theme.Colors.background)
     }
 }
 
