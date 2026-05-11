@@ -112,22 +112,22 @@ actor XService {
         return allPosts
     }
 
-    // MARK: - Fetch Mutual Followers
+    // MARK: - Fetch Followers
 
-    func fetchMutualFollowers(userId: String) async throws -> [XFollower] {
-        // Fetch followers
+    /// Returns every follower X will paginate through, each tagged with
+    /// `isMutual` so the UI can highlight people you also follow back.
+    /// Earlier versions filtered out non-mutuals here, which hid most of
+    /// the user's followers — keep the flag, drop the filter.
+    func fetchFollowers(userId: String) async throws -> [XFollower] {
         let followers = try await fetchFollowList(userId: userId, path: "/users/\(userId)/followers")
-        // Fetch following
         let following = try await fetchFollowList(userId: userId, path: "/users/\(userId)/following")
 
         let followingIds = Set(following.map { $0.xUserId })
-
-        // Mark mutual followers
         return followers.map { follower in
-            var mutualFollower = follower
-            mutualFollower.isMutual = followingIds.contains(follower.xUserId)
-            return mutualFollower
-        }.filter { $0.isMutual }
+            var tagged = follower
+            tagged.isMutual = followingIds.contains(follower.xUserId)
+            return tagged
+        }
     }
 
     private func fetchFollowList(userId: String, path: String) async throws -> [XFollower] {
@@ -234,6 +234,14 @@ actor XService {
         repeat {
             var queryItems = [
                 URLQueryItem(name: "max_results", value: "100"),
+                // Restrict to actual messages on the wire — otherwise X
+                // counts system events (ParticipantsJoin/Leave, conversation
+                // create, etc.) against the per-page budget, so each page
+                // returns fewer real DMs. The pagination loop already pulls
+                // every page X exposes, but a denser response means we
+                // recover more history before hitting the endpoint's
+                // ~30-day server-side lookback cap.
+                URLQueryItem(name: "event_types", value: "MessageCreate"),
                 URLQueryItem(name: "dm_event.fields", value: "id,text,event_type,sender_id,dm_conversation_id,created_at,participant_ids"),
                 URLQueryItem(name: "expansions", value: "sender_id,participant_ids"),
                 URLQueryItem(name: "user.fields", value: "id,name,username")

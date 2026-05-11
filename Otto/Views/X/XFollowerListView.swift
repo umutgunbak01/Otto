@@ -5,9 +5,35 @@ struct XFollowerListView: View {
     @State private var searchText: String = ""
     @State private var selectedFollowerId: UUID?
     @State private var isSidebarCollapsed: Bool = false
+    /// Persistent display filter: "all" shows everyone who follows the
+    /// user, "mutuals" hides accounts the user doesn't follow back.
+    /// Stored in UserDefaults so the choice survives relaunches.
+    @AppStorage("x_followers_filter_scope") private var filterScopeRaw: String = FilterScope.all.rawValue
+
+    private enum FilterScope: String, CaseIterable, Identifiable {
+        case all
+        case mutuals
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .all:     return "ALL"
+            case .mutuals: return "MUTUALS"
+            }
+        }
+    }
+
+    private var filterScope: FilterScope {
+        FilterScope(rawValue: filterScopeRaw) ?? .all
+    }
 
     var filteredFollowers: [XFollower] {
         var result = appState.xFollowers
+
+        // Mutuals-only filter (applied first so the search box and count
+        // badge reflect what the user has scoped to).
+        if filterScope == .mutuals {
+            result = result.filter { $0.isMutual }
+        }
 
         // Filter by search text
         if !searchText.isEmpty {
@@ -32,7 +58,9 @@ struct XFollowerListView: View {
                     .frame(width: 300)
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
-                OttoDivider()
+                Rectangle()
+                    .fill(Theme.Colors.cyan.opacity(0.18))
+                    .frame(width: 1)
             }
 
             // Detail view
@@ -107,6 +135,15 @@ struct XFollowerListView: View {
                     }
                 }
 
+                // Scope picker — view everyone or only mutuals
+                Picker("Scope", selection: $filterScopeRaw) {
+                    ForEach(FilterScope.allCases) { scope in
+                        Text(scope.label).tag(scope.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
                 // Search field
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
@@ -147,7 +184,7 @@ struct XFollowerListView: View {
                     Text("No X followers yet")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("Connect X in Integrations to import mutual followers.")
+                    Text("Connect X in Integrations to import your followers. Mutuals are highlighted.")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .multilineTextAlignment(.center)

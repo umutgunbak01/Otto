@@ -293,6 +293,9 @@ struct OttoSidebar: View {
             NavType(tab: .email,      label: "EMAIL",       icon: "✉", counter: "8.351"),
             NavType(tab: .connection, label: "CONNECTIONS", icon: "⌬", counter: "4.128"),
             NavType(tab: .file,       label: "FILES",       icon: "◰", counter: "1"),
+            NavType(tab: .xPost,      label: "X-POSTS",     icon: "✕", counter: "—"),
+            NavType(tab: .xFollower,  label: "X-FOLLOWERS", icon: "⊙", counter: "—"),
+            NavType(tab: .xDm,        label: "X-DMS",       icon: "⌖", counter: "—"),
         ]
     }
 }

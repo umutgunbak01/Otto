@@ -2897,7 +2897,7 @@ final class AppState {
 
             do {
                 // Fetch mutual followers
-                let newFollowers = try await XService.shared.fetchMutualFollowers(userId: userId)
+                let newFollowers = try await XService.shared.fetchFollowers(userId: userId)
                 // Merge: keep linked connections, update follower data
                 for newFollower in newFollowers {
                     if let idx = xFollowers.firstIndex(where: { $0.xUserId == newFollower.xUserId }) {
