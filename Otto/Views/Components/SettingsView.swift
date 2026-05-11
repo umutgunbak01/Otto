@@ -21,6 +21,14 @@ struct SettingsView: View {
     /// agent immediately for every code path, including voice mode.
     @AppStorage(AgentBackend.defaultsKey) private var rawBackend: String = AgentBackend.claude.rawValue
 
+    /// Interface toggles — read here for binding, owned by OttoApp which
+    /// observes the same keys via `@AppStorage` to actually start/stop
+    /// the wake-word listener, install/remove the menu-bar item, and
+    /// decide whether the HUD window auto-presents on launch.
+    @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
+    @AppStorage(HUDSettings.enabledKey) private var hudEnabled: Bool = HUDSettings.defaultEnabled
+    @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
+
     private var selectedBackend: AgentBackend {
         get { AgentBackend(rawValue: rawBackend) ?? .claude }
     }
@@ -166,6 +174,56 @@ struct SettingsView: View {
                         .pickerStyle(.menu)
                     }
                     .padding(.top, Theme.Spacing.xs)
+
+                    // Wake-word toggle — gates the background mic that
+                    // listens for "wake up" while Otto isn't the active
+                    // app. Off means no background mic at all.
+                    Toggle(isOn: $wakeWordEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Listen for wake word")
+                                .font(Theme.Typography.body)
+                            Text("When Otto is backgrounded, listens for \"wake up\" to bring the app forward. Uses the mic only when triggered by a sharp sound.")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .padding(.top, Theme.Spacing.sm)
+                }
+
+                OttoDivider()
+
+                // Interface (HUD + menu bar)
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "macwindow")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.Colors.cyan)
+                        Text("Interface")
+                            .font(Theme.Typography.headline)
+                    }
+
+                    Toggle(isOn: $menuBarEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show in menu bar")
+                                .font(Theme.Typography.body)
+                            Text("Compact status item alongside the macOS clock — current time + countdown to your next calendar event. Click to bring Otto forward.")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    Toggle(isOn: $hudEnabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show floating HUD widget")
+                                .font(Theme.Typography.body)
+                            Text("The legacy always-on-top widget. Off by default — most users prefer the menu-bar item above. Toggling on takes effect on next launch.")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                    }
+                    .toggleStyle(.switch)
                 }
 
                 OttoDivider()
