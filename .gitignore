@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Local Claude Code / AI tool state
+.claude/
+.cursor/
+.gemini/
+.windsurf/
+.agent/
+.agents/
+.mcp.json
+
+# Credentials — belt-and-suspenders. Nothing in Otto writes these into the
+# repo today (tokens go to Keychain, configs to UserDefaults), but if you
+# ever drop a sample env file or credentials JSON next to the source it
+# shouldn't ride along.
+.env
+.env.local
+.env.*.local
+auth.json
+*.credentials.json
+*.secret
+*.pem
+*.key
+
+# Logs
+*.log
