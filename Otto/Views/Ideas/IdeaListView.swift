@@ -36,7 +36,9 @@ struct IdeaListView: View {
                     .frame(width: 260)
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
-                OttoDivider()
+                Rectangle()
+                    .fill(Theme.Colors.cyan.opacity(0.18))
+                    .frame(width: 1)
             }
 
             // Full-page editor (Notion-style)
