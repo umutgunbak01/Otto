@@ -308,11 +308,17 @@ actor CodexCLIService {
     ///   - `thread.started` — session metadata, no-op
     ///   - `turn.started` — agent loop iteration begins, no-op
     ///   - `item.completed` — wraps one completed item:
-    ///       - `agent_message` → assistant text (delivered in one shot,
-    ///         see streaming caveat in the actor doc)
-    ///       - `function_call` / `tool_call` → tool invocation, surfaced as
-    ///         a tool-use event for the chat UI
-    ///       - `agent_reasoning` → ignored (private thinking)
+    ///       - `agent_message` → assistant text (delivered in one shot —
+    ///         see streaming caveat in the actor doc — but still emitted
+    ///         to the UI as a `.partialText` so the bubble shows up the
+    ///         moment Codex finishes, rather than at end-of-turn)
+    ///       - `function_call` / `tool_call` → tool invocation event
+    ///       - `agent_reasoning` → emitted as `.thinkingDelta` so the
+    ///         user can follow Codex's chain of thought
+    ///   - `item.updated` — incremental updates while an item is forming;
+    ///     `agent_reasoning` updates stream a growing summary which makes
+    ///     a decent "thinking…" indicator even though Codex doesn't
+    ///     stream the final agent_message per-token.
     ///   - `turn.completed` — usage stats, no-op
     private func parseStreamJSON(
         stdout: FileHandle,
@@ -321,6 +327,10 @@ actor CodexCLIService {
     ) async throws -> String {
         var textBuffer = ""
         var leftover = ""
+        // Track the most recent agent_reasoning summary so `item.updated`
+        // bursts can emit just the delta rather than re-sending the full
+        // running text.
+        var lastReasoning = ""
 
         while true {
             let chunk = try await readChunk(from: stdout)
@@ -331,14 +341,15 @@ actor CodexCLIService {
                 let line = String(leftover[..<newlineRange.lowerBound])
                 leftover = String(leftover[newlineRange.upperBound...])
                 if line.isEmpty { continue }
-                if let (delta, toolEvent) = parseEvent(line) {
-                    if !delta.isEmpty {
-                        textBuffer += delta
-                        let captured = delta
+                if let parsed = parseEvent(line, lastReasoning: &lastReasoning) {
+                    if !parsed.textDelta.isEmpty {
+                        textBuffer += parsed.textDelta
+                        let captured = parsed.textDelta
                         await MainActor.run { onDelta(captured) }
                     }
-                    if let event = toolEvent {
-                        await MainActor.run { onEvent(event) }
+                    for ev in parsed.events {
+                        let captured = ev
+                        await MainActor.run { onEvent(captured) }
                     }
                 }
             }
@@ -355,8 +366,17 @@ actor CodexCLIService {
         }
     }
 
-    /// Extract a text delta and/or a tool event from one NDJSON line.
-    private func parseEvent(_ line: String) -> (String, ChatEvent?)? {
+    private struct ParsedEvent {
+        let textDelta: String
+        let events: [ChatEvent]
+    }
+
+    /// Extract a text delta and/or ChatEvents from one NDJSON line.
+    /// `lastReasoning` is read+written so `item.updated` bursts produce
+    /// strict deltas off the previous reasoning summary — emitting the
+    /// full running text every tick would produce N-shaped accumulation
+    /// in the UI's thinking bubble.
+    private func parseEvent(_ line: String, lastReasoning: inout String) -> ParsedEvent? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -367,23 +387,63 @@ actor CodexCLIService {
         case "item.completed":
             guard let item = obj["item"] as? [String: Any],
                   let itemType = item["type"] as? String
-            else { return ("", nil) }
+            else { return ParsedEvent(textDelta: "", events: []) }
             switch itemType {
             case "agent_message":
                 let text = item["text"] as? String ?? ""
-                return (text, nil)
+                if text.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+                // Codex emits the final agent_message in one shot. Send it
+                // through `.partialText` too so the UI's streaming bubble
+                // appears immediately rather than waiting for end-of-turn.
+                return ParsedEvent(textDelta: text, events: [.partialText(text)])
+            case "agent_reasoning":
+                // Finalize the thinking stream — emit only the tail that
+                // hasn't already been surfaced via `item.updated` ticks.
+                let full = (item["text"] as? String) ?? (item["summary"] as? String) ?? ""
+                if full.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+                let tail = Self.tail(of: full, since: lastReasoning)
+                lastReasoning = ""
+                if tail.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+                return ParsedEvent(textDelta: "", events: [.thinkingDelta(tail)])
             default:
-                // function_call, tool_call, agent_reasoning, etc. — we don't
-                // surface these in the chat UI for v1.
-                return ("", nil)
+                // function_call, tool_call, etc. — we don't surface these in
+                // the chat UI for v1 (tool calls flow through the MCP bridge
+                // via OttoToolExecutor, which fires its own .toolCall events).
+                return ParsedEvent(textDelta: "", events: [])
             }
 
-        case "thread.started", "turn.started", "turn.completed",
-             "item.started", "item.updated":
-            return ("", nil)
+        case "item.updated":
+            // Stream the reasoning summary as it grows. Codex sends the
+            // *full* running text on each update, so we diff against the
+            // previous value to get just the new portion.
+            guard let item = obj["item"] as? [String: Any],
+                  let itemType = item["type"] as? String,
+                  itemType == "agent_reasoning"
+            else { return ParsedEvent(textDelta: "", events: []) }
+            let full = (item["text"] as? String) ?? (item["summary"] as? String) ?? ""
+            if full.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+            let delta = Self.tail(of: full, since: lastReasoning)
+            lastReasoning = full
+            if delta.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+            return ParsedEvent(textDelta: "", events: [.thinkingDelta(delta)])
+
+        case "thread.started", "turn.started", "turn.completed", "item.started":
+            return ParsedEvent(textDelta: "", events: [])
 
         default:
-            return ("", nil)
+            return ParsedEvent(textDelta: "", events: [])
         }
+    }
+
+    /// Return the suffix of `full` that comes after `prefix`. If `prefix`
+    /// isn't actually a prefix of `full` (rare — Codex sometimes rewrites
+    /// the running summary), fall back to the whole `full` so we don't
+    /// silently drop reasoning.
+    private static func tail(of full: String, since prefix: String) -> String {
+        if prefix.isEmpty { return full }
+        if full.hasPrefix(prefix) {
+            return String(full.dropFirst(prefix.count))
+        }
+        return full
     }
 }

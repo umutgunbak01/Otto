@@ -232,7 +232,22 @@ enum ChatBlock: Codable, Hashable {
 
 /// UI-level event emitted during a chat-with-tools run — lets the view render a live log.
 enum ChatEvent {
+    /// Final, complete assistant text for the turn. Emitted once at end-of-
+    /// turn after all `.partialText` deltas. The UI treats this as the
+    /// canonical version and uses it to finalize the streaming bubble.
     case text(String)
+    /// One streaming chunk of assistant text. Backends emit these as the
+    /// model produces tokens; the UI accumulates them into the in-flight
+    /// assistant bubble so the user sees the response unfold instead of
+    /// just a spinner. For backends that don't stream per-token (e.g.
+    /// Codex `exec --json`), this still fires once with the full message
+    /// the moment it's available, giving an earlier visual signal than
+    /// `.text` alone.
+    case partialText(String)
+    /// One streaming chunk of internal reasoning / "thinking" output from
+    /// the model. Rendered as a dim, italic block above the assistant
+    /// bubble so the user can follow the agent's thought process.
+    case thinkingDelta(String)
     case toolCall(id: String, name: String, input: [String: Any])
     case toolResult(id: String, name: String, summary: String, isError: Bool)
 }

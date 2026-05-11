@@ -343,14 +343,15 @@ actor ClaudeCLIService {
                 let line = String(leftover[..<newlineRange.lowerBound])
                 leftover = String(leftover[newlineRange.upperBound...])
                 if line.isEmpty { continue }
-                if let (delta, toolEvent) = parseEvent(line) {
-                    if !delta.isEmpty {
-                        textBuffer += delta
-                        let captured = delta
+                if let parsed = parseEvent(line) {
+                    if !parsed.textDelta.isEmpty {
+                        textBuffer += parsed.textDelta
+                        let captured = parsed.textDelta
                         await MainActor.run { onDelta(captured) }
                     }
-                    if let event = toolEvent {
-                        await MainActor.run { onEvent(event) }
+                    for ev in parsed.events {
+                        let captured = ev
+                        await MainActor.run { onEvent(captured) }
                     }
                 }
             }
@@ -367,8 +368,21 @@ actor ClaudeCLIService {
         }
     }
 
-    /// Extract a text delta and/or a tool event from one NDJSON line.
-    private func parseEvent(_ line: String) -> (String, ChatEvent?)? {
+    /// Result of parsing a single NDJSON line from the Claude Code CLI.
+    /// `textDelta` is the assistant-text delta (accumulated into the final
+    /// reply + forwarded to voice TTS). `events` is the list of ChatEvents
+    /// to surface to the UI for this line — typically a `.partialText` for
+    /// each text delta, a `.thinkingDelta` for each thinking delta, plus
+    /// any tool-related events.
+    private struct ParsedEvent {
+        let textDelta: String
+        let events: [ChatEvent]
+    }
+
+    /// Extract a text delta and/or ChatEvents from one NDJSON line.
+    /// Handles both `text_delta` content blocks (visible assistant output)
+    /// and `thinking_delta` content blocks (extended-thinking reasoning).
+    private func parseEvent(_ line: String) -> ParsedEvent? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -377,26 +391,42 @@ actor ClaudeCLIService {
 
         switch type {
         case "stream_event":
-            // Anthropic SSE passthrough — grab text deltas for TTS.
+            // Anthropic SSE passthrough. Two delta shapes matter here:
+            //   delta.type == "text_delta"     → delta.text is assistant output
+            //   delta.type == "thinking_delta" → delta.thinking is internal reasoning
+            // We surface BOTH so the UI can render the response and the
+            // chain of thought in distinct visual lanes.
             guard let event = obj["event"] as? [String: Any],
                   let eventType = event["type"] as? String,
                   eventType == "content_block_delta",
-                  let delta = event["delta"] as? [String: Any],
-                  let text = delta["text"] as? String
-            else { return ("", nil) }
-            return (text, nil)
+                  let delta = event["delta"] as? [String: Any]
+            else { return ParsedEvent(textDelta: "", events: []) }
+
+            let deltaType = (delta["type"] as? String) ?? ""
+
+            if deltaType == "thinking_delta",
+               let thinking = delta["thinking"] as? String, !thinking.isEmpty {
+                return ParsedEvent(textDelta: "", events: [.thinkingDelta(thinking)])
+            }
+
+            // Default path covers `text_delta` (and legacy shapes that
+            // omitted the `type` field but always had `text`).
+            if let text = delta["text"] as? String, !text.isEmpty {
+                return ParsedEvent(textDelta: text, events: [.partialText(text)])
+            }
+            return ParsedEvent(textDelta: "", events: [])
 
         case "assistant":
             // Full message blocks — use as a fallback text source when the
             // CLI isn't running with --include-partial-messages. Returns
             // nothing here since we already accumulate via stream_event.
-            return ("", nil)
+            return ParsedEvent(textDelta: "", events: [])
 
         case "system", "user", "result", "rate_limit_event":
-            return ("", nil)
+            return ParsedEvent(textDelta: "", events: [])
 
         default:
-            return ("", nil)
+            return ParsedEvent(textDelta: "", events: [])
         }
     }
 }

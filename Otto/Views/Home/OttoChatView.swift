@@ -324,12 +324,16 @@ struct OttoChatView: View {
 
     // MARK: - Message List
 
-    /// Show the small "between steps" indicator only when Claude is genuinely
-    /// idle — i.e. there's no in-flight tool step that's already pulsing on
-    /// its own. Two activity signals at once would just be noise.
+    /// Show the small "between steps" indicator only when the backend is
+    /// genuinely idle — i.e. there's no in-flight tool step that's already
+    /// pulsing on its own AND no streaming text/thinking bubble actively
+    /// growing. Two activity signals at once would just be noise.
     private var idleIndicatorVisible: Bool {
         guard isLoading else { return false }
-        return !(uiEntries.last?.kind.isInFlightToolStep ?? false)
+        guard let lastKind = uiEntries.last?.kind else { return true }
+        if lastKind.isInFlightToolStep { return false }
+        if lastKind.isStreaming { return false }
+        return true
     }
 
     private var messageList: some View {
@@ -367,6 +371,12 @@ struct OttoChatView: View {
             MessageBubble(text: text, isUser: true, attachments: attachments)
         case .assistantText(let text):
             MessageBubble(text: text, isUser: false, attachments: [])
+        case .assistantTextStreaming(let text):
+            // Same bubble layout as `.assistantText`, plus a trailing
+            // caret that pulses while deltas are landing.
+            StreamingAssistantBubble(text: text)
+        case .thinkingStream(let text):
+            ThinkingBubble(text: text)
         case .toolStep(let callIcon, let callLabel, let resultLabel, let isError, let isInFlight):
             ToolStepRow(
                 callIcon: callIcon,
@@ -618,10 +628,44 @@ struct OttoChatView: View {
     @MainActor
     private func handleEvent(_ event: ChatEvent) {
         switch event {
+        case .partialText(let chunk):
+            guard !chunk.isEmpty else { return }
+            // Find the most recent streaming assistant bubble. A tool call
+            // or item preview between deltas resets the run — we start a
+            // new bubble below those rather than reaching past them, so
+            // each "chunk of response between tool calls" gets its own
+            // bubble (matches how Claude conceptually emits text blocks).
+            if let lastIdx = uiEntries.indices.last(where: { _ in true }),
+               case .assistantTextStreaming(let existing) = uiEntries[lastIdx].kind {
+                uiEntries[lastIdx] = UIEntry(kind: .assistantTextStreaming(existing + chunk))
+            } else {
+                uiEntries.append(UIEntry(kind: .assistantTextStreaming(chunk)))
+            }
+        case .thinkingDelta(let chunk):
+            guard !chunk.isEmpty else { return }
+            // Thinking and final text can interleave; merge into the most
+            // recent thinking entry if it's the last thing we added, else
+            // start a new one. The "last entry" check ensures we don't
+            // retroactively grow an old thinking block after a tool call
+            // or response has visually closed it.
+            if let lastIdx = uiEntries.indices.last,
+               case .thinkingStream(let existing) = uiEntries[lastIdx].kind {
+                uiEntries[lastIdx] = UIEntry(kind: .thinkingStream(existing + chunk))
+            } else {
+                uiEntries.append(UIEntry(kind: .thinkingStream(chunk)))
+            }
         case .text(let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            uiEntries.append(UIEntry(kind: .assistantText(text)))
+            // Promote the most recent streaming bubble to its final form
+            // (its content gets replaced by the canonical end-of-turn text)
+            // rather than creating a duplicate bubble below it.
+            if let lastIdx = uiEntries.indices.last,
+               case .assistantTextStreaming = uiEntries[lastIdx].kind {
+                uiEntries[lastIdx] = UIEntry(kind: .assistantText(text))
+            } else {
+                uiEntries.append(UIEntry(kind: .assistantText(text)))
+            }
         case .toolCall(let id, let name, let input):
             // attach_item_preview renders as a card directly — no chip.
             if name == OttoTools.Name.attach_item_preview.rawValue,
@@ -803,6 +847,16 @@ private struct UIEntry: Identifiable {
     enum Kind {
         case userText(text: String, attachments: [ChatAttachment])
         case assistantText(String)
+        /// Assistant text that's still being streamed in — visually
+        /// identical to `.assistantText` but flagged so `handleEvent` can
+        /// keep appending deltas to the same bubble. Replaced with the
+        /// finalized `.assistantText` when the canonical `.text(...)`
+        /// event lands at end-of-turn.
+        case assistantTextStreaming(String)
+        /// Streaming "chain of thought" from the model. Rendered dim and
+        /// italic above the eventual answer so the user can follow the
+        /// agent's reasoning. Stays visible after the turn ends.
+        case thinkingStream(String)
         /// A single Claude tool step: the call line ("Searching for 'recipe'")
         /// and an optional result line ("→ Found 3 results"). While the call
         /// is in flight the icon pulses and `resultLabel` is nil.
@@ -814,6 +868,15 @@ private struct UIEntry: Identifiable {
         var isInFlightToolStep: Bool {
             if case .toolStep(_, _, _, _, let inFlight) = self { return inFlight }
             return false
+        }
+        /// Any entry that's actively absorbing streamed content — used by
+        /// the idle-dots indicator to suppress itself the moment real
+        /// output starts flowing in.
+        var isStreaming: Bool {
+            switch self {
+            case .assistantTextStreaming, .thinkingStream: return true
+            default: return false
+            }
         }
     }
 }
@@ -957,6 +1020,74 @@ private struct IdleStepIndicator: View {
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, 6)
         .onAppear { animating = true }
+    }
+}
+
+// MARK: - Streaming Assistant Bubble
+//
+// Same shape as `MessageBubble` for the non-user side, but with a pulsing
+// caret pinned to the trailing edge of the live text. Once the canonical
+// `.text(...)` event arrives, this entry is replaced by a static
+// `.assistantText`, so the caret disappears the moment streaming ends.
+
+private struct StreamingAssistantBubble: View {
+    let text: String
+    @State private var caretOn = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                (Text(text)
+                    + Text(caretOn ? "▍" : "  ")
+                        .foregroundStyle(Theme.Colors.accent))
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.sm)
+            Spacer(minLength: 60)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                caretOn.toggle()
+            }
+        }
+    }
+}
+
+// MARK: - Thinking Bubble
+//
+// Dim, italic block that grows as `.thinkingDelta` events arrive. Visually
+// distinct from the final answer so the user can tell at a glance that
+// this is the model's reasoning, not its conclusion. Stays in the
+// transcript after the turn ends (no auto-collapse for v1 — easier to
+// trust the agent when its reasoning is visible).
+
+private struct ThinkingBubble: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            Image(systemName: "brain")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .padding(.top, 3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Thinking")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .tracking(1)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text(text)
+                    .font(Theme.Typography.caption.italic())
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.xs)
     }
 }
 
