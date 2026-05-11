@@ -33,12 +33,29 @@ Nothing leaves your device unless you explicitly connect an integration.
 ## Requirements
 
 - macOS 15.4 (Sequoia) or newer
-- Xcode 16 or newer
 - Either the **Claude Code CLI** or the **Codex CLI** installed and signed in
   (see [SETUP.md](SETUP.md) — Otto reads tokens directly from whichever CLI
   is configured; you don't paste keys into Otto itself)
+- Xcode 16+ **only if building from source** (not needed for the prebuilt
+  download below)
 
-## Build
+## Download (prebuilt)
+
+Grab the latest `Otto.app.zip` from the
+[Releases page](https://github.com/umutgunbak01/Otto/releases/latest):
+
+1. Download `Otto.app.zip` and unzip it.
+2. Drag `Otto.app` into `/Applications`.
+3. **First launch:** the build is unsigned, so macOS Gatekeeper will block it.
+   Either:
+   - Right-click `Otto.app` → **Open** → click **Open** in the warning dialog.
+     macOS remembers the choice. *Or*
+   - In Terminal: `xattr -cr /Applications/Otto.app`, then double-click.
+
+Then jump to [SETUP.md](SETUP.md) to install the Claude Code or Codex CLI and
+sign in.
+
+## Build from source
 
 1. Clone the repo
 2. Open `Otto.xcodeproj` in Xcode
@@ -46,6 +63,9 @@ Nothing leaves your device unless you explicitly connect an integration.
    `Development Team` to your own Apple Developer team
 4. (Optional) Change the bundle identifier from `com.example.Otto` to your own
 5. Build and run
+
+To cut a new release, see [`scripts/release.sh`](scripts/release.sh) — it
+archives, zips with `ditto`, and publishes via the `gh` CLI.
 
 The app will launch with no data and no integrations connected. **Read
 [SETUP.md](SETUP.md) for the full walkthrough** — it covers the minimum

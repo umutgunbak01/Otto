@@ -55,11 +55,15 @@ has no backend — no telemetry, no analytics, no phone-home.
 ## Prerequisites
 
 - **macOS 15.4 (Sequoia) or newer** — Otto uses some 15.x SwiftUI APIs.
-- **Xcode 16+** (only if you're building from source, which you are since
-  there's no binary distribution yet).
-- **An Apple Developer ID** to sign the build. The repo ships with
-  `DEVELOPMENT_TEAM = ""` and bundle id `com.example.Otto`. You'll change
-  these in Xcode's Signing & Capabilities tab before your first build.
+- **Xcode 16+** — only if you're building from source. If you just want to
+  run Otto, grab the prebuilt `Otto.app.zip` from the
+  [Releases page](https://github.com/umutgunbak01/Otto/releases/latest)
+  (see the Download section in the [README](README.md) for the Gatekeeper
+  bypass on first launch).
+- **An Apple Developer ID** to sign the build — only needed when building
+  from source. The repo ships with `DEVELOPMENT_TEAM = ""` and bundle id
+  `com.example.Otto`. You'll change these in Xcode's Signing & Capabilities
+  tab before your first build.
 - **`/usr/bin/nc` (BSD netcat)** — ships with macOS by default. Otto uses it
   internally to bridge its in-process MCP server to the agent CLI subprocess
   so Claude/Codex can call Otto's tools (create todo, search notes, etc.).

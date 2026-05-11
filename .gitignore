@@ -9,6 +9,13 @@ DerivedData/
 *.xcscmblueprint
 *.xccheckout
 
+# Local export folders from Organizer -> Distribute App. Releases go to
+# GitHub Releases via scripts/release.sh, not into the repo.
+*.xcarchive
+*.app
+*.app.zip
+Otto [0-9]*/
+
 # Local Claude Code / AI tool state
 .claude/
 .cursor/
