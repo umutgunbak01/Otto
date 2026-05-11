@@ -630,14 +630,14 @@ struct OttoChatView: View {
         switch event {
         case .partialText(let chunk):
             guard !chunk.isEmpty else { return }
-            // Find the most recent streaming assistant bubble. A tool call
-            // or item preview between deltas resets the run — we start a
-            // new bubble below those rather than reaching past them, so
-            // each "chunk of response between tool calls" gets its own
-            // bubble (matches how Claude conceptually emits text blocks).
-            if let lastIdx = uiEntries.indices.last(where: { _ in true }),
+            // Mutate `kind` on the existing entry in place — assigning a
+            // freshly-constructed UIEntry would change its `id`, which
+            // SwiftUI's ForEach treats as a delete+insert, re-mounting
+            // the row on every delta and effectively making the streaming
+            // bubble invisible (you only ever see the finalized state).
+            if let lastIdx = uiEntries.indices.last,
                case .assistantTextStreaming(let existing) = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx] = UIEntry(kind: .assistantTextStreaming(existing + chunk))
+                uiEntries[lastIdx].kind = .assistantTextStreaming(existing + chunk)
             } else {
                 uiEntries.append(UIEntry(kind: .assistantTextStreaming(chunk)))
             }
@@ -645,24 +645,22 @@ struct OttoChatView: View {
             guard !chunk.isEmpty else { return }
             // Thinking and final text can interleave; merge into the most
             // recent thinking entry if it's the last thing we added, else
-            // start a new one. The "last entry" check ensures we don't
-            // retroactively grow an old thinking block after a tool call
-            // or response has visually closed it.
+            // start a new one. Mutate `kind` in place for the same
+            // identity-stability reason as `.partialText` above.
             if let lastIdx = uiEntries.indices.last,
                case .thinkingStream(let existing) = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx] = UIEntry(kind: .thinkingStream(existing + chunk))
+                uiEntries[lastIdx].kind = .thinkingStream(existing + chunk)
             } else {
                 uiEntries.append(UIEntry(kind: .thinkingStream(chunk)))
             }
         case .text(let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            // Promote the most recent streaming bubble to its final form
-            // (its content gets replaced by the canonical end-of-turn text)
-            // rather than creating a duplicate bubble below it.
+            // Promote the streaming bubble to its finalized form by
+            // mutating `kind` — same identity-stability reasoning.
             if let lastIdx = uiEntries.indices.last,
                case .assistantTextStreaming = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx] = UIEntry(kind: .assistantText(text))
+                uiEntries[lastIdx].kind = .assistantText(text)
             } else {
                 uiEntries.append(UIEntry(kind: .assistantText(text)))
             }
