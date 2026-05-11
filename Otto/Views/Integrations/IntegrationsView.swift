@@ -11,6 +11,7 @@ struct IntegrationsView: View {
         case fireflies = "Fireflies"
         case gmail = "Gmail"
         case googleCalendar = "Google Calendar"
+        case googleCalendarLive = "Google Calendar (live)"
         case googleDrive = "Google Drive"
         case todoist = "Todoist"
         case notion = "Notion"
@@ -24,6 +25,7 @@ struct IntegrationsView: View {
             case .fireflies: return "waveform"
             case .gmail: return "envelope"
             case .googleCalendar: return "calendar"
+            case .googleCalendarLive: return "calendar.badge.clock"
             case .googleDrive: return "folder.badge.gearshape"
             case .todoist: return "checkmark.circle"
             case .notion: return "doc.text"
@@ -39,6 +41,7 @@ struct IntegrationsView: View {
             case .fireflies: return "Import meeting transcripts and action items"
             case .gmail: return "Sync emails and create tasks from messages"
             case .googleCalendar: return "Import calendar events and meetings"
+            case .googleCalendarLive: return "Live calendar access — search, schedule, and edit events via Google's official Calendar MCP server"
             case .googleDrive: return "Read, search, and create Drive files via Google's official Drive MCP server"
             case .todoist: return "Sync tasks from your Todoist projects"
             case .notion: return "Sync pages as notes from your Notion workspace"
@@ -328,6 +331,7 @@ struct IntegrationsView: View {
         case .fireflies: return .purple
         case .gmail: return .red
         case .googleCalendar: return .blue
+        case .googleCalendarLive: return .blue
         case .googleDrive: return .blue
         case .todoist: return .red
         case .notion: return .gray
@@ -346,6 +350,13 @@ struct IntegrationsView: View {
             return appState.isGmailConnected || appState.needsGoogleReauth
         case .googleCalendar:
             return appState.isCalendarConnected || appState.needsGoogleReauth
+        case .googleCalendarLive:
+            // Mirrors googleDrive: flipped on by the user via the Connect
+            // button after a successful re-consent. driveRefreshTick is
+            // shared so a single tick bump re-renders both Google MCP
+            // cards.
+            let _ = driveRefreshTick
+            return GoogleAuthService.shared.hasCalendarMcpScopes()
         case .googleDrive:
             // Reads through GoogleAuthService — flipped on by the user via
             // `connectIntegration(.googleDrive)` after a successful
@@ -376,6 +387,8 @@ struct IntegrationsView: View {
             return true // Can connect via OAuth
         case .googleCalendar:
             return true // Uses same OAuth as Gmail
+        case .googleCalendarLive:
+            return true // Shares the Google OAuth client + Calendar MCP scopes
         case .googleDrive:
             return true // Shares the Gmail/Calendar OAuth client + extra scopes
         case .todoist:
@@ -431,6 +444,17 @@ struct IntegrationsView: View {
                 googleClientIdNextAction = .drive
                 showingGoogleClientIdInput = true
             }
+        case .googleCalendarLive:
+            // Same flow as Drive — single OAuth client, scope union, one
+            // consent screen for any combination of Google MCP integrations
+            // the user wants on.
+            if GoogleAuthService.shared.hasClientId {
+                Task { await runCalendarMcpReauthorize() }
+            } else {
+                googleClientIdInput = ""
+                googleClientIdNextAction = .calendarLive
+                showingGoogleClientIdInput = true
+            }
         case .todoist:
             showingTodoistTokenInput = true
         case .notion:
@@ -473,6 +497,8 @@ struct IntegrationsView: View {
             gmailExpandedContent
         case .googleCalendar:
             calendarExpandedContent
+        case .googleCalendarLive:
+            googleCalendarLiveExpandedContent
         case .googleDrive:
             googleDriveExpandedContent
         case .todoist:
@@ -604,7 +630,7 @@ struct IntegrationsView: View {
     @State private var googleClientIdInput = ""
     @State private var googleClientIdNextAction: GoogleConnectTarget = .gmail
 
-    enum GoogleConnectTarget { case gmail, calendar, drive }
+    enum GoogleConnectTarget { case gmail, calendar, drive, calendarLive }
 
     // MARK: - Google Drive State
 
@@ -614,6 +640,15 @@ struct IntegrationsView: View {
     @State private var driveRefreshTick: Int = 0
     @State private var isReauthorizingDrive: Bool = false
     @State private var driveReauthError: String?
+
+    // MARK: - Google Calendar (live) State
+    //
+    // Shares `driveRefreshTick` for re-render (both Google MCP cards
+    // observe the same flag store), but its own reauth state to keep
+    // the two cards' button states independent during overlapping
+    // OAuth flows (rare, but cheap to model right).
+    @State private var isReauthorizingCalendarMcp: Bool = false
+    @State private var calendarMcpReauthError: String?
 
     // MARK: - Supabase Custom Project State
 
@@ -1508,6 +1543,7 @@ struct IntegrationsView: View {
                     case .gmail: await appState.connectGmail()
                     case .calendar: await appState.connectCalendar()
                     case .drive: await runDriveReauthorize()
+                    case .calendarLive: await runCalendarMcpReauthorize()
                     }
                 }
             } label: {
@@ -1780,6 +1816,123 @@ struct IntegrationsView: View {
                 return
             }
             driveReauthError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Google Calendar (live) Expanded Content
+
+    private var googleCalendarLiveExpandedContent: some View {
+        let _ = driveRefreshTick
+        let connected = GoogleAuthService.shared.hasCalendarMcpScopes()
+
+        return VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(connected ? .green : .orange)
+                Text(connected
+                     ? "Connected — Calendar MCP scopes granted."
+                     : "Calendar MCP scopes not granted yet. Click Connect to re-consent with the extra scopes.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                Spacer(minLength: 0)
+            }
+
+            if let error = calendarMcpReauthError {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Button {
+                    Task { await runCalendarMcpReauthorize() }
+                } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        if isReauthorizingCalendarMcp {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 11))
+                        }
+                        Text(connected ? "Re-authorize" : "Connect Calendar (live)")
+                            .font(Theme.Typography.caption)
+                    }
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(isReauthorizingCalendarMcp)
+
+                if connected {
+                    Button {
+                        GoogleAuthService.shared.calendarMcpEnabled = false
+                        driveRefreshTick &+= 1
+                    } label: {
+                        Text("Disconnect")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.priorityUrgent)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the Calendar MCP server from being injected into chats. The existing Calendar event sync (under 'Google Calendar') is unaffected.")
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "wrench.adjustable")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Agent tools: `calendar__list_calendars`, `calendar__list_events`, `calendar__get_event`, `calendar__suggest_time`, `calendar__create_event`, `calendar__update_event`, `calendar__delete_event`, `calendar__respond_to_event`.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("One-time GCP setup")
+                        .font(Theme.Typography.small.weight(.semibold))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("Enable both `calendar-json.googleapis.com` and `calendarmcp.googleapis.com` in your Cloud project, then add `calendar.calendarlist.readonly`, `calendar.events.freebusy`, and `calendar.events.readonly` to the OAuth consent screen. Same OAuth client as Gmail / Calendar / Drive.")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+
+            HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                Image(systemName: "info.bubble")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text("Distinct from the regular Google Calendar card above: that one periodically syncs events into Otto's local store for the HUD / Meeting tab; this one gives the agent live, read-AND-write access during chat. Both can be on at once.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    @MainActor
+    private func runCalendarMcpReauthorize() async {
+        isReauthorizingCalendarMcp = true
+        calendarMcpReauthError = nil
+        GoogleAuthService.shared.calendarMcpEnabled = true
+        defer {
+            isReauthorizingCalendarMcp = false
+            driveRefreshTick &+= 1
+        }
+        do {
+            _ = try await GoogleAuthService.shared.reauthorize()
+        } catch {
+            GoogleAuthService.shared.calendarMcpEnabled = false
+            if case GoogleAuthError.userCancelled = error {
+                return
+            }
+            calendarMcpReauthError = error.localizedDescription
         }
     }
 

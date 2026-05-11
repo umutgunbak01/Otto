@@ -19,6 +19,7 @@ app is usable. Everything else is optional and can be added later.
 - [Step 2: Optional integrations](#step-2-optional-integrations)
   - [Gmail & Google Calendar](#gmail--google-calendar)
   - [Google Drive](#google-drive)
+  - [Google Calendar (live)](#google-calendar-live)
   - [Voice mode (fal.ai)](#voice-mode-falai)
   - [GenMedia (fal.ai)](#genmedia-falai)
   - [Todoist](#todoist)
@@ -304,6 +305,52 @@ You only need a small one-time Google Cloud add-on:
 contents on-demand through the MCP server; they stay in chat-turn context
 only. Disconnect at any time via Integrations → Google Drive → Disconnect
 Drive — Gmail and Calendar keep working unaffected.
+
+### Google Calendar (live)
+
+**What this unlocks:** live, two-way calendar access during chat via
+[Google's official Calendar MCP server][calendar-mcp] at
+`https://calendarmcp.googleapis.com/mcp/v1`. The agent can list your
+calendars, search events, fetch event details, **suggest meeting times**
+across multiple participants, **create / update / delete events**, and
+**respond to invitations** — all without you switching to the Calendar
+app. Ask "find a 30-minute slot next week with Sam and Pat" and it
+chains `calendar__suggest_time` → `calendar__create_event`.
+
+[calendar-mcp]: https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server
+
+This is **distinct from the regular "Google Calendar" card above** —
+that one periodically syncs your event history into Otto's local store
+for the HUD / Meeting tab. This one gives the agent live access to the
+real Calendar during chat. Both can be on at the same time; they don't
+conflict.
+
+Same OAuth client as Gmail / Calendar / Drive. One-time GCP add-on:
+
+1. In the same Google Cloud project you used for Gmail / Calendar:
+2. **APIs & Services → Library** — search for and **enable** *both*:
+   - `Google Calendar API` (`calendar-json.googleapis.com`)
+     (you may already have this from the regular Calendar integration)
+   - `Google Calendar MCP API` (`calendarmcp.googleapis.com`)
+3. **APIs & Services → OAuth consent screen → Edit** — under Scopes, add:
+   - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+   - `https://www.googleapis.com/auth/calendar.events.freebusy`
+   - `https://www.googleapis.com/auth/calendar.events.readonly`
+   (The scope names are all `*.readonly` — that's correct. Google's
+   MCP wrapper grants the full read/write surface on top of these
+   read scopes; you don't need a write scope.)
+4. In Otto: **Integrations** → click **Connect** on **Google Calendar
+   (live)**. The consent screen re-opens listing the three new scopes
+   alongside any you've already granted. Approve.
+5. Card flips to "Connected — Calendar MCP scopes granted." Next chat
+   turn injects the Calendar MCP server into the agent's tool list
+   (`calendar__list_events`, `calendar__suggest_time`, etc.).
+
+**Where Calendar content lives:** never in `otto_data.json` (for the
+MCP path; the regular Calendar card still does sync events into local
+storage). The agent reads / writes live through the MCP server.
+Disconnect at any time via Integrations → Google Calendar (live) →
+Disconnect — the regular Calendar event sync is unaffected.
 
 ### Voice mode (fal.ai)
 

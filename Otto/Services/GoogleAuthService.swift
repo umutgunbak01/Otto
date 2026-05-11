@@ -41,11 +41,25 @@ final class GoogleAuthService: @unchecked Sendable {
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/drive.file"
     ]
+    private static let calendarMcpScopes: [String] = [
+        // Google's Calendar MCP server requires these three. The scope names
+        // are all `*.readonly` but the MCP wrapper exposes the full 8-tool
+        // surface (create / update / delete / respond / suggest_time) on
+        // top of them — the readonly scopes are what Google requires for
+        // the MCP grant, the wrapper layer extends behaviour.
+        // See: https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server
+        "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+        "https://www.googleapis.com/auth/calendar.events.freebusy",
+        "https://www.googleapis.com/auth/calendar.events.readonly"
+    ]
 
     private var requestedScopes: String {
         var scopes = Self.baseScopes
         if driveEnabled {
             scopes.append(contentsOf: Self.driveScopes)
+        }
+        if calendarMcpEnabled {
+            scopes.append(contentsOf: Self.calendarMcpScopes)
         }
         return scopes.joined(separator: " ")
     }
@@ -67,6 +81,21 @@ final class GoogleAuthService: @unchecked Sendable {
     /// into the chat.
     func hasDriveScopes() -> Bool {
         driveEnabled && isAuthenticated()
+    }
+
+    /// Same shape as `driveEnabled`, but for Google's Calendar MCP server
+    /// (a different remote endpoint with its own scope set). Distinct from
+    /// the long-standing periodic Calendar event sync — that integration
+    /// uses `calendar.readonly` from `baseScopes` and is unaffected by
+    /// this flag. Flipping this on opts the chat agent into Calendar MCP
+    /// tools (list/create/update/delete events, suggest_time, etc.).
+    var calendarMcpEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "google_calendar_mcp_enabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "google_calendar_mcp_enabled") }
+    }
+
+    func hasCalendarMcpScopes() -> Bool {
+        calendarMcpEnabled && isAuthenticated()
     }
 
     // For iOS/Desktop client types, use reverse client ID as redirect URI

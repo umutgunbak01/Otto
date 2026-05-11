@@ -334,6 +334,20 @@ actor AgentService {
             parts.append("The user has connected their Google Drive. Use `drive__search_files` to find files by name or content, `drive__list_recent_files` for 'what did I work on lately'-style queries, `drive__get_file_metadata` for size / owner / modified info, `drive__get_file_permissions` to inspect sharing, `drive__read_file_content` to pull the actual contents of Docs / Sheets / Slides into your context, and `drive__download_file_content` for raw file bytes. `drive__create_file` writes new files into the user's Drive — only invoke it when the user explicitly asks to save something there. All tools are scoped to the user's own Drive via OAuth; the agent never sees files outside their grant.")
         }
 
+        // Google Calendar (live) — Google's Calendar MCP server. Distinct
+        // from the periodic event sync that already populates
+        // appState.calendarEvents: those events are synced into Otto's
+        // local store and queryable via search_items(type=meeting). The
+        // calendar__* tools below are LIVE — they read freshly from
+        // Google Calendar, can suggest meeting times, and can mutate
+        // events. Surface both paths so the agent picks the right one
+        // for the task (history search → search_items, scheduling new
+        // events / checking real-time availability → calendar__*).
+        if GoogleAuthService.shared.hasCalendarMcpScopes() {
+            parts.append("\n## Google Calendar (live)")
+            parts.append("The user has connected the Google Calendar MCP server. Use `calendar__list_calendars` to see which calendars the user owns or has shared with them, `calendar__list_events` to fetch upcoming/past events on a given calendar with optional time window, `calendar__get_event` for full details of a specific event, `calendar__suggest_time` to find free slots for a new meeting given participant emails + duration, `calendar__create_event` to schedule something new, `calendar__update_event` to edit, `calendar__delete_event` to cancel, and `calendar__respond_to_event` to accept / decline an invitation. Prefer these tools over `search_items(type=meeting)` when the user wants real-time scheduling or anything that mutates the calendar; use `search_items(type=meeting)` for historical lookups against meetings Otto has already synced locally.")
+        }
+
         // GenMedia (fal.ai) — only advertise if both prereqs are satisfied,
         // otherwise the agent will confidently invoke tools that return
         // errors. The executor still maps notInstalled / noAPIKey to clean

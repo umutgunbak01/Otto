@@ -138,12 +138,13 @@ actor ClaudeCLIService {
         } else {
             NSLog("[ClaudeCLI] MCP server unavailable — Otto tools disabled this turn")
         }
-        // Google Drive — Google hosts a remote MCP server that takes the
-        // user's OAuth access token as a Bearer header. Inject it whenever
-        // the user has flipped on the Drive integration. Token refresh
-        // happens at fetch time (within getValidAccessToken's 5-minute
-        // buffer); if the refresh fails, skip the Drive server for this
-        // turn rather than crashing the whole chat.
+        // Google Drive / Calendar MCP — both Google-hosted streamable HTTP
+        // servers that take the user's OAuth access token as a Bearer
+        // header. Inject either whenever the user has flipped the
+        // corresponding integration on. Token refresh happens at fetch
+        // time (within getValidAccessToken's 5-minute buffer); on
+        // failure, skip the relevant server for this turn rather than
+        // crashing the whole chat.
         if GoogleAuthService.shared.hasDriveScopes() {
             do {
                 let driveToken = try await GoogleAuthService.shared.getValidAccessToken()
@@ -154,6 +155,18 @@ actor ClaudeCLIService {
                 ]
             } catch {
                 NSLog("[ClaudeCLI] Drive MCP skipped — token unavailable: %@", error.localizedDescription)
+            }
+        }
+        if GoogleAuthService.shared.hasCalendarMcpScopes() {
+            do {
+                let calToken = try await GoogleAuthService.shared.getValidAccessToken()
+                mcpServers["calendar"] = [
+                    "type": "http",
+                    "url": "https://calendarmcp.googleapis.com/mcp/v1",
+                    "headers": ["Authorization": "Bearer \(calToken)"]
+                ]
+            } catch {
+                NSLog("[ClaudeCLI] Calendar MCP skipped — token unavailable: %@", error.localizedDescription)
             }
         }
         for project in SupabaseProjectsService.shared.allProjects() {

@@ -150,11 +150,11 @@ actor CodexCLIService {
         if authMode == .apiKey, let key = CodexAuthService.shared.apiKey() {
             env["OPENAI_API_KEY"] = key
         }
-        // Google Drive — same MCP injection pattern as Supabase below, but
-        // the bearer token comes from GoogleAuthService instead of a stored
-        // PAT. Token refreshes lazily within a 5-minute expiry buffer.
-        // Skip the server entirely if the token isn't fetchable so a stale
-        // Google grant doesn't block the rest of the turn.
+        // Google Drive / Calendar MCP — same injection shape as Supabase
+        // below, just with the bearer token sourced from GoogleAuthService
+        // instead of a stored PAT. Each guarded by its own opt-in flag.
+        // Token refreshes lazily within a 5-minute expiry buffer; skip
+        // the server for this turn if it isn't fetchable.
         if GoogleAuthService.shared.hasDriveScopes() {
             do {
                 let driveToken = try await GoogleAuthService.shared.getValidAccessToken()
@@ -167,6 +167,20 @@ actor CodexCLIService {
                 env[envVarName] = driveToken
             } catch {
                 NSLog("[CodexCLI] Drive MCP skipped — token unavailable: %@", error.localizedDescription)
+            }
+        }
+        if GoogleAuthService.shared.hasCalendarMcpScopes() {
+            do {
+                let calToken = try await GoogleAuthService.shared.getValidAccessToken()
+                let envVarName = "OTTO_CALENDAR_BEARER_TOKEN"
+                args.append(contentsOf: [
+                    "-c", "mcp_servers.calendar.url=\"https://calendarmcp.googleapis.com/mcp/v1\"",
+                    "-c", "mcp_servers.calendar.transport=\"streamable_http\"",
+                    "-c", "mcp_servers.calendar.bearer_token_env_var=\"\(envVarName)\""
+                ])
+                env[envVarName] = calToken
+            } catch {
+                NSLog("[CodexCLI] Calendar MCP skipped — token unavailable: %@", error.localizedDescription)
             }
         }
         for project in SupabaseProjectsService.shared.allProjects() {
