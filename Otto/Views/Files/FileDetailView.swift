@@ -201,6 +201,10 @@ struct FileDetailView: View {
             return "doc.richtext.fill"
         case .text:
             return "doc.text"
+        case .video:
+            return "film"
+        case .audio:
+            return "waveform"
         }
     }
 
@@ -211,6 +215,8 @@ struct FileDetailView: View {
         case .image: return .blue
         case .pdf: return .red
         case .text: return .secondary
+        case .video: return .purple
+        case .audio: return .orange
         }
     }
 
@@ -233,6 +239,8 @@ struct FileDetailView: View {
                     excelPreview
                 case .text:
                     csvPreview  // Plain text uses the same scrollable text viewer.
+                case .video, .audio:
+                    mediaUnsupportedPreview
                 }
             }
             .frame(maxWidth: .infinity)
@@ -337,6 +345,42 @@ struct FileDetailView: View {
                 .padding(.vertical, Theme.Spacing.sm)
                 .background(Color(red: 0.13, green: 0.55, blue: 0.13))
                 .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Preview for video/audio (typically genmedia outputs). We don't ship an
+    /// in-app player; defer to Quick Look which handles both natively.
+    private var mediaUnsupportedPreview: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            Image(systemName: file.fileType == .video ? "film" : "waveform")
+                .font(.system(size: 40, weight: .thin))
+                .foregroundStyle(file.fileType == .video ? Color.purple : Color.orange)
+
+            VStack(spacing: Theme.Spacing.sm) {
+                Text(file.fileType.displayName)
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(Theme.Colors.text)
+
+                Text(".\(file.fileExtension.uppercased()) • \(file.formattedSize)")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+            }
+
+            Button {
+                showingQuickLook = true
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "eye")
+                    Text("Open with Quick Look")
+                }
+                .font(Theme.Typography.body)
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.vertical, Theme.Spacing.sm)
+                .background(Theme.Colors.cyan.opacity(0.12))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
             .buttonStyle(.plain)

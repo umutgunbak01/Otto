@@ -7,6 +7,12 @@ enum FileType: String, Codable, CaseIterable {
     case image = "image"
     case pdf = "pdf"
     case text = "text"
+    /// Generative-media outputs (genmedia) and any imported video. No text
+    /// extraction; binary lives in OttoFiles/ and is referenced by path.
+    case video = "video"
+    /// Generative-media outputs (genmedia) and any imported audio. No text
+    /// extraction; binary lives in OttoFiles/ and is referenced by path.
+    case audio = "audio"
 
     var displayName: String {
         switch self {
@@ -15,6 +21,8 @@ enum FileType: String, Codable, CaseIterable {
         case .image: return "Image"
         case .pdf: return "PDF"
         case .text: return "Text"
+        case .video: return "Video"
+        case .audio: return "Audio"
         }
     }
 
@@ -25,6 +33,8 @@ enum FileType: String, Codable, CaseIterable {
         case .image: return "photo"
         case .pdf: return "doc.richtext"
         case .text: return "doc.text"
+        case .video: return "film"
+        case .audio: return "waveform"
         }
     }
 
@@ -32,9 +42,11 @@ enum FileType: String, Codable, CaseIterable {
         switch self {
         case .csv: return ["csv"]
         case .excel: return ["xlsx", "xls"]
-        case .image: return ["png", "jpg", "jpeg", "heic", "gif", "bmp", "tiff"]
+        case .image: return ["png", "jpg", "jpeg", "heic", "gif", "bmp", "tiff", "webp"]
         case .pdf: return ["pdf"]
         case .text: return ["txt", "md", "markdown", "json", "yaml", "yml", "log", "html", "xml", "rtf"]
+        case .video: return ["mp4", "mov", "webm", "m4v"]
+        case .audio: return ["mp3", "wav", "m4a", "aac", "flac", "ogg"]
         }
     }
 

@@ -134,6 +134,10 @@ actor FileStorageService {
             return await extractTextFromImage(url: url)
         case .text:
             return extractTextFromUTF8(url: url)
+        case .video, .audio:
+            // Genmedia outputs and other media — no text extraction; the
+            // binary is staged in OttoFiles/ and surfaced by path.
+            return nil
         }
     }
 
@@ -252,14 +256,21 @@ actor FileStorageService {
             .json,
             .html,
             .xml,
-            .rtf
+            .rtf,
+            .mpeg4Movie,            // mp4
+            .quickTimeMovie,        // mov
+            .audio,                 // wav/aac/aiff family
+            .mp3
         ]
         // Extensions without first-class UTTypes — fall back by extension.
         let byExtension: [String] = [
             "xlsx", "xls",          // Excel
             "md", "markdown",
             "yaml", "yml",
-            "log"
+            "log",
+            "webm", "m4v",          // video
+            "m4a", "flac", "ogg",   // audio
+            "webp"                  // modern image format
         ]
         for ext in byExtension {
             if let t = UTType(filenameExtension: ext) { types.append(t) }

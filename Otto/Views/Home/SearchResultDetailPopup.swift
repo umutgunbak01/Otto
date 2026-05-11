@@ -588,6 +588,8 @@ struct SearchResultDetailPopup: View {
         case .image: return .blue
         case .pdf: return .red
         case .text: return .secondary
+        case .video: return .purple
+        case .audio: return .orange
         }
     }
 

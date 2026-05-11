@@ -150,6 +150,8 @@ struct FilePreviewPopup: View {
             }
         case .pdf: return "doc.richtext.fill"
         case .text: return "doc.text"
+        case .video: return "film"
+        case .audio: return "waveform"
         }
     }
 
@@ -160,6 +162,8 @@ struct FilePreviewPopup: View {
         case .image: return Theme.Colors.cyan
         case .pdf: return Theme.Colors.red
         case .text: return Theme.Colors.secondaryText
+        case .video: return .purple
+        case .audio: return .orange
         }
     }
 
@@ -178,6 +182,20 @@ struct FilePreviewPopup: View {
                 excelPreview
             case .text:
                 csvPreview  // Plain text renders fine through the CSV viewer (it's just a text scroll view)
+            case .video, .audio:
+                // No in-app player — point users at Quick Look. Hover popup
+                // stays compact; the full FileDetailView has a dedicated
+                // mediaUnsupportedPreview with a button.
+                VStack(spacing: Theme.Spacing.md) {
+                    Image(systemName: file.fileType == .video ? "film" : "waveform")
+                        .font(.system(size: 32, weight: .thin))
+                        .foregroundStyle(file.fileType == .video ? Color.purple : Color.orange)
+                    Text("Use Quick Look or open the file from the Files tab.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }

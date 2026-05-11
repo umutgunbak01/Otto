@@ -46,6 +46,10 @@ final class OttoToolExecutor {
         case .complete_habit:   result = await completeHabitTool(input)
         case .list_habits:      result = listHabitsTool(input)
         case .read_file:        result = await readFile(input)
+        case .genmedia_search_models:     result = await genmediaSearchModels(input)
+        case .genmedia_get_model_schema:  result = await genmediaGetModelSchema(input)
+        case .genmedia_run:               result = await genmediaRun(input)
+        case .genmedia_upload_file:       result = await genmediaUploadFile(input)
         }
         // Audible confirmation of successful write-type actions — skip reads
         // (search/get/attach) and URL opens so we don't chime on every search.
@@ -60,7 +64,10 @@ final class OttoToolExecutor {
         .update_todo, .update_note, .update_idea,
         .complete_todo, .uncomplete_todo, .complete_reminder,
         .delete_item,
-        .create_habit, .log_habit_entry, .complete_habit
+        .create_habit, .log_habit_entry, .complete_habit,
+        // A successful genmedia_run lands a real artifact in the Files tab,
+        // so it earns the same "thing happened" chime as the create_* tools.
+        .genmedia_run
     ]
 
     // MARK: - Open URL
@@ -778,6 +785,10 @@ final class OttoToolExecutor {
             hint = "PDF text shown above. For layout-sensitive content, call the built-in `Read` tool with the absolute path."
         case .csv, .text:
             hint = "Full text above. Use the built-in `Grep` tool on the path for large files."
+        case .video:
+            hint = "Video file (no text extraction). Reference by path or hand the user a click-through preview via `attach_item_preview` with type=`file`."
+        case .audio:
+            hint = "Audio file (no text extraction). Reference by path or hand the user a click-through preview via `attach_item_preview` with type=`file`."
         }
 
         let payload: [String: Any] = [
@@ -797,6 +808,163 @@ final class OttoToolExecutor {
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
         let text = String(data: data, encoding: .utf8) ?? "{}"
         return ok(text, summary: "Read file: \(file.name)")
+    }
+
+    // MARK: - GenMedia (fal.ai)
+
+    /// `genmedia models <query> --json` → JSON list of matching fal models.
+    /// The agent uses this to discover the right model before inspecting its
+    /// schema and calling `genmedia_run`.
+    private func genmediaSearchModels(_ input: [String: Any]) async -> ToolResult {
+        let query = string(input, "query") ?? ""
+        let category = string(input, "category")
+        let limit = max(1, min((input["limit"] as? Int) ?? 10, 50))
+        do {
+            let data = try await GenMediaService.shared.searchModels(
+                query: query,
+                category: category,
+                limit: limit
+            )
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return ok(text, summary: "Searched fal models for '\(query.isEmpty ? "*" : query)'")
+        } catch let e as GenMediaService.GenMediaError {
+            return err(e.errorDescription ?? "genmedia failed", summary: "Model search failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Model search failed")
+        }
+    }
+
+    /// `genmedia schema <model> --json` → JSON schema for the model's inputs.
+    /// Should be called before `genmedia_run` so the agent knows the field
+    /// shape it has to fill.
+    private func genmediaGetModelSchema(_ input: [String: Any]) async -> ToolResult {
+        guard let modelId = string(input, "model_id")?.trimmingCharacters(in: .whitespaces),
+              !modelId.isEmpty else {
+            return err("Missing 'model_id'.", summary: "Schema fetch failed")
+        }
+        do {
+            let data = try await GenMediaService.shared.modelSchema(modelId: modelId)
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return ok(text, summary: "Schema for \(modelId)")
+        } catch let e as GenMediaService.GenMediaError {
+            return err(e.errorDescription ?? "genmedia failed", summary: "Schema fetch failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Schema fetch failed")
+        }
+    }
+
+    /// `genmedia run <model> …` → spawns the CLI, lets the model generate,
+    /// then imports every produced file into Otto's Files tab and returns
+    /// the new file ids so the agent can attach previews. Each File's notes
+    /// get the prompt + request id, and its tags include "genmedia" plus a
+    /// slug of the model id so they're filterable in the Files UI later.
+    private func genmediaRun(_ input: [String: Any]) async -> ToolResult {
+        guard let modelId = string(input, "model_id")?.trimmingCharacters(in: .whitespaces),
+              !modelId.isEmpty else {
+            return err("Missing 'model_id'.", summary: "Generation failed")
+        }
+        guard let inputs = input["inputs"] as? [String: Any] else {
+            return err("Missing 'inputs' object.", summary: "Generation failed")
+        }
+        let promptSummary = string(input, "prompt_summary") ?? (inputs["prompt"] as? String ?? "")
+
+        // Per-call scratch dir; genmedia downloads land here, we then move
+        // each resulting file into Otto's Files via FileStorageService.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("otto-genmedia-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let runResult: GenMediaService.RunResult
+        do {
+            runResult = try await GenMediaService.shared.runModel(
+                modelId: modelId,
+                inputs: inputs,
+                downloadDir: scratch
+            )
+        } catch let e as GenMediaService.GenMediaError {
+            return err(e.errorDescription ?? "genmedia failed", summary: "Generation failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Generation failed")
+        }
+
+        guard !runResult.downloadedFiles.isEmpty else {
+            // The model returned without writing files — surface the raw JSON
+            // so the agent can decide what to tell the user (it might include
+            // text-only output, or an error code we don't recognise).
+            let raw = String(data: runResult.rawOutput, encoding: .utf8) ?? "{}"
+            return ok(raw, summary: "Model returned no media")
+        }
+
+        // Import each output into Otto's Files, then patch in genmedia
+        // metadata as notes/tags. Failures on individual files are
+        // collected and reported but don't abort the batch.
+        let modelSlug = modelId.replacingOccurrences(of: "/", with: "-")
+        var imported: [[String: Any]] = []
+        var failures: [String] = []
+        for url in runResult.downloadedFiles {
+            do {
+                var file = try await appState.importFile(from: url)
+                let parts: [String] = [
+                    promptSummary.isEmpty ? "" : "Prompt: \(promptSummary)",
+                    "Model: \(modelId)",
+                    runResult.requestId.map { "Request: \($0)" } ?? ""
+                ].filter { !$0.isEmpty }
+                file.notes = parts.joined(separator: "\n")
+                file.tags = ["genmedia", modelSlug]
+                await appState.updateFile(file)
+                imported.append([
+                    "file_id": file.id.uuidString,
+                    "file_type": file.fileType.rawValue,
+                    "extension": file.fileExtension,
+                    "name": file.name
+                ])
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        let payload: [String: Any] = [
+            "model_id": modelId,
+            "request_id": runResult.requestId ?? "",
+            "files": imported,
+            "import_failures": failures
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
+        let text = String(data: data, encoding: .utf8) ?? "{}"
+        let countLabel = imported.count == 1 ? "1 file" : "\(imported.count) files"
+        return ok(text, summary: "Generated \(countLabel) with \(modelId)")
+    }
+
+    /// `genmedia upload <path> --json` → CDN URL for an existing Otto File.
+    /// Used for image-to-image / video-to-video flows where the agent
+    /// wants to feed a user-imported file into another model.
+    private func genmediaUploadFile(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "file_id")) else {
+            return err("Missing or invalid 'file_id'.", summary: "Upload failed")
+        }
+        guard let file = appState.files.first(where: { $0.id == id }) else {
+            return err("No file with id \(id.uuidString). Use `search_items` with type=file first.",
+                       summary: "Upload failed")
+        }
+        let url = await FileStorageService.shared.getFileURL(for: file)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return err("File binary missing on disk for \(file.name).", summary: "Upload failed")
+        }
+        do {
+            let cdnURL = try await GenMediaService.shared.uploadFile(at: url)
+            let payload: [String: Any] = [
+                "file_id": file.id.uuidString,
+                "name": file.name,
+                "url": cdnURL
+            ]
+            let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
+            let text = String(data: data, encoding: .utf8) ?? "{}"
+            return ok(text, summary: "Uploaded \(file.name) to fal CDN")
+        } catch let e as GenMediaService.GenMediaError {
+            return err(e.errorDescription ?? "genmedia failed", summary: "Upload failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Upload failed")
+        }
     }
 
     // MARK: - Habits

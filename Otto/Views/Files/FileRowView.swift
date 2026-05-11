@@ -131,6 +131,10 @@ struct FileRowView: View {
             return "doc.richtext.fill"
         case .text:
             return "doc.text"
+        case .video:
+            return "film"
+        case .audio:
+            return "waveform"
         }
     }
 
@@ -141,6 +145,8 @@ struct FileRowView: View {
         case .image: return Theme.Colors.cyan
         case .pdf: return Theme.Colors.red
         case .text: return Theme.Colors.secondaryText
+        case .video: return .purple
+        case .audio: return .orange
         }
     }
 
