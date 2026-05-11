@@ -13,14 +13,11 @@ enum WakeWordSettings {
     static let defaultEnabled: Bool = true
 }
 
-enum HUDSettings {
-    static let enabledKey = "hud_enabled"
-    /// Default OFF — the menu-bar status item replaces this for most
-    /// users. The HUD's Window scene reads this flag via
-    /// `.defaultLaunchBehavior` to decide whether to auto-present
-    /// at launch.
-    static let defaultEnabled: Bool = false
-}
+// The legacy floating-HUD widget was retired in favour of the menu-bar
+// status item below. HUDView.swift is kept around in case anyone wants
+// to bring it back behind a Settings toggle later, but there's no
+// active flag controlling it today and no Window scene wired for it
+// in `OttoApp` — macOS has nothing to restore.
 
 enum MenuBarSettings {
     static let enabledKey = "menubar_enabled"

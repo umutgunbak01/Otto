@@ -9,11 +9,9 @@ struct OttoApp: App {
     @State private var appState = AppState()
 
     /// User preferences. Wake-word listening defaults ON (legacy
-    /// behaviour); the floating HUD defaults OFF in favour of the new
-    /// menu-bar status item (also default ON). Each is independently
-    /// toggleable in Settings.
+    /// behaviour); the menu-bar status item also defaults ON and
+    /// replaces the floating HUD that used to live here.
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
-    @AppStorage(HUDSettings.enabledKey) private var hudEnabled: Bool = HUDSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
 
     var body: some Scene {
@@ -49,23 +47,13 @@ struct OttoApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 900, height: 700)
-
-        #if os(macOS)
-        // Floating HUD — opt-in. Was the original always-on-top widget;
-        // most users prefer the menu-bar item, so the Window scene now
-        // suppresses its auto-launch and only opens when the user has
-        // explicitly enabled the HUD in Settings.
-        Window("Otto HUD", id: "hud") {
-            HUDView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultSize(width: 220, height: 92)
-        .defaultPosition(.topTrailing)
-        .defaultLaunchBehavior(hudEnabled ? .presented : .suppressed)
-        #endif
+        // No HUD Window scene anymore — the menu-bar status item
+        // (MenuBarController) covers the same surface (time + next
+        // event) without floating on top of every other window.
+        // The HUDView.swift file is retained for now in case we want
+        // to bring the widget back behind a Settings toggle later,
+        // but it's not wired into a Scene so macOS has nothing to
+        // restore from prior sessions.
     }
 
     #if os(macOS)

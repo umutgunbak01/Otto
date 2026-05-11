@@ -23,10 +23,8 @@ struct SettingsView: View {
 
     /// Interface toggles — read here for binding, owned by OttoApp which
     /// observes the same keys via `@AppStorage` to actually start/stop
-    /// the wake-word listener, install/remove the menu-bar item, and
-    /// decide whether the HUD window auto-presents on launch.
+    /// the wake-word listener and install/remove the menu-bar item.
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
-    @AppStorage(HUDSettings.enabledKey) private var hudEnabled: Bool = HUDSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
 
     private var selectedBackend: AgentBackend {
@@ -193,7 +191,7 @@ struct SettingsView: View {
 
                 OttoDivider()
 
-                // Interface (HUD + menu bar)
+                // Interface (menu bar)
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "macwindow")
@@ -208,17 +206,6 @@ struct SettingsView: View {
                             Text("Show in menu bar")
                                 .font(Theme.Typography.body)
                             Text("Compact status item alongside the macOS clock — current time + countdown to your next calendar event. Click to bring Otto forward.")
-                                .font(Theme.Typography.small)
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                    }
-                    .toggleStyle(.switch)
-
-                    Toggle(isOn: $hudEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show floating HUD widget")
-                                .font(Theme.Typography.body)
-                            Text("The legacy always-on-top widget. Off by default — most users prefer the menu-bar item above. Toggling on takes effect on next launch.")
                                 .font(Theme.Typography.small)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                         }
