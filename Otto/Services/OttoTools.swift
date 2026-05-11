@@ -170,16 +170,16 @@ enum OttoTools {
         // MARK: Search / fetch
         [
             "name": Name.search_items.rawValue,
-            "description": "Search and/or list items with optional text match, date range, and sort order. Returns id, type, title, a short snippet, and the 'date' each result was ranked by. Use get_item for full content, or `read_file` for the full text of `file` items. You can call this with NO query to simply list items by date — e.g. 'most recent emails', 'reminders due next', 'notes from last week', 'files I imported'.",
+            "description": "Search and/or list items with optional text match, date range, and sort order. Returns id, type, title, a short snippet, and the 'date' each result was ranked by. Use get_item for full content, or `read_file` for the full text of `file` items. You can call this with NO query to simply list items by date — e.g. 'most recent emails', 'reminders due next', 'notes from last week', 'files I imported', 'X posts about the launch', 'DMs from Sam'.",
             "input_schema": objectSchema(
                 properties: [
-                    "query": stringProp("Optional free-text query (case-insensitive substring match on title/content; also matches file names, tags, and OCR'd / extracted text). Omit to list everything matching the other filters."),
+                    "query": stringProp("Optional free-text query (case-insensitive substring match on title/content; also matches file names, tags, OCR'd / extracted text, X post text, follower bio/handle, DM body). Omit to list everything matching the other filters."),
                     "types": [
                         "type": "array",
-                        "description": "Limit to these types. Default: all of (todo, note, idea, reminder, bookmark, meeting, email, connection, file). `file` covers user-imported PDFs / CSVs / images / text files.",
+                        "description": "Limit to these types. Default: all of (todo, note, idea, reminder, bookmark, meeting, email, connection, file, x_post, x_follower, x_dm). `file` covers user-imported PDFs / CSVs / images / text files. `x_post`/`x_follower`/`x_dm` cover synced X (Twitter) data.",
                         "items": [
                             "type": "string",
-                            "enum": ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file"]
+                            "enum": ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"]
                         ]
                     ],
                     "sort": enumProp(
@@ -209,7 +209,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file"],
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"],
                         "Which collection the item lives in."
                     )
                 ],
@@ -223,7 +223,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item (from search_items or get_item)."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file"],
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"],
                         "Which collection the item lives in."
                     )
                 ],

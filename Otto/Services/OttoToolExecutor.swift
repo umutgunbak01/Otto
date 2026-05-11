@@ -109,6 +109,9 @@ final class OttoToolExecutor {
             case "email":      return appState.emails.first(where: { $0.id == id })?.subject
             case "connection": return appState.connections.first(where: { $0.id == id })?.fullName
             case "habit":      return appState.habits.first(where: { $0.id == id })?.title
+            case "x_post":     return appState.xPosts.first(where: { $0.id == id }).map { "@\($0.authorUsername): \(String($0.text.prefix(60)))" }
+            case "x_follower": return appState.xFollowers.first(where: { $0.id == id }).map { "\($0.displayName) (@\($0.username))" }
+            case "x_dm":       return appState.xDirectMessages.first(where: { $0.id == id }).map { "DM from @\($0.senderUsername)" }
             default:           return nil
             }
         }()
@@ -376,7 +379,7 @@ final class OttoToolExecutor {
         }()
         let types: Set<String> = {
             if let arr = input["types"] as? [String], !arr.isEmpty { return Set(arr.map { $0.lowercased() }) }
-            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "file"]
+            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "file", "x_post", "x_follower", "x_dm"]
         }()
         let limit = max(1, min((input["limit"] as? Int) ?? 20, 100))
         let sortKey = (string(input, "sort") ?? "recent").lowercased()
@@ -479,6 +482,33 @@ final class OttoToolExecutor {
                 matches.append(.init(id: f.id, type: "file", title: f.name,
                                      snippet: snippet,
                                      date: f.updatedAt, dueDate: nil))
+            }
+        }
+        if types.contains("x_post") {
+            for p in appState.xPosts where textMatches([p.text, p.authorDisplayName, p.authorUsername]) {
+                let title = "@\(p.authorUsername): \(String(p.text.prefix(60)))"
+                matches.append(.init(id: p.id, type: "x_post", title: title,
+                                     snippet: String(p.text.prefix(140)),
+                                     date: p.createdAt, dueDate: nil))
+            }
+        }
+        if types.contains("x_follower") {
+            for fol in appState.xFollowers where textMatches([fol.displayName, fol.username, fol.bio]) {
+                let title = "\(fol.displayName) (@\(fol.username))"
+                let snippet = fol.bio.isEmpty
+                    ? "\(fol.followersCount) followers\(fol.isMutual ? " · mutual" : "")"
+                    : String(fol.bio.prefix(140))
+                matches.append(.init(id: fol.id, type: "x_follower", title: title,
+                                     snippet: snippet,
+                                     date: fol.syncUpdatedAt, dueDate: nil))
+            }
+        }
+        if types.contains("x_dm") {
+            for dm in appState.xDirectMessages where textMatches([dm.text, dm.senderDisplayName, dm.senderUsername]) {
+                let title = "DM from @\(dm.senderUsername): \(String(dm.text.prefix(50)))"
+                matches.append(.init(id: dm.id, type: "x_dm", title: title,
+                                     snippet: String(dm.text.prefix(140)),
+                                     date: dm.createdAt, dueDate: nil))
             }
         }
 
@@ -648,6 +678,53 @@ final class OttoToolExecutor {
                     "has_extracted_text": f.extractedText != nil,
                     "text_preview": f.extractedText.map { String($0.prefix(1000)) } ?? "",
                     "hint": "Use `read_file` with this id to fetch the full text content or the staged local path."
+                ]
+            }
+        case "x_post":
+            if let p = appState.xPosts.first(where: { $0.id == id }) {
+                payload = [
+                    "id": p.id.uuidString, "type": "x_post",
+                    "x_post_id": p.xPostId,
+                    "text": p.text,
+                    "author_username": p.authorUsername,
+                    "author_display_name": p.authorDisplayName,
+                    "created_at": df.string(from: p.createdAt),
+                    "like_count": p.likeCount,
+                    "retweet_count": p.retweetCount,
+                    "reply_count": p.replyCount,
+                    "is_retweet": p.isRetweet,
+                    "is_reply": p.isReply,
+                    "media_urls": p.mediaUrls,
+                    "url": "https://x.com/\(p.authorUsername)/status/\(p.xPostId)"
+                ]
+            }
+        case "x_follower":
+            if let fol = appState.xFollowers.first(where: { $0.id == id }) {
+                payload = [
+                    "id": fol.id.uuidString, "type": "x_follower",
+                    "username": fol.username,
+                    "display_name": fol.displayName,
+                    "bio": fol.bio,
+                    "followers_count": fol.followersCount,
+                    "following_count": fol.followingCount,
+                    "is_mutual": fol.isMutual,
+                    "profile_image_url": fol.profileImageUrl ?? "",
+                    "linked_connection_id": fol.linkedConnectionId?.uuidString ?? "",
+                    "url": "https://x.com/\(fol.username)"
+                ]
+            }
+        case "x_dm":
+            if let dm = appState.xDirectMessages.first(where: { $0.id == id }) {
+                payload = [
+                    "id": dm.id.uuidString, "type": "x_dm",
+                    "x_message_id": dm.xMessageId,
+                    "text": dm.text,
+                    "sender_username": dm.senderUsername,
+                    "sender_display_name": dm.senderDisplayName,
+                    "sender_id": dm.senderId,
+                    "recipient_id": dm.recipientId,
+                    "conversation_id": dm.conversationId,
+                    "created_at": df.string(from: dm.createdAt)
                 ]
             }
         default:
