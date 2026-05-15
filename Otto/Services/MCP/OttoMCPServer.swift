@@ -34,14 +34,32 @@ final class OttoMCPServer: @unchecked Sendable {
         self.appState = appState
     }
 
-    /// Idempotent start. Binds a fresh Unix socket under /tmp and begins accepting.
+    /// Idempotent start. Binds the Otto MCP Unix socket at a stable path
+    /// (`~/.otto/mcp.sock`) and begins accepting.
+    ///
+    /// Why a stable path (vs. the previous `/tmp/otto-mcp-<pid>-<short>.sock`)?
+    /// Claude Code and Codex consume the path at runtime via `--mcp-config`,
+    /// so they don't care if it changes per launch. Hermes is different — it
+    /// reads `~/.hermes/config.yaml` once at startup, so the path referenced
+    /// in there must survive Otto restarts. Stable path it is.
+    ///
     /// Returns the socket path on success, nil on failure.
     @discardableResult
     func ensureStarted() -> String? {
         if running, let path = socketPath { return path }
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let short = UUID().uuidString.prefix(8)
-        let path = "/tmp/otto-mcp-\(pid)-\(short).sock"
+        let home = NSHomeDirectory()
+        let dir = "\(home)/.otto"
+        do {
+            try FileManager.default.createDirectory(
+                atPath: dir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            NSLog("[MCP] failed to create ~/.otto: \(error.localizedDescription)")
+            return nil
+        }
+        let path = "\(dir)/mcp.sock"
         guard startListener(at: path) else { return nil }
         socketPath = path
         running = true

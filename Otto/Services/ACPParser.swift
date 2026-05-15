@@ -237,7 +237,7 @@ enum ACPParser {
 
     /// Create a new ACP session. The `mcpServers` array is empty here because
     /// the user's `~/.hermes/config.yaml` already configures the `otto` MCP
-    /// server entry (tunneled back over `ssh -R`).
+    /// server entry pointing at Otto's local Unix socket.
     static func newSessionRequest(id: JSONRPCID, cwd: String) -> [String: Any] {
         return [
             "jsonrpc": "2.0",
@@ -250,39 +250,20 @@ enum ACPParser {
         ]
     }
 
-    /// Send a user turn. `prompt` is an array of content blocks. The text-only
-    /// convenience version covers the common case; the array overload supports
-    /// multimodal prompts (text + image) for the screen-vision flow.
+    /// Send a user turn. `prompt` is an array of content blocks; v1 only
+    /// sends text content. Screen-vision goes via the `read_file` MCP tool
+    /// (Hermes reads a path Otto has staged), not via inlined image blocks.
     static func promptRequest(id: JSONRPCID, sessionId: String, text: String) -> [String: Any] {
-        return promptRequest(
-            id: id,
-            sessionId: sessionId,
-            content: [["type": "text", "text": text]]
-        )
-    }
-
-    static func promptRequest(id: JSONRPCID, sessionId: String, content: [[String: Any]]) -> [String: Any] {
         return [
             "jsonrpc": "2.0",
             "id": id.asAny,
             "method": "session/prompt",
             "params": [
                 "sessionId": sessionId,
-                "prompt": content
+                "prompt": [
+                    ["type": "text", "text": text] as [String: Any]
+                ]
             ] as [String: Any]
-        ]
-    }
-
-    /// Build an `image` content block in ACP's canonical shape — base64 PNG
-    /// data + MIME type. Hermes advertises `promptCapabilities.image: true`
-    /// in its initialize response, so the agent's underlying model receives
-    /// this as a real vision block. PNG is the only format Otto generates
-    /// (screen capture via CGDisplay → NSBitmapImageRep .png).
-    static func imageContentBlock(pngData: Data) -> [String: Any] {
-        return [
-            "type": "image",
-            "data": pngData.base64EncodedString(),
-            "mimeType": "image/png"
         ]
     }
 

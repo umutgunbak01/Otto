@@ -1,35 +1,31 @@
 import Foundation
 
-/// Hermes backend — drives a long-lived `hermes acp` process running on the
-/// user's Hetzner box. Unlike `ClaudeCLIService` / `CodexCLIService`, which
-/// are stateless and spawn a fresh CLI per turn, this actor owns one SSH +
+/// Hermes backend — drives a long-lived `hermes acp` process running locally
+/// on the same Mac as Otto. Unlike `ClaudeCLIService` / `CodexCLIService`,
+/// which are stateless and spawn a fresh CLI per turn, this actor owns one
 /// ACP session for the lifetime of the Otto run. The agent keeps its
-/// conversation state in-memory remotely, so every turn after the first is
-/// just a `session/prompt` write into the existing stdin.
+/// conversation state in-memory, so every turn after the first is just a
+/// `session/prompt` write into the existing stdin.
 ///
 /// Transport stack:
-///   Otto (Mac) ── /usr/bin/ssh ──► Hetzner box ── hermes acp (stdio)
-///                       │
-///                       └── -R 50051:unix:<otto-mcp.sock>
-///                            reverse-forwards Otto's local MCP socket so
-///                            Hermes can call Otto's tools (the user's
-///                            ~/.hermes/config.yaml references
-///                            localhost:50051 as the `otto` MCP server).
+///   Otto.app ── Process ──► `hermes acp` (local subprocess, stdio JSON-RPC)
+///                                  │
+///                                  │  MCP client (per ~/.hermes/config.yaml)
+///                                  ▼
+///                            nc -U ~/.otto/mcp.sock  ── OttoMCPServer
 ///
-/// Tool execution still runs on the Mac via `OttoToolExecutor` over the MCP
-/// bridge — OAuth tokens, Supabase PATs, etc. never leave the laptop. Hermes
-/// only sees synthesized JSON-RPC tool replies.
+/// Hermes and Otto are sibling processes; the MCP client opens Otto's local
+/// Unix socket directly. No SSH, no network, no reverse tunneling.
+///
+/// Tool execution runs on the Mac via `OttoToolExecutor` over the MCP bridge.
+/// Hermes only sees synthesized JSON-RPC tool replies — the actual execution
+/// (Drive token, Supabase PATs, file I/O) all happens in-process here.
 ///
 /// Approval surface: ACP's `session/request_permission` is plumbed through
 /// to the UI as `ChatEvent.approvalRequest`. `ToolApprovalPolicy` auto-resolves
 /// requests for tools the user has marked alwaysAllow / alwaysDeny.
 actor HermesAgentService {
     static let shared = HermesAgentService()
-
-    /// The TCP port that gets reverse-tunneled to Otto's local MCP Unix
-    /// socket. Must match what the user's `~/.hermes/config.yaml` points at.
-    /// Hardcoded for v1; we can surface as a setting if conflicts arise.
-    static let mcpTunnelPort: Int = 50051
 
     enum ConnectionState {
         case idle
@@ -39,9 +35,9 @@ actor HermesAgentService {
     }
 
     enum HermesError: LocalizedError {
-        case noConnectionConfigured
-        case sshLaunchFailed(String)
-        case sshExited(Int32, String)
+        case binaryNotFound
+        case launchFailed(String)
+        case processExited(Int32, String)
         case initializeFailed(String)
         case sessionCreateFailed(String)
         case promptFailed(String)
@@ -50,15 +46,15 @@ actor HermesAgentService {
 
         var errorDescription: String? {
             switch self {
-            case .noConnectionConfigured:
-                return "No Hetzner connection configured. Add one in Settings → Agent → Hermes."
-            case .sshLaunchFailed(let m): return "Failed to launch ssh: \(m)"
-            case .sshExited(let code, let stderr):
-                return "ssh exited \(code): \(stderr)"
+            case .binaryNotFound:
+                return "Hermes not installed. Open Settings → Agent → Hermes for install instructions."
+            case .launchFailed(let m): return "Failed to launch hermes: \(m)"
+            case .processExited(let code, let stderr):
+                return "hermes acp exited \(code): \(stderr)"
             case .initializeFailed(let m): return "Hermes ACP initialize failed: \(m)"
             case .sessionCreateFailed(let m): return "Hermes session/new failed: \(m)"
             case .promptFailed(let m): return "Hermes session/prompt failed: \(m)"
-            case .disconnected: return "Hermes connection dropped."
+            case .disconnected: return "Hermes process exited."
             case .protocolMismatch(let v): return "Hermes returned unsupported ACP protocolVersion=\(v)."
             }
         }
@@ -67,10 +63,11 @@ actor HermesAgentService {
     // MARK: - State
 
     private var state: ConnectionState = .idle
-    private var sshProcess: Process?
+    private var hermesProcess: Process?
     private var stdinHandle: FileHandle?
     private var stderrBuffer: Data = Data()
     private var stdoutReaderTask: Task<Void, Never>?
+    private var sessionTmpDir: URL?
 
     /// Monotonic JSON-RPC request id. We use ints (encoded into JSONRPCID.int).
     private var nextRequestId: Int = 1
@@ -132,11 +129,39 @@ actor HermesAgentService {
                 return text.isEmpty ? nil : text
             } ?? ""
 
-        let combined: String
+        var combined: String
         if turns.filter({ $0.role == "user" }).count == 1 && !systemPrompt.isEmpty {
             combined = "[system]\n\(systemPrompt)\n\n\(lastUserText)"
         } else {
             combined = lastUserText
+        }
+
+        // Screen-vision handoff: IntentRouter stashes a PNG path on AppState.
+        // Copy it into the current session's tmp dir as `screenshot.png` and
+        // append a hint to the prompt so the agent knows to look there via
+        // Otto's `read_file` MCP tool. Same posture as ClaudeCLIService.
+        if let appState = OttoMCPServer.shared.appState,
+           let tmpDir = sessionTmpDir {
+            let pendingPath: String? = await MainActor.run {
+                let path = appState.pendingScreenshotPath
+                appState.pendingScreenshotPath = nil
+                return path
+            }
+            if let pendingPath = pendingPath {
+                let src = URL(fileURLWithPath: pendingPath)
+                let dst = tmpDir.appendingPathComponent("screenshot.png")
+                do {
+                    if FileManager.default.fileExists(atPath: dst.path) {
+                        try FileManager.default.removeItem(at: dst)
+                    }
+                    try FileManager.default.copyItem(at: src, to: dst)
+                    try? FileManager.default.removeItem(at: src)
+                    NSLog("[Hermes] screenshot staged at %@", dst.path)
+                    combined += "\n\n[A screenshot of my screen is at \(dst.path). Read it if you need to see what I'm looking at.]"
+                } catch {
+                    NSLog("[Hermes] failed to stage screenshot: %@", error.localizedDescription)
+                }
+            }
         }
 
         // Install per-turn sinks and reset the assistant accumulator.
@@ -151,32 +176,6 @@ actor HermesAgentService {
             currentAssistantText = ""
         }
 
-        // Screen-vision handoff: if IntentRouter stashed a PNG path on
-        // AppState, base64-inline it as an `image` content block in the
-        // prompt. ACP supports multimodal prompts natively, and Hermes's
-        // initialize response advertises `promptCapabilities.image: true`.
-        // Clear the path after use so the next turn doesn't replay a stale
-        // screenshot. On read failure, fall through to a text-only prompt.
-        var contentBlocks: [[String: Any]] = [["type": "text", "text": combined]]
-        if let state = OttoMCPServer.shared.appState {
-            let pendingPath: String? = await MainActor.run {
-                let path = state.pendingScreenshotPath
-                state.pendingScreenshotPath = nil
-                return path
-            }
-            if let pendingPath = pendingPath {
-                let url = URL(fileURLWithPath: pendingPath)
-                if let data = try? Data(contentsOf: url) {
-                    contentBlocks.append(ACPParser.imageContentBlock(pngData: data))
-                    NSLog("[Hermes] screenshot inlined as image content block (%d bytes)", data.count)
-                } else {
-                    NSLog("[Hermes] screenshot read failed at %@ — proceeding text-only", pendingPath)
-                }
-                // Best-effort cleanup of the captured source file.
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
-
         // Send session/prompt and await the stopReason response. Tool calls,
         // approval round-trips, and streaming chunks all flow asynchronously
         // through the reader task while we wait here.
@@ -184,7 +183,7 @@ actor HermesAgentService {
         let request = ACPParser.promptRequest(
             id: .int(promptId),
             sessionId: sessionId,
-            content: contentBlocks
+            text: combined
         )
         do {
             _ = try await sendAndAwait(id: promptId, request: request)
@@ -205,8 +204,9 @@ actor HermesAgentService {
         return updated
     }
 
-    /// Idempotent: spins up ssh + ACP handshake if we aren't already live.
-    /// Throws if there's no saved connection or the handshake fails.
+    /// Idempotent: spawns `hermes acp` and runs the ACP handshake if we
+    /// aren't already live. Throws if Hermes isn't installed or the
+    /// handshake fails.
     func ensureConnected() async throws {
         if case .live = state { return }
         if case .connecting = state {
@@ -218,18 +218,17 @@ actor HermesAgentService {
             if case .live = state { return }
         }
 
-        guard let conn = HermesConnectionService.shared.current() else {
-            throw HermesError.noConnectionConfigured
+        guard let binPath = HermesInstallation.binaryPath() else {
+            throw HermesError.binaryNotFound
         }
-        guard let socketPath = OttoMCPServer.shared.ensureStarted() else {
-            throw HermesError.sshLaunchFailed("Otto MCP server failed to start — cannot reverse-tunnel.")
-        }
+        // The MCP server should already be running (Claude/Codex paths bring
+        // it up too), but make sure — Hermes will try to connect to it.
+        _ = OttoMCPServer.shared.ensureStarted()
 
         state = .connecting
 
         do {
-            try launchSSH(connection: conn, mcpSocketPath: socketPath)
-            // initialize → session/new
+            try launchHermes(binaryPath: binPath)
             try await performInitialize()
             let sessionId = try await performSessionNew()
             state = .live(sessionId: sessionId)
@@ -240,22 +239,27 @@ actor HermesAgentService {
         }
     }
 
-    /// Tear down the SSH process + ACP session. Resolves any in-flight
-    /// continuations with `HermesError.disconnected` so the chat UI doesn't
-    /// hang on a never-arriving response.
+    /// Tear down the local `hermes acp` process + ACP session. Resolves any
+    /// in-flight continuations with `HermesError.disconnected` so the chat
+    /// UI doesn't hang on a never-arriving response.
     func disconnect() {
         stdoutReaderTask?.cancel()
         stdoutReaderTask = nil
 
         // Closing stdin signals EOF to `hermes acp`, which exits cleanly.
-        // ssh then exits when its child does.
         try? stdinHandle?.close()
         stdinHandle = nil
 
-        if let proc = sshProcess, proc.isRunning {
+        if let proc = hermesProcess, proc.isRunning {
             proc.terminate()
         }
-        sshProcess = nil
+        hermesProcess = nil
+
+        // Best-effort cleanup of the session tmp dir.
+        if let tmpDir = sessionTmpDir {
+            try? FileManager.default.removeItem(at: tmpDir)
+        }
+        sessionTmpDir = nil
 
         // Resolve outstanding continuations with disconnected error.
         for (_, cont) in pendingResponses {
@@ -263,9 +267,9 @@ actor HermesAgentService {
         }
         pendingResponses.removeAll()
 
-        // Pending approvals: respond `cancelled` to anything outstanding so
-        // the agent can shut down cleanly. (Best effort — stdin is closed,
-        // so these go nowhere, but we clear local state.)
+        // Pending approvals: clear local state. Best-effort — stdin is closed,
+        // so any unsent responses go nowhere, but the agent will be torn down
+        // immediately anyway.
         pendingApprovals.removeAll()
         toolCallTitles.removeAll()
 
@@ -311,12 +315,23 @@ actor HermesAgentService {
         writeFrame(response)
     }
 
-    // MARK: - SSH launch
+    // MARK: - Local process launch
 
-    private func launchSSH(connection: HermesConnection, mcpSocketPath: String) throws {
+    private func launchHermes(binaryPath: String) throws {
+        let tmpDir = try makeTempDir()
+        sessionTmpDir = tmpDir
+
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        proc.arguments = sshArguments(connection: connection, mcpSocketPath: mcpSocketPath)
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = ["acp"]
+        proc.currentDirectoryURL = tmpDir
+
+        var env = ProcessInfo.processInfo.environment
+        // Prepend common user-binary directories so anything `hermes acp`
+        // shells out to (uvx, etc.) resolves. Same pattern Claude/Codex use.
+        env["PATH"] = Self.augmentedPath(inheriting: env["PATH"])
+        env["NO_COLOR"] = "1"
+        proc.environment = env
 
         let stdin = Pipe()
         let stdout = Pipe()
@@ -328,16 +343,15 @@ actor HermesAgentService {
         do {
             try proc.run()
         } catch {
-            throw HermesError.sshLaunchFailed(error.localizedDescription)
+            throw HermesError.launchFailed(error.localizedDescription)
         }
 
-        sshProcess = proc
+        hermesProcess = proc
         stdinHandle = stdin.fileHandleForWriting
         stderrBuffer = Data()
 
-        // Drain stderr in the background. ssh's diagnostics + hermes's logs
-        // both land here. We keep a tail in case ssh exits and we need to
-        // surface a reason; we don't otherwise stream stderr to the UI.
+        // Drain stderr in the background. We keep a tail in case hermes
+        // exits and we need to surface a reason.
         let stderrHandle = stderr.fileHandleForReading
         stderrHandle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -357,29 +371,25 @@ actor HermesAgentService {
         }
     }
 
-    private func sshArguments(connection: HermesConnection, mcpSocketPath: String) -> [String] {
-        let reverseForward = "\(Self.mcpTunnelPort):\(mcpSocketPath)"
-        return [
-            "-i", connection.resolvedKeyPath(),
-            "-p", String(connection.port),
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ServerAliveInterval=30",
-            "-o", "ServerAliveCountMax=3",
-            // Die immediately if the reverse tunnel fails to bind — otherwise
-            // the agent would start without an MCP server it could reach.
-            "-o", "ExitOnForwardFailure=yes",
-            // `unix:` form requires OpenSSH >= 6.7 — ubiquitous on Hetzner
-            // images today. Falls back to a clean error from ssh otherwise.
-            "-R", "\(reverseForward)",
-            "\(connection.username)@\(connection.host)",
-            // Wrap the remote command in `bash -lc` so it runs as a login
-            // shell — that sources ~/.profile and adds ~/.local/bin to PATH,
-            // which is where `uv tool install hermes-agent[acp]` lands the
-            // `hermes` binary. Without `-l`, non-interactive SSH sessions
-            // get only the default PATH and `hermes` isn't found.
-            "bash", "-lc", "hermes acp"
-        ]
+    private func makeTempDir() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("otto-hermes-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Prepend common user-binary directories to the inherited PATH so any
+    /// tool the agent shells out to via its built-in terminal (uvx, etc.)
+    /// resolves. Same shape ClaudeCLIService uses.
+    private static func augmentedPath(inheriting inherited: String?) -> String {
+        let home = NSHomeDirectory()
+        let prefix = [
+            "\(home)/.local/bin",
+            "/opt/homebrew/bin",
+            "/usr/local/bin"
+        ].joined(separator: ":")
+        let tail = inherited ?? "/usr/bin:/bin"
+        return "\(prefix):\(tail)"
     }
 
     private func appendStderr(_ data: Data) {
@@ -415,8 +425,10 @@ actor HermesAgentService {
         let id = allocateRequestId()
         // `cwd` isn't meaningful to Otto — Otto's tools all flow through MCP,
         // and Otto doesn't expose fs/terminal capabilities, so the agent has
-        // no reason to touch the remote filesystem. `/tmp` is a safe default.
-        let request = ACPParser.newSessionRequest(id: .int(id), cwd: "/tmp")
+        // no reason to touch a working directory. Pass our session tmp dir
+        // so any errant filesystem ops land in a contained spot.
+        let cwd = sessionTmpDir?.path ?? "/tmp"
+        let request = ACPParser.newSessionRequest(id: .int(id), cwd: cwd)
         let result: [String: Any]
         do {
             result = try await sendAndAwait(id: id, request: request)
@@ -460,10 +472,10 @@ actor HermesAgentService {
         let tail = stderrTail()
         NSLog("[Hermes] reader loop exited. stderr tail: %@", tail)
         let exitCode: Int32 = {
-            guard let proc = sshProcess, !proc.isRunning else { return -1 }
+            guard let proc = hermesProcess, !proc.isRunning else { return -1 }
             return proc.terminationStatus
         }()
-        let err: Error = HermesError.sshExited(exitCode, tail)
+        let err: Error = HermesError.processExited(exitCode, tail)
         // Drain pending continuations so awaiters don't hang.
         for (_, cont) in pendingResponses {
             cont.resume(throwing: err)

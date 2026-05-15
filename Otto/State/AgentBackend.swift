@@ -14,7 +14,7 @@ enum AgentBackend: String, CaseIterable, Identifiable {
         switch self {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
-        case .hermes: return "Hermes (Hetzner)"
+        case .hermes: return "Hermes"
         }
     }
 

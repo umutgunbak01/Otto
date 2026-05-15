@@ -16,13 +16,10 @@ struct SettingsView: View {
     @State private var showingAnthropicKey: Bool = false
     @State private var showingOpenaiKey: Bool = false
 
-    // Hermes (Hetzner) — host/user/key path for the user's pre-provisioned box.
-    @State private var hermesHost: String = HermesConnectionService.shared.current()?.host ?? ""
-    @State private var hermesUsername: String = HermesConnectionService.shared.current()?.username ?? ""
-    @State private var hermesPort: String = HermesConnectionService.shared.current().map { String($0.port) } ?? "22"
-    @State private var hermesKeyPath: String = HermesConnectionService.shared.current()?.privateKeyPath ?? ""
-    @State private var hermesSaveError: String? = nil
-    @State private var hermesSaveSuccess: Bool = false
+    // Hermes (local) — install detection + MCP config setup state.
+    @State private var hermesBinaryPath: String? = HermesInstallation.binaryPath()
+    @State private var hermesConfigMessage: String? = nil
+    @State private var hermesConfigIsError: Bool = false
 
     /// Bound to the same UserDefaults key everything else reads from
     /// (`AgentBackend.defaultsKey`) so a backend switch in Settings flips the
@@ -510,137 +507,209 @@ struct SettingsView: View {
 
     private var hermesBackendBlock: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Otto opens an SSH connection to your Hetzner box and runs `hermes acp` there. The box must already have Hermes installed and configured — Otto won't provision it for you. Otto's local tools are tunneled back over SSH (`-R \(HermesAgentService.mcpTunnelPort):unix:<otto-mcp.sock>`), so your tokens never leave this Mac.")
+            Text("Otto runs `hermes acp` as a local subprocess and talks to it over JSON-RPC. Hermes picks its model server-side via `hermes model`. Otto's tools reach Hermes through a local Unix socket — your tokens stay on this Mac.")
                 .font(Theme.Typography.caption)
                 .foregroundStyle(Theme.Colors.secondaryText)
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Host")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                hermesTextField(placeholder: "hetzner.example.com", binding: $hermesHost)
-            }
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("SSH username")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                hermesTextField(placeholder: "root", binding: $hermesUsername)
-            }
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Port")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                hermesTextField(placeholder: "22", binding: $hermesPort)
-                    .frame(maxWidth: 120)
-            }
-
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("SSH private key path")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                HStack(spacing: Theme.Spacing.sm) {
-                    hermesTextField(placeholder: "~/.ssh/id_ed25519", binding: $hermesKeyPath)
-                    Button("Browse…") {
-                        let panel = NSOpenPanel()
-                        panel.canChooseFiles = true
-                        panel.canChooseDirectories = false
-                        panel.allowsMultipleSelection = false
-                        panel.showsHiddenFiles = true
-                        if panel.runModal() == .OK, let url = panel.url {
-                            hermesKeyPath = url.path
-                        }
+            // Install status row
+            if let binPath = hermesBinaryPath {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Colors.cyan)
+                    Text("Hermes detected at \(binPath)")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.cyan)
+                    Spacer()
+                    Button("Refresh") {
+                        hermesBinaryPath = HermesInstallation.binaryPath()
                     }
                     .buttonStyle(GhostButtonStyle())
                 }
-                Text("Path to a private key the box accepts (typically the one you `ssh-copy-id`'d to it). Otto does not generate keys.")
-                    .font(Theme.Typography.small)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Colors.amber)
+                        Text("Hermes not installed")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.amber)
+                        Spacer()
+                        Button("Refresh") {
+                            hermesBinaryPath = HermesInstallation.binaryPath()
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+                    Text("Install with this one-liner in Terminal, then click Refresh:")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install 'hermes-agent[acp]'")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.text)
+                        .textSelection(.enabled)
+                        .padding(Theme.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.Colors.borderSubtle.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    Text("Then run `hermes setup` once to configure a model provider.")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
             }
 
+            // Set up Otto tools button — writes/updates the `otto` MCP entry
+            // in ~/.hermes/config.yaml so Hermes knows how to reach Otto's
+            // local MCP socket. Idempotent.
             HStack(spacing: Theme.Spacing.sm) {
-                Button("Save") {
-                    saveHermesConnection()
+                Button("Set up Otto tools") {
+                    setupOttoMCPEntry()
                 }
                 .buttonStyle(GhostButtonStyle())
-                .disabled(hermesHost.trimmingCharacters(in: .whitespaces).isEmpty
-                          || hermesUsername.trimmingCharacters(in: .whitespaces).isEmpty
-                          || hermesKeyPath.trimmingCharacters(in: .whitespaces).isEmpty)
-
-                if HermesConnectionService.shared.current() != nil {
-                    Button("Disconnect & clear") {
-                        Task { await HermesAgentService.shared.disconnect() }
-                        HermesConnectionService.shared.clear()
-                        hermesHost = ""
-                        hermesUsername = ""
-                        hermesPort = "22"
-                        hermesKeyPath = ""
-                        hermesSaveSuccess = false
-                    }
-                    .buttonStyle(GhostButtonStyle())
-                }
+                .disabled(hermesBinaryPath == nil)
 
                 Spacer()
             }
 
-            if let err = hermesSaveError {
+            if let msg = hermesConfigMessage {
                 HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "exclamationmark.triangle")
+                    Image(systemName: hermesConfigIsError
+                          ? "exclamationmark.triangle"
+                          : "checkmark.circle.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(Theme.Colors.amber)
-                    Text(err)
+                        .foregroundStyle(hermesConfigIsError ? Theme.Colors.amber : Theme.Colors.cyan)
+                    Text(msg)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.amber)
-                }
-            }
-
-            if hermesSaveSuccess {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Theme.Colors.cyan)
-                    Text("Connection saved. Send any chat to connect.")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.cyan)
+                        .foregroundStyle(hermesConfigIsError ? Theme.Colors.amber : Theme.Colors.cyan)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
 
-    private func hermesTextField(placeholder: String, binding: Binding<String>) -> some View {
-        TextField(placeholder, text: binding)
-            .textFieldStyle(.plain)
-            .font(Theme.Typography.body)
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(Theme.Colors.borderSubtle.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
-            )
-    }
+    /// Write (or merge) the `otto` MCP server entry into `~/.hermes/config.yaml`
+    /// pointing at Otto's actual Unix socket path. Uses a minimal hand-written
+    /// merge — read existing YAML lines, drop any old `mcp_servers.otto`
+    /// block, append a fresh one. We deliberately don't pull in a YAML
+    /// library; the file is small and the edit is local.
+    private func setupOttoMCPEntry() {
+        hermesConfigMessage = nil
+        hermesConfigIsError = false
 
-    private func saveHermesConnection() {
-        hermesSaveError = nil
-        hermesSaveSuccess = false
-        let port = Int(hermesPort.trimmingCharacters(in: .whitespaces)) ?? HermesConnection.defaultPort
+        guard let socketPath = OttoMCPServer.shared.ensureStarted() else {
+            hermesConfigMessage = "Otto MCP server failed to start. Try restarting Otto."
+            hermesConfigIsError = true
+            return
+        }
+
+        let home = NSHomeDirectory()
+        let configDir = "\(home)/.hermes"
+        let configPath = "\(configDir)/config.yaml"
         do {
-            let conn = try HermesConnection.make(
-                host: hermesHost,
-                username: hermesUsername,
-                port: port,
-                privateKeyPath: hermesKeyPath
+            try FileManager.default.createDirectory(
+                atPath: configDir,
+                withIntermediateDirectories: true,
+                attributes: nil
             )
-            // Existing live session would point at the old connection — tear
-            // down so the next turn reconnects with the new credentials.
-            Task { await HermesAgentService.shared.disconnect() }
-            HermesConnectionService.shared.save(conn)
-            hermesSaveSuccess = true
         } catch {
-            hermesSaveError = error.localizedDescription
+            hermesConfigMessage = "Couldn't create ~/.hermes: \(error.localizedDescription)"
+            hermesConfigIsError = true
+            return
         }
+
+        let existing: String = (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+        let merged = SettingsView.mergeOttoMCPEntry(into: existing, socketPath: socketPath)
+        do {
+            try merged.write(toFile: configPath, atomically: true, encoding: .utf8)
+            hermesConfigMessage = "Wrote `otto` MCP entry → \(configPath)"
+            hermesConfigIsError = false
+        } catch {
+            hermesConfigMessage = "Couldn't write config: \(error.localizedDescription)"
+            hermesConfigIsError = true
+        }
+    }
+
+    /// Pure-function merger so it's easy to reason about (and testable later).
+    /// If there's no existing `mcp_servers:` section, appends one with just
+    /// the `otto` entry. If there is one, replaces any prior `otto:` child
+    /// while leaving other servers (and other keys) untouched.
+    static func mergeOttoMCPEntry(into existing: String, socketPath: String) -> String {
+        let ottoBlock = """
+        mcp_servers:
+          otto:
+            command: nc
+            args:
+              - "-U"
+              - "\(socketPath)"
+        """
+        // Quick path: empty/missing file.
+        let trimmed = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return ottoBlock + "\n"
+        }
+
+        let lines = existing.components(separatedBy: "\n")
+        var out: [String] = []
+        var i = 0
+        var foundMcp = false
+        var insertedOtto = false
+
+        while i < lines.count {
+            let line = lines[i]
+            if !foundMcp && line.trimmingCharacters(in: .whitespaces).hasPrefix("mcp_servers:") {
+                foundMcp = true
+                out.append(line)
+                i += 1
+                // Walk over any indented children, copy non-otto entries,
+                // insert our otto block in place of any existing one.
+                var copiedOther = false
+                while i < lines.count {
+                    let child = lines[i]
+                    let isBlank = child.trimmingCharacters(in: .whitespaces).isEmpty
+                    let isIndented = child.first == " " || child.first == "\t"
+                    if !isBlank && !isIndented {
+                        break // back to top-level — section ends
+                    }
+                    // Detect a top-level child of mcp_servers (2-space indent).
+                    if child.hasPrefix("  ") && !child.hasPrefix("   ")
+                        && child.trimmingCharacters(in: .whitespaces).hasPrefix("otto:") {
+                        // Skip the existing otto block (this line + any deeper-indented continuation).
+                        i += 1
+                        while i < lines.count {
+                            let cont = lines[i]
+                            if cont.trimmingCharacters(in: .whitespaces).isEmpty {
+                                i += 1; continue
+                            }
+                            if cont.hasPrefix("    ") { i += 1; continue }
+                            break
+                        }
+                        continue
+                    }
+                    out.append(child)
+                    if !isBlank { copiedOther = true }
+                    i += 1
+                }
+                // Now insert our fresh otto block, indented properly.
+                out.append("  otto:")
+                out.append("    command: nc")
+                out.append("    args:")
+                out.append("      - \"-U\"")
+                out.append("      - \"\(socketPath)\"")
+                insertedOtto = true
+                _ = copiedOther // silence warning
+                continue
+            }
+            out.append(line)
+            i += 1
+        }
+
+        if !foundMcp {
+            // No existing mcp_servers — append a fresh block.
+            if !out.last!.isEmpty { out.append("") }
+            out.append(ottoBlock)
+        }
+        _ = insertedOtto
+        return out.joined(separator: "\n")
     }
 
     // MARK: - Auth status rows
