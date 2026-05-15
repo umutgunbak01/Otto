@@ -373,9 +373,12 @@ actor HermesAgentService {
             // images today. Falls back to a clean error from ssh otherwise.
             "-R", "\(reverseForward)",
             "\(connection.username)@\(connection.host)",
-            // Remote command. Quoting isn't needed since we pass each arg
-            // separately and ssh joins them with spaces server-side.
-            "hermes", "acp"
+            // Wrap the remote command in `bash -lc` so it runs as a login
+            // shell — that sources ~/.profile and adds ~/.local/bin to PATH,
+            // which is where `uv tool install hermes-agent[acp]` lands the
+            // `hermes` binary. Without `-l`, non-interactive SSH sessions
+            // get only the default PATH and `hermes` isn't found.
+            "bash", "-lc", "hermes acp"
         ]
     }
 
