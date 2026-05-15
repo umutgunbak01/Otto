@@ -16,6 +16,11 @@ struct SettingsView: View {
     @State private var showingAnthropicKey: Bool = false
     @State private var showingOpenaiKey: Bool = false
 
+    // Hermes (local) — install detection + MCP config setup state.
+    @State private var hermesBinaryPath: String? = HermesInstallation.binaryPath()
+    @State private var hermesConfigMessage: String? = nil
+    @State private var hermesConfigIsError: Bool = false
+
     /// Bound to the same UserDefaults key everything else reads from
     /// (`AgentBackend.defaultsKey`) so a backend switch in Settings flips the
     /// agent immediately for every code path, including voice mode.
@@ -79,10 +84,10 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
 
-                    if selectedBackend == .claude {
-                        claudeBackendBlock
-                    } else {
-                        codexBackendBlock
+                    switch selectedBackend {
+                    case .claude: claudeBackendBlock
+                    case .codex:  codexBackendBlock
+                    case .hermes: hermesBackendBlock
                     }
 
                     if isSaved {
@@ -498,6 +503,213 @@ struct SettingsView: View {
             }
             .padding(.top, Theme.Spacing.xs)
         }
+    }
+
+    private var hermesBackendBlock: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Otto runs `hermes acp` as a local subprocess and talks to it over JSON-RPC. Hermes picks its model server-side via `hermes model`. Otto's tools reach Hermes through a local Unix socket — your tokens stay on this Mac.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.secondaryText)
+
+            // Install status row
+            if let binPath = hermesBinaryPath {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Colors.cyan)
+                    Text("Hermes detected at \(binPath)")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.cyan)
+                    Spacer()
+                    Button("Refresh") {
+                        hermesBinaryPath = HermesInstallation.binaryPath()
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.Colors.amber)
+                        Text("Hermes not installed")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.amber)
+                        Spacer()
+                        Button("Refresh") {
+                            hermesBinaryPath = HermesInstallation.binaryPath()
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                    }
+                    Text("Install with this one-liner in Terminal, then click Refresh:")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install 'hermes-agent[acp]'")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.text)
+                        .textSelection(.enabled)
+                        .padding(Theme.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.Colors.borderSubtle.opacity(0.5))
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    Text("Then run `hermes setup` once to configure a model provider.")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+
+            // Set up Otto tools button — writes/updates the `otto` MCP entry
+            // in ~/.hermes/config.yaml so Hermes knows how to reach Otto's
+            // local MCP socket. Idempotent.
+            HStack(spacing: Theme.Spacing.sm) {
+                Button("Set up Otto tools") {
+                    setupOttoMCPEntry()
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(hermesBinaryPath == nil)
+
+                Spacer()
+            }
+
+            if let msg = hermesConfigMessage {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: hermesConfigIsError
+                          ? "exclamationmark.triangle"
+                          : "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(hermesConfigIsError ? Theme.Colors.amber : Theme.Colors.cyan)
+                    Text(msg)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(hermesConfigIsError ? Theme.Colors.amber : Theme.Colors.cyan)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Write (or merge) the `otto` MCP server entry into `~/.hermes/config.yaml`
+    /// pointing at Otto's actual Unix socket path. Uses a minimal hand-written
+    /// merge — read existing YAML lines, drop any old `mcp_servers.otto`
+    /// block, append a fresh one. We deliberately don't pull in a YAML
+    /// library; the file is small and the edit is local.
+    private func setupOttoMCPEntry() {
+        hermesConfigMessage = nil
+        hermesConfigIsError = false
+
+        guard let socketPath = OttoMCPServer.shared.ensureStarted() else {
+            hermesConfigMessage = "Otto MCP server failed to start. Try restarting Otto."
+            hermesConfigIsError = true
+            return
+        }
+
+        let home = NSHomeDirectory()
+        let configDir = "\(home)/.hermes"
+        let configPath = "\(configDir)/config.yaml"
+        do {
+            try FileManager.default.createDirectory(
+                atPath: configDir,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+        } catch {
+            hermesConfigMessage = "Couldn't create ~/.hermes: \(error.localizedDescription)"
+            hermesConfigIsError = true
+            return
+        }
+
+        let existing: String = (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
+        let merged = SettingsView.mergeOttoMCPEntry(into: existing, socketPath: socketPath)
+        do {
+            try merged.write(toFile: configPath, atomically: true, encoding: .utf8)
+            hermesConfigMessage = "Wrote `otto` MCP entry → \(configPath)"
+            hermesConfigIsError = false
+        } catch {
+            hermesConfigMessage = "Couldn't write config: \(error.localizedDescription)"
+            hermesConfigIsError = true
+        }
+    }
+
+    /// Pure-function merger so it's easy to reason about (and testable later).
+    /// If there's no existing `mcp_servers:` section, appends one with just
+    /// the `otto` entry. If there is one, replaces any prior `otto:` child
+    /// while leaving other servers (and other keys) untouched.
+    static func mergeOttoMCPEntry(into existing: String, socketPath: String) -> String {
+        let ottoBlock = """
+        mcp_servers:
+          otto:
+            command: nc
+            args:
+              - "-U"
+              - "\(socketPath)"
+        """
+        // Quick path: empty/missing file.
+        let trimmed = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return ottoBlock + "\n"
+        }
+
+        let lines = existing.components(separatedBy: "\n")
+        var out: [String] = []
+        var i = 0
+        var foundMcp = false
+        var insertedOtto = false
+
+        while i < lines.count {
+            let line = lines[i]
+            if !foundMcp && line.trimmingCharacters(in: .whitespaces).hasPrefix("mcp_servers:") {
+                foundMcp = true
+                out.append(line)
+                i += 1
+                // Walk over any indented children, copy non-otto entries,
+                // insert our otto block in place of any existing one.
+                var copiedOther = false
+                while i < lines.count {
+                    let child = lines[i]
+                    let isBlank = child.trimmingCharacters(in: .whitespaces).isEmpty
+                    let isIndented = child.first == " " || child.first == "\t"
+                    if !isBlank && !isIndented {
+                        break // back to top-level — section ends
+                    }
+                    // Detect a top-level child of mcp_servers (2-space indent).
+                    if child.hasPrefix("  ") && !child.hasPrefix("   ")
+                        && child.trimmingCharacters(in: .whitespaces).hasPrefix("otto:") {
+                        // Skip the existing otto block (this line + any deeper-indented continuation).
+                        i += 1
+                        while i < lines.count {
+                            let cont = lines[i]
+                            if cont.trimmingCharacters(in: .whitespaces).isEmpty {
+                                i += 1; continue
+                            }
+                            if cont.hasPrefix("    ") { i += 1; continue }
+                            break
+                        }
+                        continue
+                    }
+                    out.append(child)
+                    if !isBlank { copiedOther = true }
+                    i += 1
+                }
+                // Now insert our fresh otto block, indented properly.
+                out.append("  otto:")
+                out.append("    command: nc")
+                out.append("    args:")
+                out.append("      - \"-U\"")
+                out.append("      - \"\(socketPath)\"")
+                insertedOtto = true
+                _ = copiedOther // silence warning
+                continue
+            }
+            out.append(line)
+            i += 1
+        }
+
+        if !foundMcp {
+            // No existing mcp_servers — append a fresh block.
+            if !out.last!.isEmpty { out.append("") }
+            out.append(ottoBlock)
+        }
+        _ = insertedOtto
+        return out.joined(separator: "\n")
     }
 
     // MARK: - Auth status rows

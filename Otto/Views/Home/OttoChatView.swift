@@ -387,6 +387,42 @@ struct OttoChatView: View {
             )
         case .itemPreview(let type, let itemId):
             ItemPreviewCard(type: type, itemId: itemId)
+        case .approvalRequest(let approvalId, let toolName, let argsSummary, let resolved):
+            ApprovalPromptView(
+                toolName: toolName,
+                argsSummary: argsSummary,
+                resolved: resolved
+            ) { decision, isAllow in
+                resolveApproval(approvalId: approvalId, toolName: toolName, decision: decision, isAllow: isAllow)
+            }
+        }
+    }
+
+    /// Routes the user's button click back into `HermesAgentService` and
+    /// flips the corresponding UIEntry to `resolved: true` so the card stops
+    /// accepting further clicks. Also writes "always" decisions to
+    /// `ToolApprovalPolicy` so future runs auto-resolve.
+    private func resolveApproval(approvalId: String, toolName: String, decision: ApprovalDecision, isAllow: Bool) {
+        if decision == .alwaysAllow || decision == .alwaysDeny {
+            ToolApprovalPolicy.shared.setDecision(decision, for: toolName)
+        }
+        // ACP's option ids aren't fixed strings — they're whatever the agent
+        // sent us. HermesAgentService knows which optionId to send back
+        // given an allow/deny choice and uses the option `kind` field to
+        // pick (see PendingApproval.options). We forward a synthetic id
+        // that HermesAgentService maps internally.
+        let optionId = isAllow ? "__otto_allow" : "__otto_reject"
+        Task {
+            await HermesAgentService.shared.resolveApproval(approvalId: approvalId, selectedOptionId: optionId)
+        }
+        // Flip the entry to resolved.
+        if let idx = uiEntries.lastIndex(where: { entry in
+            if case .approvalRequest(let aid, _, _, _) = entry.kind { return aid == approvalId }
+            return false
+        }) {
+            if case .approvalRequest(let aid, let tn, let s, _) = uiEntries[idx].kind {
+                uiEntries[idx].kind = .approvalRequest(approvalId: aid, toolName: tn, argsSummary: s, resolved: true)
+            }
         }
     }
 
@@ -723,6 +759,15 @@ struct OttoChatView: View {
                     )
                 ))
             }
+        case .approvalRequest(let approvalId, let toolName, let argsSummary):
+            uiEntries.append(UIEntry(
+                kind: .approvalRequest(
+                    approvalId: approvalId,
+                    toolName: toolName,
+                    argsSummary: argsSummary,
+                    resolved: false
+                )
+            ))
         }
     }
 
@@ -860,6 +905,12 @@ private struct UIEntry: Identifiable {
         /// is in flight the icon pulses and `resultLabel` is nil.
         case toolStep(callIcon: String, callLabel: String, resultLabel: String?, isError: Bool, isInFlight: Bool)
         case itemPreview(type: ContentType, itemId: UUID)
+        /// Hermes (ACP) approval card. `approvalId` is the opaque key
+        /// `HermesAgentService` uses to match the user's decision back to
+        /// the in-flight `session/request_permission` request. `resolved`
+        /// flips to true once the user clicks a button so the buttons
+        /// fade out and stop accepting input.
+        case approvalRequest(approvalId: String, toolName: String, argsSummary: String, resolved: Bool)
 
         var isUser: Bool { if case .userText = self { return true }; return false }
         var isToolStep: Bool { if case .toolStep = self { return true }; return false }
