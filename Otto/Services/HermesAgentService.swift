@@ -448,10 +448,19 @@ actor HermesAgentService {
                 handleFrame(line: line)
             }
         }
-        // Reader exited — connection closed.
+        // Reader exited — connection closed. `Process.terminationStatus` is
+        // an Objective-C accessor that throws NSInvalidArgumentException
+        // ("task still running") when read before the process has actually
+        // exited. Stdout closing doesn't guarantee the process has wound
+        // down yet, so guard with isRunning and only read the status when
+        // it's safe.
         let tail = stderrTail()
         NSLog("[Hermes] reader loop exited. stderr tail: %@", tail)
-        let err: Error = HermesError.sshExited(sshProcess?.terminationStatus ?? -1, tail)
+        let exitCode: Int32 = {
+            guard let proc = sshProcess, !proc.isRunning else { return -1 }
+            return proc.terminationStatus
+        }()
+        let err: Error = HermesError.sshExited(exitCode, tail)
         // Drain pending continuations so awaiters don't hang.
         for (_, cont) in pendingResponses {
             cont.resume(throwing: err)
