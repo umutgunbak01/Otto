@@ -250,6 +250,12 @@ enum ChatEvent {
     case thinkingDelta(String)
     case toolCall(id: String, name: String, input: [String: Any])
     case toolResult(id: String, name: String, summary: String, isError: Bool)
+    /// Hermes (ACP) only. The agent has asked permission to run a tool. The
+    /// UI renders an inline approval card; the user's choice flows back via
+    /// `HermesAgentService.resolveApproval(id:allow:)`. `argsSummary` is a
+    /// short one-line description (e.g. "search_items query=\"groceries\"")
+    /// safe to display.
+    case approvalRequest(id: String, toolName: String, argsSummary: String)
 }
 
 /// A small Codable wrapper for arbitrary JSON values (tool_use inputs).

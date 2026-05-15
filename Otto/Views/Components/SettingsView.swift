@@ -16,6 +16,14 @@ struct SettingsView: View {
     @State private var showingAnthropicKey: Bool = false
     @State private var showingOpenaiKey: Bool = false
 
+    // Hermes (Hetzner) — host/user/key path for the user's pre-provisioned box.
+    @State private var hermesHost: String = HermesConnectionService.shared.current()?.host ?? ""
+    @State private var hermesUsername: String = HermesConnectionService.shared.current()?.username ?? ""
+    @State private var hermesPort: String = HermesConnectionService.shared.current().map { String($0.port) } ?? "22"
+    @State private var hermesKeyPath: String = HermesConnectionService.shared.current()?.privateKeyPath ?? ""
+    @State private var hermesSaveError: String? = nil
+    @State private var hermesSaveSuccess: Bool = false
+
     /// Bound to the same UserDefaults key everything else reads from
     /// (`AgentBackend.defaultsKey`) so a backend switch in Settings flips the
     /// agent immediately for every code path, including voice mode.
@@ -79,10 +87,10 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
 
-                    if selectedBackend == .claude {
-                        claudeBackendBlock
-                    } else {
-                        codexBackendBlock
+                    switch selectedBackend {
+                    case .claude: claudeBackendBlock
+                    case .codex:  codexBackendBlock
+                    case .hermes: hermesBackendBlock
                     }
 
                     if isSaved {
@@ -497,6 +505,141 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
             .padding(.top, Theme.Spacing.xs)
+        }
+    }
+
+    private var hermesBackendBlock: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Otto opens an SSH connection to your Hetzner box and runs `hermes acp` there. The box must already have Hermes installed and configured — Otto won't provision it for you. Otto's local tools are tunneled back over SSH (`-R \(HermesAgentService.mcpTunnelPort):unix:<otto-mcp.sock>`), so your tokens never leave this Mac.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.secondaryText)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("Host")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                hermesTextField(placeholder: "hetzner.example.com", binding: $hermesHost)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("SSH username")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                hermesTextField(placeholder: "root", binding: $hermesUsername)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("Port")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                hermesTextField(placeholder: "22", binding: $hermesPort)
+                    .frame(maxWidth: 120)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                Text("SSH private key path")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                HStack(spacing: Theme.Spacing.sm) {
+                    hermesTextField(placeholder: "~/.ssh/id_ed25519", binding: $hermesKeyPath)
+                    Button("Browse…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = true
+                        panel.canChooseDirectories = false
+                        panel.allowsMultipleSelection = false
+                        panel.showsHiddenFiles = true
+                        if panel.runModal() == .OK, let url = panel.url {
+                            hermesKeyPath = url.path
+                        }
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+                Text("Path to a private key the box accepts (typically the one you `ssh-copy-id`'d to it). Otto does not generate keys.")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Button("Save") {
+                    saveHermesConnection()
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(hermesHost.trimmingCharacters(in: .whitespaces).isEmpty
+                          || hermesUsername.trimmingCharacters(in: .whitespaces).isEmpty
+                          || hermesKeyPath.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                if HermesConnectionService.shared.current() != nil {
+                    Button("Disconnect & clear") {
+                        Task { await HermesAgentService.shared.disconnect() }
+                        HermesConnectionService.shared.clear()
+                        hermesHost = ""
+                        hermesUsername = ""
+                        hermesPort = "22"
+                        hermesKeyPath = ""
+                        hermesSaveSuccess = false
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+
+                Spacer()
+            }
+
+            if let err = hermesSaveError {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.amber)
+                    Text(err)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.amber)
+                }
+            }
+
+            if hermesSaveSuccess {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.cyan)
+                    Text("Connection saved. Send any chat to connect.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.cyan)
+                }
+            }
+        }
+    }
+
+    private func hermesTextField(placeholder: String, binding: Binding<String>) -> some View {
+        TextField(placeholder, text: binding)
+            .textFieldStyle(.plain)
+            .font(Theme.Typography.body)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.sm)
+            .background(Theme.Colors.borderSubtle.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+            )
+    }
+
+    private func saveHermesConnection() {
+        hermesSaveError = nil
+        hermesSaveSuccess = false
+        let port = Int(hermesPort.trimmingCharacters(in: .whitespaces)) ?? HermesConnection.defaultPort
+        do {
+            let conn = try HermesConnection.make(
+                host: hermesHost,
+                username: hermesUsername,
+                port: port,
+                privateKeyPath: hermesKeyPath
+            )
+            // Existing live session would point at the old connection — tear
+            // down so the next turn reconnects with the new credentials.
+            Task { await HermesAgentService.shared.disconnect() }
+            HermesConnectionService.shared.save(conn)
+            hermesSaveSuccess = true
+        } catch {
+            hermesSaveError = error.localizedDescription
         }
     }
 
