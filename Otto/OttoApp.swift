@@ -37,6 +37,12 @@ struct OttoApp: App {
                     NSLog("[WakeWord] app became active — stopping listener")
                     appState.wakeWord.stop()
                 }
+                // App quitting → tear down the long-lived Hermes SSH+ACP
+                // session if one is open. Other backends (Claude/Codex) are
+                // per-turn subprocesses with nothing to clean up on quit.
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    Task { await HermesAgentService.shared.disconnect() }
+                }
                 .onChange(of: wakeWordEnabled) { _, enabled in
                     // Toggled OFF while backgrounded → cut the mic now,
                     // don't wait for the next foreground bounce.

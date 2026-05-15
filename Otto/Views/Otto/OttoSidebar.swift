@@ -224,12 +224,18 @@ struct OttoSidebar: View {
             return storedClaudeModelId.isEmpty ? AgentService.Claude.defaultModelId : storedClaudeModelId
         case .codex:
             return storedCodexModelId.isEmpty ? AgentService.Codex.defaultModelId : storedCodexModelId
+        case .hermes:
+            // Hermes picks its model server-side; the label below shows
+            // "HERMES" instead of a concrete model id, so this string is
+            // never user-visible.
+            return "hermes"
         }
     }
 
     private var modelLabel: String {
         var id = effectiveModelRaw
-        if activeBackend == .claude {
+        switch activeBackend {
+        case .claude:
             if id.hasSuffix("[1m]") { id = String(id.dropLast(4)).trimmingCharacters(in: .whitespaces) }
             // claude-opus-4-7 → OPUS-4.7, claude-sonnet-4-6 → SONNET-4.6, etc.
             let stripped = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
@@ -238,9 +244,13 @@ struct OttoSidebar: View {
             let family = parts[0].uppercased()
             let version = parts[1].replacingOccurrences(of: "-", with: ".")
             return "\(family)-\(version)"
-        } else {
+        case .codex:
             // gpt-5.5 → GPT-5.5, gpt-5-codex → GPT-5-CODEX, o3 → O3
             return id.uppercased()
+        case .hermes:
+            // Hermes config (model + provider) lives in ~/.hermes/config.yaml;
+            // we don't surface a model id here.
+            return "HERMES"
         }
     }
 
@@ -248,6 +258,7 @@ struct OttoSidebar: View {
         switch activeBackend {
         case .claude: return effectiveModelRaw.hasSuffix("[1m]") ? "1M" : "200K"
         case .codex:  return "200K"
+        case .hermes: return "—"
         }
     }
 

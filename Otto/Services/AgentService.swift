@@ -180,6 +180,15 @@ actor AgentService {
                 onDelta: onDelta,
                 onEvent: onEvent
             )
+        case .hermes:
+            return try await HermesAgentService.shared.streamChatWithTools(
+                turns: turns,
+                systemPrompt: systemPrompt,
+                tools: tools,
+                executor: executor,
+                onDelta: onDelta,
+                onEvent: onEvent
+            )
         }
     }
 

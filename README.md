@@ -3,14 +3,14 @@
 A local-first macOS AI assistant. SwiftUI app that keeps your todos, notes,
 ideas, bookmarks, habits, meetings, emails, and files in one place, with a
 chat interface that can read and write across all of them — powered by
-either Claude Code or Codex (your choice in Settings).
+Claude Code, Codex, or Hermes (your choice in Settings).
 
 All data lives on your machine in `~/Library/Application Support/Otto/otto_data.json`.
 Nothing leaves your device unless you explicitly connect an integration.
 
 ## Features
 
-- **Chat with Claude or Codex** over all your data — search, create, update,
+- **Chat with Claude, Codex, or Hermes** over all your data — search, create, update,
   complete, delete across todos, notes, ideas, reminders, bookmarks, habits,
   meetings, emails, and calendar events
 - **File import the agent can read** — drop in PDFs, CSVs, Excel sheets,
@@ -40,10 +40,12 @@ Nothing leaves your device unless you explicitly connect an integration.
 ## Requirements
 
 - macOS 15.4 (Sequoia) or newer
-- Either the **Claude Code CLI** or the **Codex CLI** installed and signed in,
-  **or** an Anthropic / OpenAI API key pasted into Settings (see
-  [SETUP.md](SETUP.md) — Otto invokes the CLI as a subprocess; the CLI
-  manages its own credentials and Otto never touches them)
+- One of the agent backends installed: **Claude Code CLI**, **Codex CLI**, or
+  **Hermes Agent** (Nous Research's open-source ACP-speaking agent) —
+  signed in / configured per its own docs, **or** an Anthropic / OpenAI
+  API key pasted into Settings (Claude / Codex paths). See
+  [SETUP.md](SETUP.md) — Otto invokes each as a subprocess; the agent
+  manages its own credentials and Otto never touches them.
 - Xcode 16+ **only if building from source** (not needed for the prebuilt
   download below)
 
@@ -60,8 +62,8 @@ Grab the latest `Otto.app.zip` from the
      macOS remembers the choice. *Or*
    - In Terminal: `xattr -cr /Applications/Otto.app`, then double-click.
 
-Then jump to [SETUP.md](SETUP.md) to install the Claude Code or Codex CLI and
-sign in.
+Then jump to [SETUP.md](SETUP.md) to install Claude Code, Codex, or Hermes
+and sign in.
 
 ## Build from source
 
@@ -77,7 +79,7 @@ archives, zips with `ditto`, and publishes via the `gh` CLI.
 
 The app will launch with no data and no integrations connected. **Read
 [SETUP.md](SETUP.md) for the full walkthrough** — it covers the minimum
-setup (just signing into Claude Code or Codex), plus step-by-step
+setup (just signing into Claude Code, Codex, or Hermes), plus step-by-step
 instructions for every optional integration (creating your own Google Cloud
 OAuth client, getting a Supabase Personal Access Token, etc.) and where
 your data and credentials live on disk.

@@ -6,6 +6,7 @@ import Foundation
 enum AgentBackend: String, CaseIterable, Identifiable {
     case claude
     case codex
+    case hermes
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum AgentBackend: String, CaseIterable, Identifiable {
         switch self {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
+        case .hermes: return "Hermes"
         }
     }
 
