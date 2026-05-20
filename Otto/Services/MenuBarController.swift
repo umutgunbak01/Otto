@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
+import Sparkle
 
 /// Owns Otto's macOS menu-bar (status-bar) item. Replaces the older
 /// floating HUD: a compact text label that lives alongside the other
@@ -8,11 +9,13 @@ import SwiftUI
 /// the current time and a short countdown to the user's next calendar
 /// event.
 ///
-/// Click → brings Otto's main window forward via `WindowActivator`.
-/// (No right-click menu in v1; ⌘Q from Otto's main window quits.)
+/// Left-click → brings Otto's main window forward via `WindowActivator`.
+/// Right-click → drops a menu with "Check for Updates…" (Sparkle) and
+/// "Quit Otto". The menu is attached transiently so it only shows on
+/// right-click; left-click stays the fast path.
 ///
-/// Lifecycle is driven from `OttoApp`: `install(appState:)` once on
-/// launch when the user has the integration enabled, `uninstall()`
+/// Lifecycle is driven from `OttoApp`: `install(appState:updater:)` once
+/// on launch when the user has the integration enabled, `uninstall()`
 /// to remove the item when the user toggles it off in Settings.
 @MainActor
 final class MenuBarController: NSObject {
@@ -21,19 +24,22 @@ final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem?
     private var timer: Timer?
     private weak var appState: AppState?
+    private var updater: SPUStandardUpdaterController?
 
     var isInstalled: Bool { statusItem != nil }
 
     // MARK: - Install / Uninstall
 
-    func install(appState: AppState) {
+    func install(appState: AppState, updater: SPUStandardUpdaterController) {
         guard statusItem == nil else { return }
         self.appState = appState
+        self.updater = updater
 
         // `variableLength` lets the label grow with the countdown text.
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.target = self
         item.button?.action = #selector(handleClick)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
 
         startTimer()
@@ -107,7 +113,39 @@ final class MenuBarController: NSObject {
     // MARK: - Click
 
     @objc private func handleClick() {
-        WindowActivator.bringToFront()
+        let isRightClick = NSApp.currentEvent?.type == .rightMouseUp
+        if isRightClick {
+            showRightClickMenu()
+        } else {
+            WindowActivator.bringToFront()
+        }
+    }
+
+    private func showRightClickMenu() {
+        guard let item = statusItem else { return }
+        // Transient menu pattern: attach for one click, then detach so
+        // left-clicks keep their direct action instead of popping the menu.
+        item.menu = makeRightClickMenu()
+        item.button?.performClick(nil)
+        item.menu = nil
+    }
+
+    private func makeRightClickMenu() -> NSMenu {
+        let menu = NSMenu()
+        let check = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        check.target = updater
+        menu.addItem(check)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(
+            title: "Quit Otto",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        ))
+        return menu
     }
 }
 #endif

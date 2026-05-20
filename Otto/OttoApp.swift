@@ -2,6 +2,7 @@ import SwiftUI
 import UserNotifications
 #if os(macOS)
 import AppKit
+import Sparkle
 #endif
 
 @main
@@ -13,6 +14,19 @@ struct OttoApp: App {
     /// replaces the floating HUD that used to live here.
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
+
+    #if os(macOS)
+    /// Sparkle auto-update controller. Polls the appcast at SUFeedURL
+    /// (see Info.plist) on launch and on the user's manual trigger.
+    /// `startingUpdater: true` lets Sparkle schedule background checks
+    /// per SUEnableAutomaticChecks; we still expose a manual entry
+    /// point via the app menu and the menu-bar status item.
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -53,6 +67,15 @@ struct OttoApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 900, height: 700)
+        #if os(macOS)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updaterController.checkForUpdates(nil)
+                }
+            }
+        }
+        #endif
         // No HUD Window scene anymore — the menu-bar status item
         // (MenuBarController) covers the same surface (time + next
         // event) without floating on top of every other window.
@@ -65,7 +88,7 @@ struct OttoApp: App {
     #if os(macOS)
     private func syncMenuBar() {
         if menuBarEnabled {
-            MenuBarController.shared.install(appState: appState)
+            MenuBarController.shared.install(appState: appState, updater: updaterController)
         } else {
             MenuBarController.shared.uninstall()
         }
