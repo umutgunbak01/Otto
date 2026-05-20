@@ -56,11 +56,14 @@ Grab the latest `Otto.app.zip` from the
 
 1. Download `Otto.app.zip` and unzip it.
 2. Drag `Otto.app` into `/Applications`.
-3. **First launch:** the build is unsigned, so macOS Gatekeeper will block it.
-   Either:
-   - Right-click `Otto.app` → **Open** → click **Open** in the warning dialog.
-     macOS remembers the choice. *Or*
-   - In Terminal: `xattr -cr /Applications/Otto.app`, then double-click.
+3. Double-click to launch. Builds are Developer-ID-signed and notarized,
+   so macOS opens them without the Gatekeeper warning.
+
+After install, Otto checks for updates on launch (and once a day while
+running) via [Sparkle](https://sparkle-project.org). New versions install
+in-app — you won't need to redownload. To trigger a check manually:
+right-click the Otto menu bar icon → **Check for Updates…**, or use
+**Otto → Check for Updates…** in the menu bar.
 
 Then jump to [SETUP.md](SETUP.md) to install Claude Code, Codex, or Hermes
 and sign in.
@@ -71,11 +74,34 @@ and sign in.
 2. Open `Otto.xcodeproj` in Xcode
 3. In the **Otto** target → **Signing & Capabilities**, set
    `Development Team` to your own Apple Developer team
-4. (Optional) Change the bundle identifier from `com.example.Otto` to your own
+4. (Optional) Change the bundle identifier from `com.umutgunbak.Otto` to your own
 5. Build and run
 
-To cut a new release, see [`scripts/release.sh`](scripts/release.sh) — it
-archives, zips with `ditto`, and publishes via the `gh` CLI.
+To cut a new release:
+
+1. In Xcode: **Product → Archive**.
+2. In Organizer: **Distribute App → Developer ID**. Let Xcode upload to
+   Apple, wait for the green "Ready to Distribute" / notarization-complete
+   status, then **Export** to a folder. You'll have a stapled `Otto.app`
+   on disk.
+3. Run [`scripts/release.sh`](scripts/release.sh) with the version tag and
+   the path to that exported app — it validates the notarization staple,
+   zips with `ditto`, EdDSA-signs the zip for Sparkle, prepends a new
+   `<item>` to `docs/appcast.xml`, publishes via `gh`, and pushes the
+   updated feed:
+
+   ```
+   scripts/release.sh v1.0.1 ~/Desktop/Otto-1.0.1/Otto.app
+   ```
+
+One-time setup before the very first release: generate the Sparkle
+update-signing keypair:
+
+```
+$(find ~/Library/Developer/Xcode/DerivedData -name generate_keys | head -1)
+```
+
+and paste the printed public key into `Otto/Info.plist` under `SUPublicEDKey`.
 
 The app will launch with no data and no integrations connected. **Read
 [SETUP.md](SETUP.md) for the full walkthrough** — it covers the minimum
