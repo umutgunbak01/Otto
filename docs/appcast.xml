@@ -1,9 +1,17 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+<?xml version='1.0' encoding='utf-8'?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
     <title>Otto</title>
     <link>https://umutgunbak01.github.io/Otto/appcast.xml</link>
     <description>Otto auto-update feed</description>
     <language>en</language>
+    <item>
+      <title>Otto 1.2</title>
+      <pubDate>Wed, 20 May 2026 20:05:48 +0000</pubDate>
+      <sparkle:version>2</sparkle:version>
+      <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.4</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/umutgunbak01/Otto/releases/download/v1.2/Otto.app.zip" length="10925933" type="application/octet-stream" sparkle:edSignature="xgY0EfS6RExFo7PV3KZtbaXJ3ahhiFx7Eb0o1SQHNr+pW+wQ7bSWp1Y5Db5s52ZQW19kkRVeJUgOiHfeiZchBQ==" />
+    </item>
   </channel>
 </rss>
