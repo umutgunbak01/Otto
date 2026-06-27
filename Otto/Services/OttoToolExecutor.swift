@@ -117,6 +117,9 @@ final class OttoToolExecutor {
             case "email":      return appState.emails.first(where: { $0.id == id })?.subject
             case "connection": return appState.connections.first(where: { $0.id == id })?.fullName
             case "network":    return appState.networkEntries.first(where: { $0.id == id }).map { $0.name.isEmpty ? $0.company : $0.name }
+            case "company":    return appState.companies.first(where: { $0.id == id })?.name
+            case "event":      return appState.events.first(where: { $0.id == id })?.name
+            case "community":  return appState.communities.first(where: { $0.id == id })?.name
             case "habit":      return appState.habits.first(where: { $0.id == id })?.title
             case "x_post":     return appState.xPosts.first(where: { $0.id == id }).map { "@\($0.authorUsername): \(String($0.text.prefix(60)))" }
             case "x_follower": return appState.xFollowers.first(where: { $0.id == id }).map { "\($0.displayName) (@\($0.username))" }
@@ -410,6 +413,24 @@ final class OttoToolExecutor {
             }
             await appState.deleteFile(f)
             return ok("Deleted file \(id.uuidString).", summary: "Deleted file: \(f.name)")
+        case "company":
+            guard let c = appState.companies.first(where: { $0.id == id }) else {
+                return err("No company with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteCompany(c)
+            return ok("Deleted company \(id.uuidString).", summary: "Deleted company: \(c.name)")
+        case "event":
+            guard let e = appState.events.first(where: { $0.id == id }) else {
+                return err("No event with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteEvent(e)
+            return ok("Deleted event \(id.uuidString).", summary: "Deleted event: \(e.name)")
+        case "community":
+            guard let cm = appState.communities.first(where: { $0.id == id }) else {
+                return err("No community with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteCommunity(cm)
+            return ok("Deleted community \(id.uuidString).", summary: "Deleted community: \(cm.name)")
         default:
             return err("Unsupported delete type: \(type).", summary: "Delete failed")
         }
@@ -426,7 +447,7 @@ final class OttoToolExecutor {
         }()
         let types: Set<String> = {
             if let arr = input["types"] as? [String], !arr.isEmpty { return Set(arr.map { $0.lowercased() }) }
-            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "file", "x_post", "x_follower", "x_dm"]
+            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "file", "x_post", "x_follower", "x_dm"]
         }()
         let limit = max(1, min((input["limit"] as? Int) ?? 20, 100))
         let sortKey = (string(input, "sort") ?? "recent").lowercased()
@@ -523,6 +544,30 @@ final class OttoToolExecutor {
                                      title: n.name.isEmpty ? n.company : n.name,
                                      snippet: n.displayInfo,
                                      date: n.updatedAt, dueDate: nil))
+            }
+        }
+        if types.contains("company") {
+            for c in appState.companies where textMatches([c.searchableContent]) {
+                let snippet = [c.type.label, c.location, c.isCustomer ? "Customer" : "", c.formattedCommitment ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+                matches.append(.init(id: c.id, type: "company", title: c.name,
+                                     snippet: snippet, date: c.updatedAt, dueDate: nil))
+            }
+        }
+        if types.contains("event") {
+            for e in appState.events where textMatches([e.searchableContent]) {
+                let snippet = [e.type.label, e.location, e.status.label, e.dateRangeText]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+                matches.append(.init(id: e.id, type: "event", title: e.name,
+                                     snippet: snippet, date: e.updatedAt, dueDate: e.startDate))
+            }
+        }
+        if types.contains("community") {
+            for cm in appState.communities where textMatches([cm.searchableContent]) {
+                let snippet = [cm.type.label, cm.location, cm.builderSupportPerk ? "Builder perk" : ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+                matches.append(.init(id: cm.id, type: "community", title: cm.name,
+                                     snippet: snippet, date: cm.updatedAt, dueDate: nil))
             }
         }
         if types.contains("file") {
@@ -752,6 +797,56 @@ final class OttoToolExecutor {
                     }
                 }
                 payload = out
+            }
+        case "company":
+            if let c = appState.companies.first(where: { $0.id == id }) {
+                payload = [
+                    "id": c.id.uuidString, "type": "company",
+                    "name": c.name,
+                    "company_type": c.type.label,
+                    "location": c.location,
+                    "is_customer": c.isCustomer,
+                    "commitment_amount": c.commitmentAmount ?? NSNull(),
+                    "website": c.website ?? "",
+                    "tags": c.tags,
+                    "notes": c.notes,
+                    "linked_people": c.linkedNetworkEntryIds.compactMap { lid in
+                        appState.networkEntries.first(where: { $0.id == lid }).map {
+                            ["id": $0.id.uuidString, "name": $0.name, "role": $0.displayInfo]
+                        }
+                    },
+                    "updated_at": df.string(from: c.updatedAt)
+                ]
+            }
+        case "event":
+            if let e = appState.events.first(where: { $0.id == id }) {
+                payload = [
+                    "id": e.id.uuidString, "type": "event",
+                    "name": e.name,
+                    "event_type": e.type.label,
+                    "location": e.location,
+                    "status": e.status.label,
+                    "start_date": e.startDate.map { df.string(from: $0) } ?? NSNull(),
+                    "end_date": e.endDate.map { df.string(from: $0) } ?? NSNull(),
+                    "budget_amount": e.budgetAmount ?? NSNull(),
+                    "tags": e.tags,
+                    "notes": e.notes,
+                    "updated_at": df.string(from: e.updatedAt)
+                ]
+            }
+        case "community":
+            if let cm = appState.communities.first(where: { $0.id == id }) {
+                payload = [
+                    "id": cm.id.uuidString, "type": "community",
+                    "name": cm.name,
+                    "community_type": cm.type.label,
+                    "location": cm.location,
+                    "builder_support_perk": cm.builderSupportPerk,
+                    "url": cm.url ?? "",
+                    "tags": cm.tags,
+                    "notes": cm.notes,
+                    "updated_at": df.string(from: cm.updatedAt)
+                ]
             }
         case "file":
             if let f = appState.files.first(where: { $0.id == id }) {
