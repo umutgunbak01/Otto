@@ -12,6 +12,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
     case networkHub = "networkHub"
     case company = "company"
     case event = "event"
+    case community = "community"
     case file = "file"
     case xPost = "xPost"
     case xFollower = "xFollower"
@@ -33,6 +34,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .networkHub: return "Network Hub"
         case .company: return "Companies"
         case .event: return "Events"
+        case .community: return "Communities"
         case .file: return "Files"
         case .xPost: return "X Posts"
         case .xFollower: return "X Followers"
@@ -54,6 +56,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .networkHub: return "point.3.connected.trianglepath.dotted"
         case .company: return "building.2"
         case .event: return "calendar"
+        case .community: return "person.3"
         case .file: return "doc.fill"
         case .xPost: return "text.bubble.fill"
         case .xFollower: return "person.2.fill"
@@ -75,6 +78,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .networkHub: return Theme.Colors.hobby
         case .company:    return Theme.Colors.green
         case .event:      return Theme.Colors.amber
+        case .community:  return Theme.Colors.aiAccent
         case .file:       return Theme.Colors.textDim
         case .xPost:      return Theme.Colors.aiAccent
         case .xFollower:  return Theme.Colors.green

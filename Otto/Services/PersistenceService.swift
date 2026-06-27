@@ -15,6 +15,7 @@ struct OttoDataStore: Codable {
     var connectionCustomFields: [CustomFieldDefinition]
     var companies: [Company]
     var events: [Event]
+    var communities: [Community]
     var domainTags: [DomainTag]
     var importedMeetings: [ImportedMeeting]
     var xPosts: [XPost]
@@ -34,7 +35,7 @@ struct OttoDataStore: Codable {
         case todos, notes, ideas, reminders, bookmarks, meetings, files, emails, calendarEvents, connections
         case connectionCustomFields
         case networkEntries
-        case companies, events
+        case companies, events, communities
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
@@ -55,6 +56,7 @@ struct OttoDataStore: Codable {
         connectionCustomFields: [CustomFieldDefinition] = [],
         companies: [Company] = [],
         events: [Event] = [],
+        communities: [Community] = [],
         xPosts: [XPost] = [],
         xFollowers: [XFollower] = [],
         xDirectMessages: [XDirectMessage] = [],
@@ -83,6 +85,7 @@ struct OttoDataStore: Codable {
         self.connectionCustomFields = connectionCustomFields
         self.companies = companies
         self.events = events
+        self.communities = communities
         self.xPosts = xPosts
         self.xFollowers = xFollowers
         self.xDirectMessages = xDirectMessages
@@ -123,6 +126,7 @@ struct OttoDataStore: Codable {
         // Companies & Events are newer additions — fall back to empty for older stores.
         companies = (try? container.decode([Company].self, forKey: .companies)) ?? []
         events = (try? container.decode([Event].self, forKey: .events)) ?? []
+        communities = (try? container.decode([Community].self, forKey: .communities)) ?? []
         // X data may not exist in old data
         xPosts = (try? container.decode([XPost].self, forKey: .xPosts)) ?? []
         xFollowers = (try? container.decode([XFollower].self, forKey: .xFollowers)) ?? []
@@ -323,6 +327,12 @@ actor PersistenceService {
     func updateEvents(_ events: [Event]) async throws {
         var store = try await load()
         store.events = events
+        try await save(store)
+    }
+
+    func updateCommunities(_ communities: [Community]) async throws {
+        var store = try await load()
+        store.communities = communities
         try await save(store)
     }
 

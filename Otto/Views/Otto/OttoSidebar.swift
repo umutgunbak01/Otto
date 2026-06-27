@@ -296,6 +296,7 @@ struct OttoSidebar: View {
             case .networkHub: return s.networkEntries.count
             case .company:    return s.companies.count
             case .event:      return s.events.count
+            case .community:  return s.communities.count
             case .file:       return s.files.count
             case .xPost:      return s.xPosts.count
             case .xFollower:  return s.xFollowers.count
@@ -319,6 +320,7 @@ struct OttoSidebar: View {
             NavType(tab: .networkHub, label: "NETWORK HUB", icon: "⬡", counter: "—"),
             NavType(tab: .company,    label: "COMPANIES",   icon: "▦", counter: "—"),
             NavType(tab: .event,      label: "EVENTS",      icon: "◈", counter: "—"),
+            NavType(tab: .community,  label: "COMMUNITIES", icon: "❖", counter: "—"),
             NavType(tab: .file,       label: "FILES",       icon: "◰", counter: "1"),
             NavType(tab: .xPost,      label: "X-POSTS",     icon: "✕", counter: "—"),
             NavType(tab: .xFollower,  label: "X-FOLLOWERS", icon: "⊙", counter: "—"),

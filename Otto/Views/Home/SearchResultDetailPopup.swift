@@ -159,8 +159,8 @@ struct SearchResultDetailPopup: View {
                     .foregroundStyle(Theme.Colors.secondaryText)
                 }
             }
-        case .company, .event:
-            // Companies & Events aren't part of universal search results.
+        case .company, .event, .community:
+            // Companies, Events & Communities aren't part of universal search results.
             EmptyView()
         case .habit:
             // Habit detail isn't surfaced through the chat preview popup —

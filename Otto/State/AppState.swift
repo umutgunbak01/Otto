@@ -82,9 +82,10 @@ final class AppState {
     /// User-defined CRM columns. Stable across renames (UUID-keyed in Connection.customFields).
     var connectionCustomFields: [CustomFieldDefinition] = []
 
-    // Companies & Events (manual CRM — drive the location map)
+    // Companies, Events & Communities (manual CRM — drive the location map)
     var companies: [Company] = []
     var events: [Event] = []
+    var communities: [Community] = []
     /// Cached city → coordinate map, hydrated from CityGeocoder so map pins
     /// render instantly and re-render as new cities resolve.
     var cityCoordinates: [String: CityCoordinate] = [:]
@@ -270,6 +271,7 @@ final class AppState {
             pruneOrphanedCustomFieldValues()
             companies = store.companies
             events = store.events
+            communities = store.communities
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -422,6 +424,12 @@ final class AppState {
             events.insert(event, at: 0)
             try? await persistence.updateEvents(events)
             selectedTab = .event
+
+        case .community:
+            let community = Community(name: input)
+            communities.insert(community, at: 0)
+            try? await persistence.updateCommunities(communities)
+            selectedTab = .community
 
         case .file:
             // Files are imported via file picker, not created manually via input
@@ -948,6 +956,33 @@ final class AppState {
         try? await persistence.updateEvents(events)
     }
 
+    // MARK: - Community Operations
+
+    @MainActor
+    func addCommunity(_ community: Community) async {
+        communities.insert(community, at: 0)
+        try? await persistence.updateCommunities(communities)
+    }
+
+    @MainActor
+    func updateCommunity(_ community: Community) async {
+        guard let index = communities.firstIndex(where: { $0.id == community.id }) else { return }
+        var updated = community
+        updated.updatedAt = Date()
+        communities[index] = updated
+        try? await persistence.updateCommunities(communities)
+    }
+
+    @MainActor
+    func deleteCommunity(_ community: Community) async {
+        let captured = community
+        undoService.pushUndo(label: "Community deleted") { [self] in
+            await self.addCommunity(captured)
+        }
+        communities.removeAll { $0.id == community.id }
+        try? await persistence.updateCommunities(communities)
+    }
+
     // MARK: - City Geocoding
 
     /// Resolve coordinates for every city referenced by connections, companies
@@ -961,7 +996,8 @@ final class AppState {
             connections: connections,
             companies: companies,
             events: events,
-            networkEntries: networkEntries
+            networkEntries: networkEntries,
+            communities: communities
         )
         let missing = cities.filter { cityCoordinates[$0.key] == nil }
         guard !missing.isEmpty else { return }
@@ -1569,7 +1605,7 @@ final class AppState {
             try? await persistence.updateReminders(reminders)
             selectedTab = .reminder
 
-        case .bookmark, .meeting, .email, .connection, .company, .event, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
+        case .bookmark, .meeting, .email, .connection, .company, .event, .community, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
             // Not applicable for email conversion
             break
         }
@@ -2654,8 +2690,8 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
-        case .company, .event:
-            // Companies and Events live in their own tabs, not produced by conversion
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2742,8 +2778,8 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
-        case .company, .event:
-            // Companies and Events live in their own tabs, not produced by conversion
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2837,8 +2873,8 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
-        case .company, .event:
-            // Companies and Events live in their own tabs, not produced by conversion
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2923,8 +2959,8 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
-        case .company, .event:
-            // Companies and Events live in their own tabs, not produced by conversion
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -3008,8 +3044,8 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
-        case .company, .event:
-            // Companies and Events live in their own tabs, not produced by conversion
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:

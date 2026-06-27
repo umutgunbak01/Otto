@@ -221,6 +221,7 @@ struct MainView: View {
         case .networkHub: NetworkHubListView()
         case .company:    CompanyListView()
         case .event:      EventListView()
+        case .community:  CommunityListView()
         case .file:       FilesListView()
         case .xPost:      XPostListView()
         case .xFollower:  XFollowerListView()

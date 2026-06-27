@@ -19,6 +19,7 @@ struct MapView: View {
             companies: appState.companies,
             events: appState.events,
             networkEntries: appState.networkEntries,
+            communities: appState.communities,
             coordinates: appState.cityCoordinates
         )
         let located = groups.filter { $0.hasCoordinate }
@@ -110,6 +111,7 @@ struct MapView: View {
             statPill(icon: "person.2", value: "\(appState.connections.count)", label: "people")
             statPill(icon: "building.2", value: "\(appState.companies.count)", label: "cos")
             statPill(icon: "calendar", value: "\(appState.events.count)", label: "events")
+            statPill(icon: "person.3", value: "\(appState.communities.count)", label: "communities")
 
             Spacer()
 

@@ -24,9 +24,10 @@ struct CityGroup: Identifiable {
     var companies: [Company]
     var events: [Event]
     var networkEntries: [NetworkEntry]
+    var communities: [Community]
 
     var id: String { key }
-    var totalCount: Int { connections.count + companies.count + events.count + networkEntries.count }
+    var totalCount: Int { connections.count + companies.count + events.count + networkEntries.count + communities.count }
     var hasCoordinate: Bool { coordinate != nil }
 }
 
@@ -41,6 +42,7 @@ enum CityIndex {
         companies: [Company],
         events: [Event],
         networkEntries: [NetworkEntry],
+        communities: [Community],
         coordinates: [String: CityCoordinate]
     ) -> [CityGroup] {
         var groups: [String: CityGroup] = [:]
@@ -50,7 +52,7 @@ enum CityIndex {
             if groups[key] == nil {
                 groups[key] = CityGroup(
                     key: key, displayName: display, coordinate: coordinates[key],
-                    connections: [], companies: [], events: [], networkEntries: []
+                    connections: [], companies: [], events: [], networkEntries: [], communities: []
                 )
             }
             return key
@@ -60,6 +62,7 @@ enum CityIndex {
         for co in companies { if let k = ensure(co.location) { groups[k]?.companies.append(co) } }
         for e in events { if let k = ensure(e.location) { groups[k]?.events.append(e) } }
         for n in networkEntries { if let k = ensure(n.location) { groups[k]?.networkEntries.append(n) } }
+        for cm in communities { if let k = ensure(cm.location) { groups[k]?.communities.append(cm) } }
 
         return Array(groups.values).sorted { $0.totalCount > $1.totalCount }
     }
@@ -69,7 +72,8 @@ enum CityIndex {
         connections: [Connection],
         companies: [Company],
         events: [Event],
-        networkEntries: [NetworkEntry]
+        networkEntries: [NetworkEntry],
+        communities: [Community]
     ) -> [String: String] {
         var out: [String: String] = [:]
         func add(_ raw: String) {
@@ -79,6 +83,7 @@ enum CityIndex {
         companies.forEach { add($0.location) }
         events.forEach { add($0.location) }
         networkEntries.forEach { add($0.location) }
+        communities.forEach { add($0.location) }
         return out
     }
 }

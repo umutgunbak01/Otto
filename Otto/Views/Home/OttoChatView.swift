@@ -1341,7 +1341,7 @@ private struct ItemPreviewCard: View {
         case .company:    return appState.companies.first(where: { $0.id == itemId })?.name
         case .event:      return appState.events.first(where: { $0.id == itemId })?.name
         case .habit:      return appState.habits.first(where: { $0.id == itemId })?.title
-        case .file, .xPost, .xFollower, .xDm, .networkHub: return nil
+        case .community, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
         }
     }
 
@@ -1358,7 +1358,7 @@ private struct ItemPreviewCard: View {
             case .company:    return appState.companies.first(where: { $0.id == itemId })?.location
             case .event:      return appState.events.first(where: { $0.id == itemId })?.location
             case .habit:      return appState.habits.first(where: { $0.id == itemId })?.notes
-            case .reminder, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
+            case .reminder, .community, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
             }
         }()
         guard let raw else { return nil }
@@ -1409,7 +1409,7 @@ private struct ItemPreviewCard: View {
             // Habit chips currently jump straight to the Habits tab rather
             // than opening the shared search-result popup.
             appState.selectedTab = .habit
-        case .company, .event, .file, .xPost, .xFollower, .xDm, .networkHub:
+        case .company, .event, .community, .file, .xPost, .xFollower, .xDm, .networkHub:
             break  // not referenceable from chat; schema doesn't include these types
         }
     }

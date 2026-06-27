@@ -12,7 +12,7 @@ struct CityTableView: View {
 
     enum CityTab: String, CaseIterable, Identifiable {
         case all = "All", network = "Network", connections = "Connections"
-        case companies = "Companies", events = "Events"
+        case companies = "Companies", events = "Events", communities = "Communities"
         var id: String { rawValue }
     }
 
@@ -23,6 +23,7 @@ struct CityTableView: View {
         case .connections: return group.connections.count
         case .companies: return group.companies.count
         case .events: return group.events.count
+        case .communities: return group.communities.count
         }
     }
 
@@ -38,6 +39,7 @@ struct CityTableView: View {
                 case .connections: CityConnectionsTable(connections: group.connections, city: group.displayName)
                 case .companies:   CityCompaniesTable(companies: group.companies, city: group.displayName)
                 case .events:      CityEventsTable(events: group.events, city: group.displayName)
+                case .communities: CityCommunitiesTable(communities: group.communities, city: group.displayName)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -509,6 +511,87 @@ private struct CityEventsTable: View {
     }
 }
 
+// MARK: - Communities table
+
+private struct CityCommunitiesTable: View {
+    let communities: [Community]
+    let city: String
+    @Environment(AppState.self) private var appState
+
+    @State private var search = ""
+    @State private var sort: Sort = .name
+    @State private var fType: CommunityType?
+    @State private var perkOnly = false
+    @State private var editingCommunity: Community?
+
+    enum Sort: String, CaseIterable { case name = "Name", recent = "Recent", type = "Type" }
+    private enum C { static let open: CGFloat = 32, name: CGFloat = 200, type: CGFloat = 145, perk: CGFloat = 110, url: CGFloat = 190, notes: CGFloat = 260
+        static var total: CGFloat { open + name + type + perk + url + notes } }
+
+    private var rows: [Community] {
+        var r = communities
+        if !search.isEmpty { r = r.filter { $0.searchableContent.localizedCaseInsensitiveContains(search) } }
+        if let t = fType { r = r.filter { $0.type == t } }
+        if perkOnly { r = r.filter { $0.builderSupportPerk } }
+        switch sort {
+        case .name: r.sort { $0.name.lowercased() < $1.name.lowercased() }
+        case .recent: r.sort { $0.updatedAt > $1.updatedAt }
+        case .type: r.sort { $0.type.label < $1.type.label }
+        }
+        return r
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Toolbar {
+                TableSearchField(text: $search, placeholder: "Search communities…")
+                Button { perkOnly.toggle() } label: { TableFilterChip(icon: "gift", text: "Builder Perk", isActive: perkOnly) }.buttonStyle(.plain)
+                Menu { ForEach(Sort.allCases, id: \.self) { o in Button { sort = o } label: { Label(o.rawValue, systemImage: sort == o ? "checkmark" : "") } } }
+                    label: { TableFilterChip(icon: "arrow.up.arrow.down", text: sort.rawValue, isActive: false) }.menuStyle(.borderlessButton)
+                Menu {
+                    Button { fType = nil } label: { Text("All Types") }
+                    Divider()
+                    ForEach(CommunityType.allCases) { t in Button { fType = t } label: { Label(t.label, systemImage: t.icon) } }
+                } label: { TableFilterChip(icon: "square.grid.2x2", text: fType?.label ?? "Type", isActive: fType != nil) }.menuStyle(.borderlessButton)
+            }
+            if rows.isEmpty {
+                CityEmpty(icon: "person.3", text: "No communities in \(city)")
+            } else {
+                InlineTable(totalWidth: C.total) {
+                    HStack(spacing: 0) {
+                        TableHeaderCell(title: "", width: C.open)
+                        TableHeaderCell(title: "NAME", width: C.name)
+                        TableHeaderCell(title: "TYPE", width: C.type)
+                        TableHeaderCell(title: "PERK", width: C.perk)
+                        TableHeaderCell(title: "URL", width: C.url)
+                        TableHeaderCell(title: "NOTES", width: C.notes)
+                    }
+                } rows: {
+                    ForEach(rows) { cm in
+                        HStack(spacing: 0) {
+                            OpenRowCell(width: C.open) { editingCommunity = cm }
+                            InlineTextCell(text: cm.name, width: C.name, placeholder: "Name", bold: true) { v in commit(cm) { $0.name = v } }
+                            InlineEnumCell(width: C.type, value: cm.type, options: CommunityType.allCases, title: { $0.label }, icon: { $0.icon }, color: { $0.color }) { v in commit(cm) { $0.type = v } }
+                            InlineToggleCell(isOn: cm.builderSupportPerk, width: C.perk, onText: "Perk") { v in commit(cm) { $0.builderSupportPerk = v } }
+                            InlineTextCell(text: cm.url ?? "", width: C.url, placeholder: "—", tint: Theme.Colors.cyanDim) { v in commit(cm) { $0.url = v.isEmpty ? nil : v } }
+                            InlineTextCell(text: cm.notes, width: C.notes) { v in commit(cm) { $0.notes = v } }
+                        }
+                        .frame(height: TableMetrics.rowHeight)
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                    }
+                }
+            }
+        }
+        .sheet(item: $editingCommunity) { cm in
+            CommunityEditorSheet(community: cm).environment(appState)
+        }
+    }
+
+    private func commit(_ cm: Community, _ mutate: (inout Community) -> Void) {
+        var u = cm; mutate(&u); Task { await appState.updateCommunity(u) }
+    }
+}
+
 // MARK: - "All" overview table
 
 private struct CityAllTable: View {
@@ -529,6 +612,7 @@ private struct CityAllTable: View {
         all += group.connections.map(CityItem.connection)
         all += group.companies.map(CityItem.company)
         all += group.events.map(CityItem.event)
+        all += group.communities.map(CityItem.community)
         if !search.isEmpty { all = all.filter { $0.searchText.localizedCaseInsensitiveContains(search) } }
         switch sort {
         case .az: all.sort { $0.name.lowercased() < $1.name.lowercased() }
@@ -583,7 +667,7 @@ private struct IDItem: Identifiable { let id: UUID }
 
 /// Unified row for the "All" tab.
 private enum CityItem: Identifiable {
-    case network(NetworkEntry), connection(Connection), company(Company), event(Event)
+    case network(NetworkEntry), connection(Connection), company(Company), event(Event), community(Community)
 
     var id: String {
         switch self {
@@ -591,42 +675,49 @@ private enum CityItem: Identifiable {
         case .connection(let c): return "c-\(c.id)"
         case .company(let co): return "o-\(co.id)"
         case .event(let ev): return "e-\(ev.id)"
+        case .community(let cm): return "m-\(cm.id)"
         }
     }
-    var kindRank: Int { switch self { case .network: 0; case .connection: 1; case .company: 2; case .event: 3 } }
-    var kindLabel: String { switch self { case .network: "Network"; case .connection: "Person"; case .company: "Company"; case .event: "Event" } }
+    var kindRank: Int { switch self { case .network: 0; case .connection: 1; case .company: 2; case .event: 3; case .community: 4 } }
+    var kindLabel: String { switch self { case .network: "Network"; case .connection: "Person"; case .company: "Company"; case .event: "Event"; case .community: "Community" } }
     var kindIcon: String { switch self {
         case .network: ContentType.networkHub.iconName; case .connection: "person.fill"
-        case .company: "building.2.fill"; case .event: "calendar" } }
+        case .company: "building.2.fill"; case .event: "calendar"; case .community: "person.3.fill" } }
     var color: Color { switch self {
         case .network: ContentType.networkHub.color; case .connection: ContentType.connection.color
-        case .company: ContentType.company.color; case .event: ContentType.event.color } }
+        case .company: ContentType.company.color; case .event: ContentType.event.color
+        case .community: ContentType.community.color } }
     var name: String { switch self {
         case .network(let e): e.name; case .connection(let c): c.fullName
-        case .company(let co): co.name; case .event(let ev): ev.name } }
+        case .company(let co): co.name; case .event(let ev): ev.name; case .community(let cm): cm.name } }
     var detail: String { switch self {
         case .network(let e): e.displayInfo
         case .connection(let c): c.displayInfo
         case .company(let co): co.type.label
-        case .event(let ev): [ev.type.label, ev.dateRangeText].filter { !$0.isEmpty }.joined(separator: " · ") } }
+        case .event(let ev): [ev.type.label, ev.dateRangeText].filter { !$0.isEmpty }.joined(separator: " · ")
+        case .community(let cm): cm.type.label } }
     var tag: String { switch self {
         case .network(let e): e.closeness.label
         case .connection(let c): c.closeness.label
         case .company(let co): co.isCustomer ? "Customer" : "Prospect"
-        case .event(let ev): ev.status.label } }
+        case .event(let ev): ev.status.label
+        case .community(let cm): cm.builderSupportPerk ? "Builder Perk" : "—" } }
     var tagIcon: String { switch self {
         case .network(let e): e.closeness.icon
         case .connection(let c): c.closeness.icon
         case .company(let co): co.isCustomer ? "checkmark.seal.fill" : "circle"
-        case .event(let ev): ev.status.icon } }
+        case .event(let ev): ev.status.icon
+        case .community(let cm): cm.builderSupportPerk ? "gift.fill" : "circle" } }
     var tagColor: Color { switch self {
         case .network(let e): e.closeness == .unknown ? Theme.Colors.tertiaryText : e.closeness.color
         case .connection(let c): c.closeness == .unknown ? Theme.Colors.tertiaryText : c.closeness.color
         case .company(let co): co.isCustomer ? Theme.Colors.green : Theme.Colors.tertiaryText
-        case .event(let ev): ev.status.color } }
+        case .event(let ev): ev.status.color
+        case .community(let cm): cm.builderSupportPerk ? Theme.Colors.amber : Theme.Colors.tertiaryText } }
     var searchText: String { switch self {
         case .network(let e): e.searchableContent; case .connection(let c): c.searchableContent
-        case .company(let co): co.searchableContent; case .event(let ev): ev.searchableContent } }
+        case .company(let co): co.searchableContent; case .event(let ev): ev.searchableContent
+        case .community(let cm): cm.searchableContent } }
 
     func commitName(_ v: String, _ appState: AppState) {
         switch self {
@@ -639,6 +730,7 @@ private enum CityItem: Identifiable {
             Task { await appState.updateConnection(u) }
         case .company(let co): var u = co; u.name = v; Task { await appState.updateCompany(u) }
         case .event(let ev): var u = ev; u.name = v; Task { await appState.updateEvent(u) }
+        case .community(let cm): var u = cm; u.name = v; Task { await appState.updateCommunity(u) }
         }
     }
 
@@ -653,6 +745,8 @@ private enum CityItem: Identifiable {
             CompanyEditorSheet(company: co).environment(appState)
         case .event(let ev):
             EventEditorSheet(event: ev).environment(appState)
+        case .community(let cm):
+            CommunityEditorSheet(community: cm).environment(appState)
         }
     }
 }
