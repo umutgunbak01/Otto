@@ -470,7 +470,7 @@ private struct NHEnumCell<T: Hashable>: View {
 
 // MARK: - Editor sheet
 
-private struct NetworkEntryEditor: View {
+struct NetworkEntryEditor: View {
     static let newSentinel = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
     let entry: NetworkEntry?

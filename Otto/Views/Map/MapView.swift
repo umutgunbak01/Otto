@@ -2,8 +2,8 @@ import SwiftUI
 import MapKit
 
 /// Location map: one pin per city that appears anywhere in your data
-/// (connections + companies + events). Selecting a pin opens a side panel
-/// listing the people, companies and events there.
+/// (network-hub entries + connections + companies + events). Selecting a pin
+/// opens a side panel listing everything you know there.
 struct MapView: View {
     @Environment(AppState.self) private var appState
 
@@ -14,6 +14,7 @@ struct MapView: View {
     @State private var connectionTarget: ConnTarget?
     @State private var companyTarget: CompanyTarget?
     @State private var eventTarget: EventTarget?
+    @State private var networkTarget: NetworkTarget?
 
     var body: some View {
         // Build the city index once per render, then derive everything from it
@@ -23,6 +24,7 @@ struct MapView: View {
             connections: appState.connections,
             companies: appState.companies,
             events: appState.events,
+            networkEntries: appState.networkEntries,
             coordinates: appState.cityCoordinates
         )
         let located = groups.filter { $0.hasCoordinate }
@@ -40,7 +42,8 @@ struct MapView: View {
                         onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedKey = nil } },
                         onSelectConnection: { connectionTarget = ConnTarget(id: $0.id, connection: $0) },
                         onSelectCompany: { companyTarget = CompanyTarget(id: $0.id, company: $0) },
-                        onSelectEvent: { eventTarget = EventTarget(id: $0.id, event: $0) }
+                        onSelectEvent: { eventTarget = EventTarget(id: $0.id, event: $0) },
+                        onSelectNetworkEntry: { networkTarget = NetworkTarget(id: $0.id, entry: $0) }
                     )
                     .frame(width: 340)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -58,6 +61,11 @@ struct MapView: View {
         }
         .sheet(item: $eventTarget) { target in
             EventEditorSheet(event: target.event).environment(appState)
+        }
+        .sheet(item: $networkTarget) { target in
+            NetworkEntryEditor(entry: target.entry, onClose: { networkTarget = nil })
+                .environment(appState)
+                .frame(minWidth: 600, minHeight: 640)
         }
     }
 
@@ -98,7 +106,7 @@ struct MapView: View {
                 Text("No locations yet")
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.Colors.tertiaryText)
-                Text("Add a city to a company or event, or import connections with locations.")
+                Text("Add a location to a Network Hub entry, company, or event — or import connections with locations.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.tertiaryText)
                     .multilineTextAlignment(.center)
@@ -126,6 +134,7 @@ struct MapView: View {
                 .shadow(color: Theme.Colors.cyanGlow, radius: 4)
 
             statPill(icon: "mappin", value: "\(located.count)", label: "cities")
+            statPill(icon: "point.3.connected.trianglepath.dotted", value: "\(appState.networkEntries.count)", label: "network")
             statPill(icon: "person.2", value: "\(appState.connections.count)", label: "people")
             statPill(icon: "building.2", value: "\(appState.companies.count)", label: "cos")
             statPill(icon: "calendar", value: "\(appState.events.count)", label: "events")
@@ -176,6 +185,7 @@ struct MapView: View {
     private struct ConnTarget: Identifiable { let id: UUID; let connection: Connection }
     private struct CompanyTarget: Identifiable { let id: UUID; let company: Company }
     private struct EventTarget: Identifiable { let id: UUID; let event: Event }
+    private struct NetworkTarget: Identifiable { let id: UUID; let entry: NetworkEntry }
 }
 
 // MARK: - City Pin

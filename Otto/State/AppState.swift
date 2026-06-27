@@ -960,7 +960,8 @@ final class AppState {
         let cities = CityIndex.uniqueCities(
             connections: connections,
             companies: companies,
-            events: events
+            events: events,
+            networkEntries: networkEntries
         )
         let missing = cities.filter { cityCoordinates[$0.key] == nil }
         guard !missing.isEmpty else { return }

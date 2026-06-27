@@ -8,6 +8,7 @@ struct CityDetailPanel: View {
     var onSelectConnection: (Connection) -> Void
     var onSelectCompany: (Company) -> Void
     var onSelectEvent: (Event) -> Void
+    var onSelectNetworkEntry: (NetworkEntry) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +16,20 @@ struct CityDetailPanel: View {
             OttoDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                    if !group.networkEntries.isEmpty {
+                        section(title: "NETWORK HUB", count: group.networkEntries.count, color: ContentType.networkHub.color) {
+                            ForEach(group.networkEntries) { entry in
+                                rowButton(
+                                    icon: entry.individualType.icon,
+                                    tint: entry.type.color,
+                                    title: entry.name,
+                                    subtitle: [entry.displayInfo, entry.closeness == .unknown ? "" : entry.closeness.label]
+                                        .filter { !$0.isEmpty }.joined(separator: " · ")
+                                ) { onSelectNetworkEntry(entry) }
+                            }
+                        }
+                    }
+
                     if !group.events.isEmpty {
                         section(title: "EVENTS", count: group.events.count, color: ContentType.event.color) {
                             ForEach(group.events) { event in
@@ -87,9 +102,18 @@ struct CityDetailPanel: View {
                 .buttonStyle(.plain)
             }
             HStack(spacing: 10) {
-                countPill(group.connections.count, "people", ContentType.connection.color)
-                countPill(group.companies.count, "cos", ContentType.company.color)
-                countPill(group.events.count, "events", ContentType.event.color)
+                if group.networkEntries.count > 0 {
+                    countPill(group.networkEntries.count, "network", ContentType.networkHub.color)
+                }
+                if group.connections.count > 0 {
+                    countPill(group.connections.count, "people", ContentType.connection.color)
+                }
+                if group.companies.count > 0 {
+                    countPill(group.companies.count, "cos", ContentType.company.color)
+                }
+                if group.events.count > 0 {
+                    countPill(group.events.count, "events", ContentType.event.color)
+                }
             }
         }
         .padding(Theme.Spacing.lg)
