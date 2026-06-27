@@ -303,6 +303,16 @@ private struct CompanyRow: View {
 
                 Spacer(minLength: 0)
 
+                if !company.linkedNetworkEntryIds.isEmpty {
+                    HStack(spacing: 3) {
+                        Image(systemName: "person.2.fill").font(.system(size: 9))
+                        Text("\(company.linkedNetworkEntryIds.count)")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    }
+                    .foregroundStyle(ContentType.networkHub.color)
+                    .help("\(company.linkedNetworkEntryIds.count) linked Network Hub people")
+                }
+
                 if let commitment = company.formattedCommitment {
                     Text(commitment)
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))

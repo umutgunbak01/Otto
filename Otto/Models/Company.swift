@@ -71,7 +71,8 @@ struct Company: Identifiable, Codable, Equatable {
     var website: String?
     var notes: String
     var tags: [String]
-    var linkedConnectionIds: [UUID]   // People in your network at this company
+    var linkedConnectionIds: [UUID]    // Linked LinkedIn connections
+    var linkedNetworkEntryIds: [UUID]  // Linked Network Hub people (shown on the detail page)
     let createdAt: Date
     var updatedAt: Date
 
@@ -133,6 +134,7 @@ struct Company: Identifiable, Codable, Equatable {
         notes: String = "",
         tags: [String] = [],
         linkedConnectionIds: [UUID] = [],
+        linkedNetworkEntryIds: [UUID] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -146,6 +148,7 @@ struct Company: Identifiable, Codable, Equatable {
         self.notes = notes
         self.tags = tags
         self.linkedConnectionIds = linkedConnectionIds
+        self.linkedNetworkEntryIds = linkedNetworkEntryIds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -156,7 +159,7 @@ struct Company: Identifiable, Codable, Equatable {
 extension Company {
     enum CodingKeys: String, CodingKey {
         case id, name, type, location, isCustomer, commitmentAmount
-        case website, notes, tags, linkedConnectionIds, createdAt, updatedAt
+        case website, notes, tags, linkedConnectionIds, linkedNetworkEntryIds, createdAt, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -171,6 +174,7 @@ extension Company {
         notes = (try? container.decode(String.self, forKey: .notes)) ?? ""
         tags = (try? container.decode([String].self, forKey: .tags)) ?? []
         linkedConnectionIds = (try? container.decode([UUID].self, forKey: .linkedConnectionIds)) ?? []
+        linkedNetworkEntryIds = (try? container.decode([UUID].self, forKey: .linkedNetworkEntryIds)) ?? []
         createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
         updatedAt = (try? container.decode(Date.self, forKey: .updatedAt)) ?? Date()
     }

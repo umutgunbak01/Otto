@@ -14,6 +14,7 @@ struct CompanyEditorSheet: View {
     @State private var commitmentText: String
     @State private var website: String
     @State private var notes: String
+    @State private var linkedNetworkIds: [UUID]
 
     private var isEditing: Bool { company != nil }
 
@@ -26,6 +27,7 @@ struct CompanyEditorSheet: View {
         _commitmentText = State(initialValue: MoneyField.string(from: company?.commitmentAmount))
         _website = State(initialValue: company?.website ?? "")
         _notes = State(initialValue: company?.notes ?? "")
+        _linkedNetworkIds = State(initialValue: company?.linkedNetworkEntryIds ?? [])
     }
 
     private var canSave: Bool {
@@ -71,6 +73,14 @@ struct CompanyEditorSheet: View {
 
                     FormField(label: "NOTES") {
                         FormTextEditor(text: $notes, placeholder: "Context, deal status, who to talk to…")
+                    }
+
+                    FormField(label: "PEOPLE (NETWORK HUB)") {
+                        CompanyPeopleLinker(
+                            linkedIds: $linkedNetworkIds,
+                            companyName: name,
+                            allEntries: appState.networkEntries
+                        )
                     }
                 }
                 .padding(Theme.Spacing.lg)
@@ -131,6 +141,7 @@ struct CompanyEditorSheet: View {
             updated.commitmentAmount = amount
             updated.website = cleanWebsite.isEmpty ? nil : cleanWebsite
             updated.notes = notes
+            updated.linkedNetworkEntryIds = linkedNetworkIds
             await appState.updateCompany(updated)
         } else {
             let new = Company(
@@ -140,10 +151,112 @@ struct CompanyEditorSheet: View {
                 isCustomer: isCustomer,
                 commitmentAmount: amount,
                 website: cleanWebsite.isEmpty ? nil : cleanWebsite,
-                notes: notes
+                notes: notes,
+                linkedNetworkEntryIds: linkedNetworkIds
             )
             await appState.addCompany(new)
         }
         dismiss()
+    }
+}
+
+// MARK: - People linker
+
+/// Lists the Network Hub people linked to a company and lets you add/remove
+/// links. With an empty search it suggests people whose company text matches
+/// this company's name; typing searches the whole network.
+private struct CompanyPeopleLinker: View {
+    @Binding var linkedIds: [UUID]
+    let companyName: String
+    let allEntries: [NetworkEntry]
+
+    @State private var search = ""
+    @State private var adding = false
+
+    private var linked: [NetworkEntry] {
+        linkedIds.compactMap { id in allEntries.first { $0.id == id } }
+    }
+
+    private var candidates: [NetworkEntry] {
+        let linkedSet = Set(linkedIds)
+        let pool = allEntries.filter { !linkedSet.contains($0.id) }
+        let q = search.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty {
+            let key = LocationNormalizer.fold(companyName)
+            guard key.count >= 2 else { return [] }
+            return Array(pool.filter {
+                let c = LocationNormalizer.fold($0.company)
+                return !c.isEmpty && (c.contains(key) || key.contains(c))
+            }.prefix(8))
+        }
+        return Array(pool.filter { $0.searchableContent.localizedCaseInsensitiveContains(q) }.prefix(20))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if linked.isEmpty {
+                Text("No people linked yet.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            } else {
+                ForEach(linked) { e in
+                    personRow(e, action: { linkedIds.removeAll { $0 == e.id } },
+                              icon: "xmark.circle.fill", iconTint: Theme.Colors.tertiaryText)
+                        .background(Theme.Colors.bg2)
+                        .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                }
+            }
+
+            Button { withAnimation { adding.toggle() } } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: adding ? "chevron.down" : "plus.circle").font(.system(size: 11))
+                    Text(adding ? "Done" : "Link people").font(.system(size: 12))
+                }
+                .foregroundStyle(Theme.Colors.accent)
+            }
+            .buttonStyle(.plain)
+
+            if adding {
+                FormText(text: $search, placeholder: "Search network people…")
+                if candidates.isEmpty {
+                    Text(search.isEmpty ? "No company-name matches — type to search your whole network." : "No matches.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                } else {
+                    if search.isEmpty {
+                        Text("SUGGESTED · \(companyName.uppercased())").hudLabel(tracking: Theme.Tracking.wide)
+                    }
+                    VStack(spacing: 0) {
+                        ForEach(candidates) { e in
+                            personRow(e, action: { linkedIds.append(e.id) },
+                                      icon: "plus", iconTint: Theme.Colors.accent)
+                        }
+                    }
+                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    private func personRow(_ e: NetworkEntry, action: @escaping () -> Void, icon: String, iconTint: Color) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: e.individualType.icon)
+                    .font(.system(size: 11)).foregroundStyle(e.type.color).frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(e.name).font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.text).lineLimit(1)
+                    if !e.displayInfo.isEmpty {
+                        Text(e.displayInfo).font(.system(size: 10))
+                            .foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: icon).font(.system(size: 12)).foregroundStyle(iconTint)
+            }
+            .padding(.vertical, 5).padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
