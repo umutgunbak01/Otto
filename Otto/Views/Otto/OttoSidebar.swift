@@ -6,6 +6,7 @@ import SwiftUI
 struct OttoSidebar: View {
     @Environment(AppState.self) private var appState
     @Binding var showingHome: Bool
+    @Binding var showingMap: Bool
     @Binding var showingSettings: Bool
     @Binding var showingIntegrations: Bool
 
@@ -30,8 +31,16 @@ struct OttoSidebar: View {
                         icon: AnyView(HexPip(size: 10)),
                         label: "HOME",
                         count: nil,
-                        isActive: showingHome,
-                        action: { showingHome = true }
+                        isActive: showingHome && !showingMap,
+                        action: { showingHome = true; showingMap = false }
+                    )
+
+                    OttoNavItem(
+                        icon: AnyView(navGlyph("⊕")),
+                        label: "MAP",
+                        count: nil,
+                        isActive: showingMap,
+                        action: { showingMap = true; showingHome = false }
                     )
 
                     ForEach(coreTypes, id: \.self) { type in
@@ -39,9 +48,10 @@ struct OttoSidebar: View {
                             icon: AnyView(navGlyph(type.icon)),
                             label: type.label,
                             count: type.count(appState),
-                            isActive: !showingHome && appState.selectedTab == type.tab,
+                            isActive: !showingHome && !showingMap && appState.selectedTab == type.tab,
                             action: {
                                 showingHome = false
+                                showingMap = false
                                 appState.selectedTab = type.tab
                             }
                         )
@@ -284,6 +294,8 @@ struct OttoSidebar: View {
             case .email:      return s.emails.filter { !$0.isRead }.count
             case .connection: return s.connections.count
             case .networkHub: return s.networkEntries.count
+            case .company:    return s.companies.count
+            case .event:      return s.events.count
             case .file:       return s.files.count
             case .xPost:      return s.xPosts.count
             case .xFollower:  return s.xFollowers.count
@@ -305,6 +317,8 @@ struct OttoSidebar: View {
             NavType(tab: .email,      label: "EMAIL",       icon: "✉", counter: "8.351"),
             NavType(tab: .connection, label: "LINKEDIN", icon: "⌬", counter: "4.128"),
             NavType(tab: .networkHub, label: "NETWORK HUB", icon: "⬡", counter: "—"),
+            NavType(tab: .company,    label: "COMPANIES",   icon: "▦", counter: "—"),
+            NavType(tab: .event,      label: "EVENTS",      icon: "◈", counter: "—"),
             NavType(tab: .file,       label: "FILES",       icon: "◰", counter: "1"),
             NavType(tab: .xPost,      label: "X-POSTS",     icon: "✕", counter: "—"),
             NavType(tab: .xFollower,  label: "X-FOLLOWERS", icon: "⊙", counter: "—"),

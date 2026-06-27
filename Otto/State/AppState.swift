@@ -82,6 +82,13 @@ final class AppState {
     /// User-defined CRM columns. Stable across renames (UUID-keyed in Connection.customFields).
     var connectionCustomFields: [CustomFieldDefinition] = []
 
+    // Companies & Events (manual CRM — drive the location map)
+    var companies: [Company] = []
+    var events: [Event] = []
+    /// Cached city → coordinate map, hydrated from CityGeocoder so map pins
+    /// render instantly and re-render as new cities resolve.
+    var cityCoordinates: [String: CityCoordinate] = [:]
+
     // Ask History State
     var askHistory: [AskHistoryItem] = []
 
@@ -261,6 +268,8 @@ final class AppState {
             networkEntries = store.networkEntries
             connectionCustomFields = store.connectionCustomFields.sorted { $0.sortIndex < $1.sortIndex }
             pruneOrphanedCustomFieldValues()
+            companies = store.companies
+            events = store.events
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -401,6 +410,18 @@ final class AppState {
         case .connection:
             // Connections are imported from LinkedIn CSV, not created manually via input
             break
+
+        case .company:
+            let company = Company(name: input)
+            companies.insert(company, at: 0)
+            try? await persistence.updateCompanies(companies)
+            selectedTab = .company
+
+        case .event:
+            let event = Event(name: input)
+            events.insert(event, at: 0)
+            try? await persistence.updateEvents(events)
+            selectedTab = .event
 
         case .file:
             // Files are imported via file picker, not created manually via input
@@ -871,6 +892,85 @@ final class AppState {
         let idSet = Set(ids)
         connections.removeAll { idSet.contains($0.id) }
         try? await persistence.updateConnections(connections)
+    }
+
+    // MARK: - Company Operations
+
+    @MainActor
+    func addCompany(_ company: Company) async {
+        companies.insert(company, at: 0)
+        try? await persistence.updateCompanies(companies)
+    }
+
+    @MainActor
+    func updateCompany(_ company: Company) async {
+        guard let index = companies.firstIndex(where: { $0.id == company.id }) else { return }
+        var updated = company
+        updated.updatedAt = Date()
+        companies[index] = updated
+        try? await persistence.updateCompanies(companies)
+    }
+
+    @MainActor
+    func deleteCompany(_ company: Company) async {
+        let captured = company
+        undoService.pushUndo(label: "Company deleted") { [self] in
+            await self.addCompany(captured)
+        }
+        companies.removeAll { $0.id == company.id }
+        try? await persistence.updateCompanies(companies)
+    }
+
+    // MARK: - Event Operations
+
+    @MainActor
+    func addEvent(_ event: Event) async {
+        events.insert(event, at: 0)
+        try? await persistence.updateEvents(events)
+    }
+
+    @MainActor
+    func updateEvent(_ event: Event) async {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        var updated = event
+        updated.updatedAt = Date()
+        events[index] = updated
+        try? await persistence.updateEvents(events)
+    }
+
+    @MainActor
+    func deleteEvent(_ event: Event) async {
+        let captured = event
+        undoService.pushUndo(label: "Event deleted") { [self] in
+            await self.addEvent(captured)
+        }
+        events.removeAll { $0.id == event.id }
+        try? await persistence.updateEvents(events)
+    }
+
+    // MARK: - City Geocoding
+
+    /// Resolve coordinates for every city referenced by connections, companies
+    /// and events. Seed/cache hits land instantly; the long tail geocodes in
+    /// the background and trickles into `cityCoordinates` (each mutation on the
+    /// main actor re-renders the map). Only cities we don't already have are
+    /// looked up.
+    @MainActor
+    func refreshCityCoordinates() {
+        let cities = CityIndex.uniqueCities(
+            connections: connections,
+            companies: companies,
+            events: events
+        )
+        let missing = cities.filter { cityCoordinates[$0.key] == nil }
+        guard !missing.isEmpty else { return }
+        Task { @MainActor in
+            for (key, display) in missing {
+                if let coord = await CityGeocoder.shared.coordinate(key: key, display: display) {
+                    cityCoordinates[key] = coord
+                }
+            }
+        }
     }
 
     @MainActor
@@ -1468,7 +1568,7 @@ final class AppState {
             try? await persistence.updateReminders(reminders)
             selectedTab = .reminder
 
-        case .bookmark, .meeting, .email, .connection, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
+        case .bookmark, .meeting, .email, .connection, .company, .event, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
             // Not applicable for email conversion
             break
         }
@@ -2553,6 +2653,10 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
+        case .company, .event:
+            // Companies and Events live in their own tabs, not produced by conversion
+            break
+
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
@@ -2635,6 +2739,10 @@ final class AppState {
 
         case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event:
+            // Companies and Events live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2728,6 +2836,10 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
+        case .company, .event:
+            // Companies and Events live in their own tabs, not produced by conversion
+            break
+
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
@@ -2810,6 +2922,10 @@ final class AppState {
             // Cannot convert to X content types - imported via Integrations
             break
 
+        case .company, .event:
+            // Companies and Events live in their own tabs, not produced by conversion
+            break
+
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
@@ -2889,6 +3005,10 @@ final class AppState {
 
         case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event:
+            // Companies and Events live in their own tabs, not produced by conversion
             break
 
         case .habit:

@@ -1338,6 +1338,8 @@ private struct ItemPreviewCard: View {
         case .meeting:    return appState.meetings.first(where: { $0.id == itemId })?.title
         case .email:      return appState.emails.first(where: { $0.id == itemId })?.subject
         case .connection: return appState.connections.first(where: { $0.id == itemId })?.fullName
+        case .company:    return appState.companies.first(where: { $0.id == itemId })?.name
+        case .event:      return appState.events.first(where: { $0.id == itemId })?.name
         case .habit:      return appState.habits.first(where: { $0.id == itemId })?.title
         case .file, .xPost, .xFollower, .xDm, .networkHub: return nil
         }
@@ -1353,6 +1355,8 @@ private struct ItemPreviewCard: View {
             case .meeting:    return appState.meetings.first(where: { $0.id == itemId })?.overview
             case .email:      return appState.emails.first(where: { $0.id == itemId })?.snippet
             case .connection: return appState.connections.first(where: { $0.id == itemId })?.headline
+            case .company:    return appState.companies.first(where: { $0.id == itemId })?.location
+            case .event:      return appState.events.first(where: { $0.id == itemId })?.location
             case .habit:      return appState.habits.first(where: { $0.id == itemId })?.notes
             case .reminder, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
             }
@@ -1405,7 +1409,7 @@ private struct ItemPreviewCard: View {
             // Habit chips currently jump straight to the Habits tab rather
             // than opening the shared search-result popup.
             appState.selectedTab = .habit
-        case .file, .xPost, .xFollower, .xDm, .networkHub:
+        case .company, .event, .file, .xPost, .xFollower, .xDm, .networkHub:
             break  // not referenceable from chat; schema doesn't include these types
         }
     }

@@ -23,6 +23,7 @@ struct MainView: View {
     @State private var showingSettings = false
     @State private var showingIntegrations = false
     @State private var showingHome = true
+    @State private var showingMap = false
     @State private var showingChat = false
     @State private var didOpenHUD = false
 
@@ -51,6 +52,7 @@ struct MainView: View {
                         // Sidebar.
                         OttoSidebar(
                             showingHome: $showingHome,
+                            showingMap: $showingMap,
                             showingSettings: $showingSettings,
                             showingIntegrations: $showingIntegrations
                         )
@@ -164,7 +166,9 @@ struct MainView: View {
     @ViewBuilder
     private var mainContent: some View {
         ZStack {
-            if showingHome {
+            if showingMap {
+                MapView()
+            } else if showingHome {
                 OttoHUD()
             } else {
                 listContent
@@ -215,6 +219,8 @@ struct MainView: View {
         case .email:      EmailListView()
         case .connection: ConnectionListView()
         case .networkHub: NetworkHubListView()
+        case .company:    CompanyListView()
+        case .event:      EventListView()
         case .file:       FilesListView()
         case .xPost:      XPostListView()
         case .xFollower:  XFollowerListView()

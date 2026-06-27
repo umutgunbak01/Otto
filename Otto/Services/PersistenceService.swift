@@ -13,6 +13,8 @@ struct OttoDataStore: Codable {
     var connections: [Connection]
     var networkEntries: [NetworkEntry]
     var connectionCustomFields: [CustomFieldDefinition]
+    var companies: [Company]
+    var events: [Event]
     var domainTags: [DomainTag]
     var importedMeetings: [ImportedMeeting]
     var xPosts: [XPost]
@@ -32,6 +34,7 @@ struct OttoDataStore: Codable {
         case todos, notes, ideas, reminders, bookmarks, meetings, files, emails, calendarEvents, connections
         case connectionCustomFields
         case networkEntries
+        case companies, events
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
@@ -50,6 +53,8 @@ struct OttoDataStore: Codable {
         connections: [Connection] = [],
         networkEntries: [NetworkEntry] = [],
         connectionCustomFields: [CustomFieldDefinition] = [],
+        companies: [Company] = [],
+        events: [Event] = [],
         xPosts: [XPost] = [],
         xFollowers: [XFollower] = [],
         xDirectMessages: [XDirectMessage] = [],
@@ -76,6 +81,8 @@ struct OttoDataStore: Codable {
         self.connections = connections
         self.networkEntries = networkEntries
         self.connectionCustomFields = connectionCustomFields
+        self.companies = companies
+        self.events = events
         self.xPosts = xPosts
         self.xFollowers = xFollowers
         self.xDirectMessages = xDirectMessages
@@ -113,6 +120,9 @@ struct OttoDataStore: Codable {
         connectionCustomFields = (try? container.decode([CustomFieldDefinition].self, forKey: .connectionCustomFields)) ?? []
         // Network Hub entries are a newer addition — fall back to empty.
         networkEntries = (try? container.decode([NetworkEntry].self, forKey: .networkEntries)) ?? []
+        // Companies & Events are newer additions — fall back to empty for older stores.
+        companies = (try? container.decode([Company].self, forKey: .companies)) ?? []
+        events = (try? container.decode([Event].self, forKey: .events)) ?? []
         // X data may not exist in old data
         xPosts = (try? container.decode([XPost].self, forKey: .xPosts)) ?? []
         xFollowers = (try? container.decode([XFollower].self, forKey: .xFollowers)) ?? []
@@ -301,6 +311,18 @@ actor PersistenceService {
     func updateConnectionCustomFields(_ fields: [CustomFieldDefinition]) async throws {
         var store = try await load()
         store.connectionCustomFields = fields
+        try await save(store)
+    }
+
+    func updateCompanies(_ companies: [Company]) async throws {
+        var store = try await load()
+        store.companies = companies
+        try await save(store)
+    }
+
+    func updateEvents(_ events: [Event]) async throws {
+        var store = try await load()
+        store.events = events
         try await save(store)
     }
 
