@@ -69,6 +69,9 @@ final class AppState {
     var isXConnected: Bool = false
     var isLoadingX: Bool = false
     var xSyncError: String?
+    /// DM-specific sync note (e.g. "partially synced — saved N new back to <date>")
+    /// surfaced separately from tier errors so a rate-limited DM pull isn't silent.
+    var xDMSyncStatus: String?
     var lastXSync: Date?
 
     // LinkedIn Connections State
@@ -3323,16 +3326,33 @@ final class AppState {
         }
 
         do {
-            // Fetch DMs
-            let newDMs = try await XService.shared.fetchDMs()
+            // Fetch DMs. The result keeps whatever pages were pulled even if a
+            // later page rate-limited, so recent DMs aren't thrown away.
+            let result = try await XService.shared.fetchDMs()
             let existingDMIds = Set(xDirectMessages.map { $0.xMessageId })
-            let uniqueNewDMs = newDMs.filter { !existingDMIds.contains($0.xMessageId) }
+            let uniqueNewDMs = result.messages.filter { !existingDMIds.contains($0.xMessageId) }
             xDirectMessages.insert(contentsOf: uniqueNewDMs, at: 0)
             xDirectMessages.sort { $0.createdAt > $1.createdAt }
             try? await persistence.updateXDirectMessages(xDirectMessages)
+
+            if result.isComplete {
+                xDMSyncStatus = nil
+            } else {
+                // Pagination stopped early (X rate-limited a later page). Report
+                // how far back we reached so it's clear newer DMs are saved and
+                // re-syncing will fetch older ones.
+                let oldestReached = result.messages.map(\.createdAt).min()
+                let df = DateFormatter(); df.dateStyle = .medium
+                let backTo = oldestReached.map { " back to \(df.string(from: $0))" } ?? ""
+                xDMSyncStatus = "DMs partially synced (X rate limit): saved \(uniqueNewDMs.count) new\(backTo). Sync again to fetch older messages."
+            }
         } catch let error as XServiceError where error.isAccessDenied {
             tierWarnings.append("DMs (needs X API Pro tier)")
+            xDMSyncStatus = nil
             print("[X] DMs: access denied - needs Pro API tier")
+        } catch XServiceError.rateLimited {
+            xDMSyncStatus = "DMs hit X's rate limit before any could sync — try again in a few minutes."
+            print("[X] DMs: rate limited before first page")
         } catch {
             print("[X] Failed to sync DMs: \(error)")
         }

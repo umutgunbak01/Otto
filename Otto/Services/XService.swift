@@ -227,11 +227,22 @@ actor XService {
 
     // MARK: - Fetch DMs
 
-    func fetchDMs() async throws -> [XDirectMessage] {
+    /// Outcome of a DM pull. `isComplete` is false when pagination stopped
+    /// early — e.g. X rate-limited a later page. The messages gathered so far
+    /// are still returned (not discarded), so the most recent DMs survive a
+    /// partial sync.
+    struct DMFetchResult {
+        let messages: [XDirectMessage]
+        let isComplete: Bool
+        let pagesFetched: Int
+    }
+
+    func fetchDMs() async throws -> DMFetchResult {
         var allMessages: [XDirectMessage] = []
         var nextToken: String? = nil
+        var pages = 0
 
-        repeat {
+        while true {
             var queryItems = [
                 URLQueryItem(name: "max_results", value: "100"),
                 // Restrict to actual messages on the wire — otherwise X
@@ -247,20 +258,16 @@ actor XService {
                 URLQueryItem(name: "user.fields", value: "id,name,username")
             ]
 
-            if let nextToken = nextToken {
+            if let nextToken {
                 queryItems.append(URLQueryItem(name: "pagination_token", value: nextToken))
             }
 
-            let data = try await makeRequest(
-                path: "/dm_events",
-                queryItems: queryItems
-            )
+            do {
+                let data = try await makeRequest(path: "/dm_events", queryItems: queryItems)
+                let response = try JSONDecoder().decode(XPaginatedResponse<XAPIDMEvent>.self, from: data)
+                let userMap = buildUserMap(from: response.includes)
 
-            let response = try JSONDecoder().decode(XPaginatedResponse<XAPIDMEvent>.self, from: data)
-            let userMap = buildUserMap(from: response.includes)
-
-            if let events = response.data {
-                let messages = events.compactMap { event -> XDirectMessage? in
+                let pageMessages: [XDirectMessage] = (response.data ?? []).compactMap { event in
                     guard event.eventType == "MessageCreate" else { return nil }
 
                     let sender = userMap[event.senderId ?? ""]
@@ -277,13 +284,24 @@ actor XService {
                         conversationId: event.dmConversationId ?? ""
                     )
                 }
-                allMessages.append(contentsOf: messages)
+                allMessages.append(contentsOf: pageMessages)
+                pages += 1
+
+                nextToken = response.meta?.nextToken
+                if nextToken == nil {
+                    return DMFetchResult(messages: allMessages, isComplete: true, pagesFetched: pages)
+                }
+            } catch {
+                // First page failed → genuine failure (access denied, auth, or
+                // a total rate-limit). Rethrow so the caller surfaces the right
+                // message (tier warning, etc.).
+                if pages == 0 { throw error }
+                // A later page failed (typically rate-limited after retries) →
+                // keep the recent pages we already pulled rather than throwing
+                // them all away. The caller reports a partial sync.
+                return DMFetchResult(messages: allMessages, isComplete: false, pagesFetched: pages)
             }
-
-            nextToken = response.meta?.nextToken
-        } while nextToken != nil
-
-        return allMessages
+        }
     }
 
     // MARK: - Helpers

@@ -1612,6 +1612,19 @@ struct IntegrationsView: View {
                 }
             }
 
+            // DM sync status (partial / rate-limited pull — newest still saved)
+            if let dmStatus = appState.xDMSyncStatus {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.cyan)
+
+                    Text(dmStatus)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+            }
+
             // Sync Button and Stats
             HStack(spacing: Theme.Spacing.md) {
                 Button {
