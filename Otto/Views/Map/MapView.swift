@@ -10,12 +10,6 @@ struct MapView: View {
     @State private var position: MapCameraPosition = .automatic
     @State private var selectedKey: String?
 
-    // Drill-down sheets
-    @State private var connectionTarget: ConnTarget?
-    @State private var companyTarget: CompanyTarget?
-    @State private var eventTarget: EventTarget?
-    @State private var networkTarget: NetworkTarget?
-
     var body: some View {
         // Build the city index once per render, then derive everything from it
         // — avoids re-normalizing thousands of locations multiple times while
@@ -34,39 +28,17 @@ struct MapView: View {
         return VStack(spacing: 0) {
             header(located: located, unlocated: unlocated)
             OttoDivider()
-            HStack(spacing: 0) {
+            if let group = selected {
+                // Selected city → full-width tabbed, inline-editable table.
+                CityTableView(group: group, onBack: {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedKey = nil }
+                })
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
                 mapArea(located: located, totalGroups: groups.count)
-                if let group = selected {
-                    CityDetailPanel(
-                        group: group,
-                        onClose: { withAnimation(.easeInOut(duration: 0.2)) { selectedKey = nil } },
-                        onSelectConnection: { connectionTarget = ConnTarget(id: $0.id, connection: $0) },
-                        onSelectCompany: { companyTarget = CompanyTarget(id: $0.id, company: $0) },
-                        onSelectEvent: { eventTarget = EventTarget(id: $0.id, event: $0) },
-                        onSelectNetworkEntry: { networkTarget = NetworkTarget(id: $0.id, entry: $0) }
-                    )
-                    .frame(width: 340)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
             }
         }
         .onAppear { appState.refreshCityCoordinates() }
-        .sheet(item: $connectionTarget) { target in
-            ConnectionDetailView(connection: target.connection, onClose: { connectionTarget = nil })
-                .environment(appState)
-                .frame(minWidth: 560, minHeight: 640)
-        }
-        .sheet(item: $companyTarget) { target in
-            CompanyEditorSheet(company: target.company).environment(appState)
-        }
-        .sheet(item: $eventTarget) { target in
-            EventEditorSheet(event: target.event).environment(appState)
-        }
-        .sheet(item: $networkTarget) { target in
-            NetworkEntryEditor(entry: target.entry, onClose: { networkTarget = nil })
-                .environment(appState)
-                .frame(minWidth: 600, minHeight: 640)
-        }
     }
 
     // MARK: - Map
@@ -180,12 +152,6 @@ struct MapView: View {
         .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
     }
 
-    // MARK: - Sheet target wrappers
-
-    private struct ConnTarget: Identifiable { let id: UUID; let connection: Connection }
-    private struct CompanyTarget: Identifiable { let id: UUID; let company: Company }
-    private struct EventTarget: Identifiable { let id: UUID; let event: Event }
-    private struct NetworkTarget: Identifiable { let id: UUID; let entry: NetworkEntry }
 }
 
 // MARK: - City Pin
