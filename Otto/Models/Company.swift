@@ -11,6 +11,7 @@ enum CompanyType: String, CaseIterable, Codable, Identifiable {
     case vc = "vc"
     case agency = "agency"
     case research = "research"
+    case media = "media"
     case other = "other"
 
     var id: String { rawValue }
@@ -24,6 +25,7 @@ enum CompanyType: String, CaseIterable, Codable, Identifiable {
         case .vc: return "VC / Fund"
         case .agency: return "Agency"
         case .research: return "Research / Lab"
+        case .media: return "Media"
         case .other: return "Other"
         }
     }
@@ -37,6 +39,7 @@ enum CompanyType: String, CaseIterable, Codable, Identifiable {
         case .vc: return "dollarsign.circle.fill"
         case .agency: return "paintbrush.fill"
         case .research: return "flask.fill"
+        case .media: return "newspaper.fill"
         case .other: return "circle.fill"
         }
     }
@@ -50,6 +53,7 @@ enum CompanyType: String, CaseIterable, Codable, Identifiable {
         case .vc: return Theme.Colors.green
         case .agency: return Theme.Colors.amber
         case .research: return .teal
+        case .media: return .pink
         case .other: return .indigo
         }
     }
