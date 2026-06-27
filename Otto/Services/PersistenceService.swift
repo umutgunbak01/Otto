@@ -11,6 +11,8 @@ struct OttoDataStore: Codable {
     var emails: [Email]
     var calendarEvents: [CalendarEvent]
     var connections: [Connection]
+    var networkEntries: [NetworkEntry]
+    var connectionCustomFields: [CustomFieldDefinition]
     var domainTags: [DomainTag]
     var importedMeetings: [ImportedMeeting]
     var xPosts: [XPost]
@@ -28,6 +30,8 @@ struct OttoDataStore: Codable {
     // Custom CodingKeys to support migration from old data
     enum CodingKeys: String, CodingKey {
         case todos, notes, ideas, reminders, bookmarks, meetings, files, emails, calendarEvents, connections
+        case connectionCustomFields
+        case networkEntries
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
@@ -44,6 +48,8 @@ struct OttoDataStore: Codable {
         emails: [Email] = [],
         calendarEvents: [CalendarEvent] = [],
         connections: [Connection] = [],
+        networkEntries: [NetworkEntry] = [],
+        connectionCustomFields: [CustomFieldDefinition] = [],
         xPosts: [XPost] = [],
         xFollowers: [XFollower] = [],
         xDirectMessages: [XDirectMessage] = [],
@@ -68,6 +74,8 @@ struct OttoDataStore: Codable {
         self.emails = emails
         self.calendarEvents = calendarEvents
         self.connections = connections
+        self.networkEntries = networkEntries
+        self.connectionCustomFields = connectionCustomFields
         self.xPosts = xPosts
         self.xFollowers = xFollowers
         self.xDirectMessages = xDirectMessages
@@ -101,6 +109,10 @@ struct OttoDataStore: Codable {
         calendarEvents = (try? container.decode([CalendarEvent].self, forKey: .calendarEvents)) ?? []
         // Connections may not exist in old data
         connections = (try? container.decode([Connection].self, forKey: .connections)) ?? []
+        // Custom connection field definitions — added with the CRM evolution; fall back to empty.
+        connectionCustomFields = (try? container.decode([CustomFieldDefinition].self, forKey: .connectionCustomFields)) ?? []
+        // Network Hub entries are a newer addition — fall back to empty.
+        networkEntries = (try? container.decode([NetworkEntry].self, forKey: .networkEntries)) ?? []
         // X data may not exist in old data
         xPosts = (try? container.decode([XPost].self, forKey: .xPosts)) ?? []
         xFollowers = (try? container.decode([XFollower].self, forKey: .xFollowers)) ?? []
@@ -277,6 +289,18 @@ actor PersistenceService {
     func updateConnections(_ connections: [Connection]) async throws {
         var store = try await load()
         store.connections = connections
+        try await save(store)
+    }
+
+    func updateNetworkEntries(_ networkEntries: [NetworkEntry]) async throws {
+        var store = try await load()
+        store.networkEntries = networkEntries
+        try await save(store)
+    }
+
+    func updateConnectionCustomFields(_ fields: [CustomFieldDefinition]) async throws {
+        var store = try await load()
+        store.connectionCustomFields = fields
         try await save(store)
     }
 

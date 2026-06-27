@@ -20,18 +20,22 @@ struct DaySection: View {
             // Content (collapsible)
             if !isCollapsed {
                 VStack(spacing: 0) {
-                    // Calendar events first
-                    ForEach(events) { event in
-                        CalendarEventRowView(event: event)
-                    }
-
-                    // Then todos
-                    ForEach(todos) { todo in
-                        TodoRowView(
-                            todo: todo,
-                            isSelected: selectedTodoId == todo.id
-                        ) {
-                            onSelectTodo?(todo)
+                    // Calendar events and todos interleaved in chronological
+                    // order. Rendering events and todos as two separate blocks
+                    // would push a late-day event (e.g. a 19:00 meeting) above
+                    // an earlier todo (e.g. a 10:00 task); merging by time fixes
+                    // that so the day reads top-to-bottom in clock order.
+                    ForEach(dayItems) { item in
+                        switch item {
+                        case .event(let event):
+                            CalendarEventRowView(event: event)
+                        case .todo(let todo):
+                            TodoRowView(
+                                todo: todo,
+                                isSelected: selectedTodoId == todo.id
+                            ) {
+                                onSelectTodo?(todo)
+                            }
                         }
                     }
 
@@ -40,6 +44,55 @@ struct DaySection: View {
                         addTaskButton(action: onAddTask)
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Merged day items
+
+    /// A single row in the day — either a synced calendar event or a todo.
+    private enum DayItem: Identifiable {
+        case event(CalendarEvent)
+        case todo(Todo)
+
+        var id: String {
+            switch self {
+            case .event(let e): return "event-\(e.id.uuidString)"
+            case .todo(let t): return "todo-\(t.id.uuidString)"
+            }
+        }
+
+        /// Time used to order items within the day. Events use their start
+        /// time; todos use their due date — which carries the time-of-day when
+        /// one is set, or midnight for date-only todos (so those sort to the
+        /// top of the day). A todo with no due date sorts last as a fallback.
+        var sortTime: Date {
+            switch self {
+            case .event(let e): return e.startTime
+            case .todo(let t): return t.dueDate ?? .distantFuture
+            }
+        }
+    }
+
+    /// Events and todos for this day, merged and sorted chronologically.
+    /// When two items share the same instant we keep a deterministic order:
+    /// events ahead of todos, then todos by priority (high→low) and newest
+    /// first, finally falling back to id so the sort is fully stable.
+    private var dayItems: [DayItem] {
+        let combined = events.map(DayItem.event) + todos.map(DayItem.todo)
+        return combined.sorted { lhs, rhs in
+            if lhs.sortTime != rhs.sortTime {
+                return lhs.sortTime < rhs.sortTime
+            }
+            switch (lhs, rhs) {
+            case (.event, .todo): return true
+            case (.todo, .event): return false
+            case let (.todo(a), .todo(b)):
+                if a.priority != b.priority { return a.priority > b.priority }
+                if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+                return a.id.uuidString < b.id.uuidString
+            case let (.event(a), .event(b)):
+                return a.id.uuidString < b.id.uuidString
             }
         }
     }

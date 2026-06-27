@@ -163,6 +163,9 @@ struct SearchResultDetailPopup: View {
             // Habit detail isn't surfaced through the chat preview popup —
             // the user opens habits from the Habits tab.
             EmptyView()
+        case .networkHub:
+            // Network Hub entries aren't surfaced through the chat preview popup.
+            EmptyView()
         case .xDm:
             if let dm = result.xDirectMessage {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {

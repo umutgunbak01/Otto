@@ -192,6 +192,20 @@ actor AgentService {
         }
     }
 
+    /// Stop the in-flight run for the active backend so the user can issue a
+    /// new prompt. The CLI backends terminate their subprocess; Hermes cancels
+    /// the current ACP turn while keeping its long-lived session alive.
+    func cancelActiveRun() async {
+        switch AgentBackend.current {
+        case .claude:
+            await ClaudeCLIService.shared.cancelActiveRun()
+        case .codex:
+            await CodexCLIService.shared.cancelActiveRun()
+        case .hermes:
+            await HermesAgentService.shared.cancelActiveTurn()
+        }
+    }
+
     // MARK: - System prompt
 
     /// Compact overview of the user's Otto data + persona instructions. The
@@ -363,7 +377,12 @@ actor AgentService {
         // events / checking real-time availability → calendar__*).
         if GoogleAuthService.shared.hasCalendarMcpScopes() {
             parts.append("\n## Google Calendar (live)")
-            parts.append("The user has connected the Google Calendar MCP server. Use `calendar__list_calendars` to see which calendars the user owns or has shared with them, `calendar__list_events` to fetch upcoming/past events on a given calendar with optional time window, `calendar__get_event` for full details of a specific event, `calendar__suggest_time` to find free slots for a new meeting given participant emails + duration, `calendar__create_event` to schedule something new, `calendar__update_event` to edit, `calendar__delete_event` to cancel, and `calendar__respond_to_event` to accept / decline an invitation. Prefer these tools over `search_items(type=meeting)` when the user wants real-time scheduling or anything that mutates the calendar; use `search_items(type=meeting)` for historical lookups against meetings Otto has already synced locally.")
+            // MCP tool names are namespaced differently per backend: Claude /
+            // Codex expose them as `calendar__<tool>`, while Hermes prefixes
+            // them `mcp_calendar_<tool>`. Compute the right prefix so the agent
+            // calls tools that actually exist for the active backend.
+            let cal = AgentBackend.current == .hermes ? "mcp_calendar_" : "calendar__"
+            parts.append("The user has connected the Google Calendar MCP server. Use `\(cal)list_calendars` to see which calendars the user owns or has shared with them, `\(cal)list_events` to fetch upcoming/past events on a given calendar with optional time window, `\(cal)get_event` for full details of a specific event, `\(cal)suggest_time` to find free slots for a new meeting given participant emails + duration, `\(cal)create_event` to schedule something new, `\(cal)update_event` to edit, `\(cal)delete_event` to cancel, and `\(cal)respond_to_event` to accept / decline an invitation. Prefer these tools over `search_items(type=meeting)` when the user wants real-time scheduling or anything that mutates the calendar; use `search_items(type=meeting)` for historical lookups against meetings Otto has already synced locally.")
         }
 
         // GenMedia (fal.ai) — only advertise if both prereqs are satisfied,

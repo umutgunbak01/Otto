@@ -9,6 +9,8 @@ struct OttoChatView: View {
     @State private var turns: [ChatTurn] = []
     @State private var inputText: String = ""
     @State private var isLoading: Bool = false
+    /// Handle to the in-flight turn so the Stop button can cancel it.
+    @State private var runTask: Task<Void, Never>?
     @State private var error: String?
     @FocusState private var inputFocused: Bool
 
@@ -467,8 +469,14 @@ struct OttoChatView: View {
                         .font(Theme.Typography.body)
                         .lineLimit(1...6)
                         .focused($inputFocused)
-                        .onSubmit {
+                        .onKeyPress(.return, phases: .down) { press in
+                            // Shift+Return inserts a newline (let the vertical
+                            // TextField handle it); plain Return submits.
+                            if press.modifiers.contains(.shift) {
+                                return .ignored
+                            }
                             if canSend { sendMessage() }
+                            return .handled
                         }
 
                     Button {
@@ -482,15 +490,18 @@ struct OttoChatView: View {
                     .help("Voice mode — talk to Otto")
 
                     Button {
-                        sendMessage()
+                        if isLoading { stopRun() } else { sendMessage() }
                     } label: {
                         Image(systemName: isLoading ? "stop.circle.fill" : "arrow.up.circle.fill")
                             .font(.system(size: 24))
-                            .foregroundStyle(canSend ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                            .foregroundStyle(isLoading || canSend ? Theme.Colors.accent : Theme.Colors.tertiaryText)
                     }
                     .buttonStyle(.plain)
-                    .disabled(!canSend)
+                    // Enabled while loading (to act as Stop) or when there's
+                    // something to send.
+                    .disabled(!isLoading && !canSend)
                     .keyboardShortcut(.return, modifiers: .command)
+                    .help(isLoading ? "Stop" : "Send")
                 }
                 .padding(.horizontal, Theme.Spacing.sm)
                 .padding(.vertical, 10)
@@ -609,7 +620,7 @@ struct OttoChatView: View {
         let detectedIntent = IntentRouter.detect(userInput: text)
         let capturedTurns = turns
 
-        Task {
+        runTask = Task {
             // Deterministic intent side-effect (may be async, e.g. screen capture).
             // Runs before Claude so the URL is open / screenshot is saved by the
             // time the model reads its context note.
@@ -641,6 +652,9 @@ struct OttoChatView: View {
                         handleEvent(event)
                     }
                 )
+                // User hit Stop mid-run: stopRun() already reset the UI, so
+                // drop this turn's result instead of appending a late reply.
+                if Task.isCancelled { return }
                 await MainActor.run {
                     self.turns = updated
                     self.isLoading = false
@@ -652,13 +666,32 @@ struct OttoChatView: View {
                 let flattened = flattenForHistory(updated)
                 await state.addToAskHistory(messages: flattened)
             } catch {
-                await MainActor.run {
-                    self.error = error.localizedDescription
-                    self.isLoading = false
-                    Sounds.play(.error)
+                // A user-initiated Stop surfaces as a cancellation / killed
+                // subprocess — that's expected, not an error to flag.
+                if Task.isCancelled {
+                    await MainActor.run { self.isLoading = false }
+                } else {
+                    await MainActor.run {
+                        self.error = error.localizedDescription
+                        self.isLoading = false
+                        Sounds.play(.error)
+                    }
                 }
             }
         }
+    }
+
+    /// Stop the in-flight agent run and free the input for a new prompt.
+    /// Cancels the Swift task driving the turn (so its late result is dropped)
+    /// and tells the active backend to abort: Hermes cancels the current ACP
+    /// turn (session preserved), the CLI backends terminate their subprocess.
+    private func stopRun() {
+        guard isLoading else { return }
+        runTask?.cancel()
+        runTask = nil
+        let state = appState
+        Task { await state.claude.cancelActiveRun() }
+        isLoading = false
     }
 
     @MainActor
@@ -1306,7 +1339,7 @@ private struct ItemPreviewCard: View {
         case .email:      return appState.emails.first(where: { $0.id == itemId })?.subject
         case .connection: return appState.connections.first(where: { $0.id == itemId })?.fullName
         case .habit:      return appState.habits.first(where: { $0.id == itemId })?.title
-        case .file, .xPost, .xFollower, .xDm: return nil
+        case .file, .xPost, .xFollower, .xDm, .networkHub: return nil
         }
     }
 
@@ -1321,7 +1354,7 @@ private struct ItemPreviewCard: View {
             case .email:      return appState.emails.first(where: { $0.id == itemId })?.snippet
             case .connection: return appState.connections.first(where: { $0.id == itemId })?.headline
             case .habit:      return appState.habits.first(where: { $0.id == itemId })?.notes
-            case .reminder, .file, .xPost, .xFollower, .xDm: return nil
+            case .reminder, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
             }
         }()
         guard let raw else { return nil }
@@ -1372,7 +1405,7 @@ private struct ItemPreviewCard: View {
             // Habit chips currently jump straight to the Habits tab rather
             // than opening the shared search-result popup.
             appState.selectedTab = .habit
-        case .file, .xPost, .xFollower, .xDm:
+        case .file, .xPost, .xFollower, .xDm, .networkHub:
             break  // not referenceable from chat; schema doesn't include these types
         }
     }

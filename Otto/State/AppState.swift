@@ -29,6 +29,11 @@ final class AppState {
     var lastAutoSyncResult: String?
     private var syncTimer: Timer?
 
+    /// When the on-launch "sync every connected integration" pass last ran.
+    /// In-memory only (nil at process start → always syncs on launch); used to
+    /// throttle redundant passes when the main window is closed and reopened.
+    @ObservationIgnored private var lastIntegrationsSyncAttempt: Date?
+
     // Gmail Integration State
     var emails: [Email] = []
     var isLoadingGmail: Bool = false
@@ -71,6 +76,11 @@ final class AppState {
     var isLoadingConnections: Bool = false
     var connectionImportError: String?
     var selectedConnection: Connection?
+
+    // Network Hub State
+    var networkEntries: [NetworkEntry] = []
+    /// User-defined CRM columns. Stable across renames (UUID-keyed in Connection.customFields).
+    var connectionCustomFields: [CustomFieldDefinition] = []
 
     // Ask History State
     var askHistory: [AskHistoryItem] = []
@@ -248,6 +258,9 @@ final class AppState {
             emails = store.emails
             calendarEvents = store.calendarEvents
             connections = store.connections
+            networkEntries = store.networkEntries
+            connectionCustomFields = store.connectionCustomFields.sorted { $0.sortIndex < $1.sortIndex }
+            pruneOrphanedCustomFieldValues()
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -266,6 +279,44 @@ final class AppState {
 
         // Backfill OG metadata for bookmarks that don't have it yet
         fetchMissingBookmarkMetadata()
+
+        // One-shot last-contact backfill on launch — picks up activity that
+        // arrived in emails/calendar/X while the indexer logic was new.
+        await recomputeConnectionActivity()
+    }
+
+    // MARK: - Launch / Foreground Auto-Sync
+
+    /// Refresh recent data from every connected integration. Called on app
+    /// launch (and when the main window re-opens) so the cached data loaded
+    /// from disk gets brought up to date without the user pressing each
+    /// integration's manual sync button.
+    ///
+    /// Each integration syncs in its own `Task` so a slow or failing one never
+    /// blocks the others; this method returns immediately and the results
+    /// stream in as each finishes (flipping its `isLoading*` spinner). Every
+    /// `sync*` call already guards on its own connection flag and is a no-op
+    /// when disconnected, but we check here too to avoid spawning needless work.
+    ///
+    /// Fireflies is intentionally excluded: it has its own interval timer
+    /// (`startAutoSyncTimerIfNeeded`) that already runs a launch check with
+    /// user-configured frequency.
+    ///
+    /// Throttled to once per `minInterval` so rapidly closing/reopening the
+    /// window doesn't re-hammer the APIs. Pass `force: true` to bypass.
+    func syncConnectedIntegrations(force: Bool = false) {
+        let minInterval: TimeInterval = 120
+        if !force, let last = lastIntegrationsSyncAttempt,
+           Date().timeIntervalSince(last) < minInterval {
+            return
+        }
+        lastIntegrationsSyncAttempt = Date()
+
+        if isGmailConnected    { Task { await syncGmailEmails() } }
+        if isCalendarConnected { Task { await syncCalendarEvents() } }
+        if isTodoistConnected  { Task { await syncTodoistTasks() } }
+        if isNotionConnected   { Task { await syncNotionPages() } }
+        if isXConnected        { Task { await syncX() } }
     }
 
     // MARK: - Universal Input Processing
@@ -355,7 +406,7 @@ final class AppState {
             // Files are imported via file picker, not created manually via input
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // X content is imported via Integrations, not created manually via input
             break
 
@@ -761,6 +812,33 @@ final class AppState {
         }
     }
 
+    // MARK: - Network Hub Operations
+
+    @MainActor
+    func addNetworkEntry(_ entry: NetworkEntry) async {
+        networkEntries.insert(entry, at: 0)
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
+    @MainActor
+    func updateNetworkEntry(_ entry: NetworkEntry) async {
+        guard let index = networkEntries.firstIndex(where: { $0.id == entry.id }) else { return }
+        var updated = entry
+        updated.updatedAt = Date()
+        networkEntries[index] = updated
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
+    @MainActor
+    func deleteNetworkEntry(_ entry: NetworkEntry) async {
+        let captured = entry
+        undoService.pushUndo(label: "Network entry deleted") { [self] in
+            await self.addNetworkEntry(captured)
+        }
+        networkEntries.removeAll { $0.id == entry.id }
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
     // MARK: - Connection Operations
 
     @MainActor
@@ -819,10 +897,146 @@ final class AppState {
             connections.sort { $0.fullName.lowercased() < $1.fullName.lowercased() }
 
             try? await persistence.updateConnections(connections)
+            // Backfill last-contact for the freshly imported rows.
+            await recomputeConnectionActivity()
 
         } catch {
             connectionImportError = error.localizedDescription
             throw error
+        }
+    }
+
+    // MARK: - Connection Custom Fields
+
+    @MainActor
+    func addCustomField(name: String, kind: CustomFieldKind, options: [CustomFieldOption] = []) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty else { return }
+        let definition = CustomFieldDefinition(
+            name: trimmedName,
+            kind: kind,
+            options: kind.usesOptions ? options : [],
+            sortIndex: (connectionCustomFields.map { $0.sortIndex }.max() ?? -1) + 1
+        )
+        connectionCustomFields.append(definition)
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    @MainActor
+    func updateCustomField(_ definition: CustomFieldDefinition) async {
+        guard let index = connectionCustomFields.firstIndex(where: { $0.id == definition.id }) else { return }
+        connectionCustomFields[index] = definition
+        // If options were removed for a select field, scrub any vanished
+        // option ids out of every connection's value for this field.
+        if definition.kind.usesOptions {
+            let validOptionIds = Set(definition.options.map { $0.id })
+            var didMutateConnections = false
+            for cIndex in connections.indices {
+                guard let value = connections[cIndex].customFields[definition.id],
+                      case .optionIds(let ids) = value else { continue }
+                let filtered = ids.filter { validOptionIds.contains($0) }
+                if filtered.count != ids.count {
+                    if filtered.isEmpty {
+                        connections[cIndex].customFields.removeValue(forKey: definition.id)
+                    } else {
+                        connections[cIndex].customFields[definition.id] = .optionIds(filtered)
+                    }
+                    didMutateConnections = true
+                }
+            }
+            if didMutateConnections {
+                try? await persistence.updateConnections(connections)
+            }
+        }
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    @MainActor
+    func deleteCustomField(id: UUID) async {
+        connectionCustomFields.removeAll { $0.id == id }
+        // Strip the now-orphan key from every connection's customFields dict.
+        var didMutateConnections = false
+        for cIndex in connections.indices where connections[cIndex].customFields[id] != nil {
+            connections[cIndex].customFields.removeValue(forKey: id)
+            didMutateConnections = true
+        }
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+        if didMutateConnections {
+            try? await persistence.updateConnections(connections)
+        }
+    }
+
+    @MainActor
+    func reorderCustomFields(_ orderedIds: [UUID]) async {
+        let byId = Dictionary(uniqueKeysWithValues: connectionCustomFields.map { ($0.id, $0) })
+        var reordered: [CustomFieldDefinition] = []
+        for (i, id) in orderedIds.enumerated() {
+            guard var def = byId[id] else { continue }
+            def.sortIndex = i
+            reordered.append(def)
+        }
+        // Append anything not present in the input (defensive).
+        for def in connectionCustomFields where !orderedIds.contains(def.id) {
+            var d = def
+            d.sortIndex = reordered.count
+            reordered.append(d)
+        }
+        connectionCustomFields = reordered
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    /// Set or clear a custom field value on a connection. Passing nil (or an
+    /// `isEmpty` value) removes the entry — keeps the per-connection dict sparse.
+    @MainActor
+    func setCustomFieldValue(on connectionId: UUID, fieldId: UUID, value: CustomFieldValue?) async {
+        guard let index = connections.firstIndex(where: { $0.id == connectionId }) else { return }
+        var updated = connections[index]
+        if let value = value, !value.isEmpty {
+            updated.customFields[fieldId] = value
+        } else {
+            updated.customFields.removeValue(forKey: fieldId)
+        }
+        updated.updatedAt = Date()
+        connections[index] = updated
+        try? await persistence.updateConnections(connections)
+    }
+
+    /// Drop any per-connection custom-field keys whose definition no longer
+    /// exists. Cheap; runs once on load and after deleteCustomField.
+    @MainActor
+    private func pruneOrphanedCustomFieldValues() {
+        let validIds = Set(connectionCustomFields.map { $0.id })
+        var didMutate = false
+        for cIndex in connections.indices {
+            let orphans = connections[cIndex].customFields.keys.filter { !validIds.contains($0) }
+            if !orphans.isEmpty {
+                for key in orphans { connections[cIndex].customFields.removeValue(forKey: key) }
+                didMutate = true
+            }
+        }
+        if didMutate {
+            Task { try? await persistence.updateConnections(connections) }
+        }
+    }
+
+    /// Recompute `Connection.lastContactedAt` for every connection by scanning
+    /// emails, calendar events, and X DMs. Called from sync boundaries — NOT
+    /// from view renders.
+    @MainActor
+    func recomputeConnectionActivity() async {
+        guard !connections.isEmpty else { return }
+        let updated = ContactActivityIndexer.recompute(
+            connections: connections,
+            emails: emails,
+            calendarEvents: calendarEvents,
+            xDMs: xDirectMessages,
+            xFollowers: xFollowers
+        )
+        // Only persist if anything actually changed (saves a JSON write per sync).
+        let anyChanged = zip(connections, updated).contains { $0.lastContactedAt != $1.lastContactedAt }
+        connections = updated
+        if anyChanged {
+            try? await persistence.updateConnections(connections)
         }
     }
 
@@ -1092,6 +1306,8 @@ final class AppState {
             lastGmailSync = Date()
             try? await persistence.updateLastGmailSync(lastGmailSync)
 
+            await recomputeConnectionActivity()
+
         } catch {
             if isAuthError(error) {
                 handleAuthError()
@@ -1154,6 +1370,8 @@ final class AppState {
             // Update last sync time
             lastGmailSync = Date()
             try? await persistence.updateLastGmailSync(lastGmailSync)
+
+            await recomputeConnectionActivity()
 
         } catch {
             if isAuthError(error) {
@@ -1250,7 +1468,7 @@ final class AppState {
             try? await persistence.updateReminders(reminders)
             selectedTab = .reminder
 
-        case .bookmark, .meeting, .email, .connection, .file, .xPost, .xFollower, .xDm, .habit:
+        case .bookmark, .meeting, .email, .connection, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
             // Not applicable for email conversion
             break
         }
@@ -1488,6 +1706,8 @@ final class AppState {
             // Update last sync time
             lastCalendarSync = Date()
             try? await persistence.updateLastCalendarSync(lastCalendarSync)
+
+            await recomputeConnectionActivity()
 
         } catch {
             if isAuthError(error) {
@@ -2329,7 +2549,7 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
             break
 
@@ -2413,7 +2633,7 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
             break
 
@@ -2504,7 +2724,7 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
             break
 
@@ -2586,7 +2806,7 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
             break
 
@@ -2667,7 +2887,7 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
             break
 
@@ -2969,6 +3189,7 @@ final class AppState {
         lastXSync = Date()
         try? await persistence.updateLastXSync(lastXSync)
 
+        await recomputeConnectionActivity()
     }
 
     /// Link an X follower to a LinkedIn connection

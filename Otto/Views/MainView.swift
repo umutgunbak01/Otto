@@ -142,6 +142,10 @@ struct MainView: View {
                 && appState.meetings.isEmpty {
                 await appState.loadData()
             }
+            // Refresh every connected integration on open so the cached data
+            // we just loaded is brought up to date automatically. Throttled
+            // internally so reopening the window doesn't re-hammer the APIs.
+            appState.syncConnectedIntegrations()
         }
         #if os(macOS)
         .onAppear {
@@ -210,6 +214,7 @@ struct MainView: View {
         case .meeting:    MeetingListView()
         case .email:      EmailListView()
         case .connection: ConnectionListView()
+        case .networkHub: NetworkHubListView()
         case .file:       FilesListView()
         case .xPost:      XPostListView()
         case .xFollower:  XFollowerListView()

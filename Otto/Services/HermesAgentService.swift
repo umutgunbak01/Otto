@@ -230,7 +230,16 @@ actor HermesAgentService {
         do {
             try launchHermes(binaryPath: binPath)
             try await performInitialize()
-            let sessionId = try await performSessionNew()
+            // Inject the Google Calendar / Drive MCP servers (if connected)
+            // into this session. Unlike the Claude / Codex backends — which
+            // build a fresh per-turn config — Hermes holds one long-lived
+            // session, so we pass these at session creation with a freshly
+            // refreshed Bearer token. Note: the token is fixed for the
+            // session's lifetime; a continuous session running past the
+            // ~1h token expiry will start getting 401s from Google until the
+            // user reconnects (restart Otto / switch backend and back).
+            let googleServers = await Self.buildGoogleMcpServers()
+            let sessionId = try await performSessionNew(extraMcpServers: googleServers)
             state = .live(sessionId: sessionId)
         } catch {
             disconnect()
@@ -274,6 +283,19 @@ actor HermesAgentService {
         toolCallTitles.removeAll()
 
         state = .disconnected(nil)
+    }
+
+    // MARK: - Cancel current turn
+
+    /// Stop the in-flight prompt via ACP `session/cancel`, leaving the
+    /// long-lived session (and its conversation history) intact. Hermes sets
+    /// its cancel event, aborts the current turn, and resolves the pending
+    /// `session/prompt` with `stopReason: cancelled` — which unblocks the
+    /// `sendAndAwait` continuation in `streamChatWithTools` so the backend is
+    /// immediately ready for the next prompt. No-op if no session is live.
+    func cancelActiveTurn() {
+        guard case .live(let sessionId) = state else { return }
+        writeFrame(ACPParser.cancelNotification(sessionId: sessionId))
     }
 
     // MARK: - Approval resolution (called from UI)
@@ -421,14 +443,14 @@ actor HermesAgentService {
         }
     }
 
-    private func performSessionNew() async throws -> String {
+    private func performSessionNew(extraMcpServers: [[String: Any]] = []) async throws -> String {
         let id = allocateRequestId()
         // `cwd` isn't meaningful to Otto — Otto's tools all flow through MCP,
         // and Otto doesn't expose fs/terminal capabilities, so the agent has
         // no reason to touch a working directory. Pass our session tmp dir
         // so any errant filesystem ops land in a contained spot.
         let cwd = sessionTmpDir?.path ?? "/tmp"
-        let request = ACPParser.newSessionRequest(id: .int(id), cwd: cwd)
+        let request = ACPParser.newSessionRequest(id: .int(id), cwd: cwd, mcpServers: extraMcpServers)
         let result: [String: Any]
         do {
             result = try await sendAndAwait(id: id, request: request)
@@ -439,6 +461,61 @@ actor HermesAgentService {
             throw HermesError.sessionCreateFailed("Missing sessionId in response.")
         }
         return sessionId
+    }
+
+    // MARK: - Google MCP server injection
+
+    /// Build the ACP `mcpServers` payload for whichever Google MCP integrations
+    /// the user has connected (Calendar / Drive). These are Google-hosted
+    /// streamable-HTTP MCP servers that authenticate with an OAuth Bearer
+    /// token; we mint a fresh one from `GoogleAuthService` so the session
+    /// starts with a valid grant. Mirrors the per-turn injection the Claude /
+    /// Codex backends do, but expressed as ACP `HttpMcpServer` entries.
+    ///
+    /// Both servers share Otto's single Google OAuth token (same client, the
+    /// extra scopes were granted when the user connected each card), so we
+    /// fetch it once. If the token can't be refreshed, we skip injection
+    /// entirely — Hermes still gets a working session with the `otto` tools,
+    /// and the agent simply won't see calendar/drive tools this run.
+    private static func buildGoogleMcpServers() async -> [[String: Any]] {
+        let auth = GoogleAuthService.shared
+        let wantCalendar = auth.hasCalendarMcpScopes()
+        let wantDrive = auth.hasDriveScopes()
+        guard wantCalendar || wantDrive else { return [] }
+
+        let token: String
+        do {
+            token = try await auth.getValidAccessToken()
+        } catch {
+            NSLog("[Hermes] Google MCP skipped — token unavailable: %@", error.localizedDescription)
+            return []
+        }
+
+        func httpServer(name: String, url: String) -> [String: Any] {
+            return [
+                "type": "http",
+                "name": name,
+                "url": url,
+                "headers": [
+                    ["name": "Authorization", "value": "Bearer \(token)"] as [String: Any]
+                ]
+            ]
+        }
+
+        var servers: [[String: Any]] = []
+        if wantCalendar {
+            servers.append(httpServer(
+                name: "calendar",
+                url: "https://calendarmcp.googleapis.com/mcp/v1"
+            ))
+        }
+        if wantDrive {
+            servers.append(httpServer(
+                name: "drive",
+                url: "https://drivemcp.googleapis.com/mcp/v1"
+            ))
+        }
+        return servers
     }
 
     // MARK: - Reader loop

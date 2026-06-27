@@ -22,6 +22,11 @@ actor ClaudeCLIService {
     ]
     private var resolvedPath: String?
 
+    /// The CLI subprocess for the in-flight turn, so `cancelActiveRun()` (the
+    /// Stop button) can terminate it. Set after launch, cleared when the turn
+    /// ends. Access is serialized by the actor.
+    private var activeProcess: Process?
+
     /// CLI-side built-in tool whitelist. Keeps Otto from running Bash / Edit /
     /// Write unless we explicitly opt into those later. MCP tools (Otto tools)
     /// aren't listed here — they're gated separately by `--permission-mode
@@ -240,6 +245,10 @@ actor ClaudeCLIService {
             throw CLIError.launchFailed(error.localizedDescription)
         }
 
+        // Track the live subprocess so Stop can terminate it; clear on exit.
+        activeProcess = proc
+        defer { activeProcess = nil }
+
         // Feed prompt on stdin, then close — signals EOF so the CLI proceeds.
         if let data = prompt.data(using: .utf8) {
             try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
@@ -286,6 +295,13 @@ actor ClaudeCLIService {
         var updated = turns
         updated.append(ChatTurn(role: "assistant", blocks: [.text(assistantText)]))
         return updated
+    }
+
+    /// Terminate the in-flight CLI subprocess, if any (the Stop button reaches
+    /// this via `AgentService.cancelActiveRun`). Killing the process closes its
+    /// stdout, which unblocks the streaming reader and unwinds the turn.
+    func cancelActiveRun() {
+        activeProcess?.terminate()
     }
 
     // MARK: - Helpers

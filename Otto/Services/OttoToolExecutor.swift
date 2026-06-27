@@ -30,6 +30,7 @@ final class OttoToolExecutor {
         case .create_idea:      result = await createIdea(input)
         case .create_reminder:  result = await createReminder(input)
         case .create_bookmark:  result = await createBookmark(input)
+        case .create_meeting:   result = await createMeeting(input)
         case .update_todo:      result = await updateTodo(input)
         case .update_note:      result = await updateNote(input)
         case .update_idea:      result = await updateIdea(input)
@@ -60,7 +61,7 @@ final class OttoToolExecutor {
     }
 
     private static let writeTools: Set<OttoTools.Name> = [
-        .create_todo, .create_note, .create_idea, .create_reminder, .create_bookmark,
+        .create_todo, .create_note, .create_idea, .create_reminder, .create_bookmark, .create_meeting,
         .update_todo, .update_note, .update_idea,
         .complete_todo, .uncomplete_todo, .complete_reminder,
         .delete_item,
@@ -115,6 +116,7 @@ final class OttoToolExecutor {
             case "meeting":    return appState.meetings.first(where: { $0.id == id })?.title
             case "email":      return appState.emails.first(where: { $0.id == id })?.subject
             case "connection": return appState.connections.first(where: { $0.id == id })?.fullName
+            case "network":    return appState.networkEntries.first(where: { $0.id == id }).map { $0.name.isEmpty ? $0.company : $0.name }
             case "habit":      return appState.habits.first(where: { $0.id == id })?.title
             case "x_post":     return appState.xPosts.first(where: { $0.id == id }).map { "@\($0.authorUsername): \(String($0.text.prefix(60)))" }
             case "x_follower": return appState.xFollowers.first(where: { $0.id == id }).map { "\($0.displayName) (@\($0.username))" }
@@ -227,6 +229,44 @@ final class OttoToolExecutor {
         return ok(
             "Created bookmark id=\(bookmark.id.uuidString) url=\(url)",
             summary: "Bookmarked: \(title)"
+        )
+    }
+
+    private func createMeeting(_ input: [String: Any]) async -> ToolResult {
+        guard let title = string(input, "title")?.trimmingCharacters(in: .whitespaces),
+              !title.isEmpty else {
+            return err("Missing required 'title'.", summary: "Create meeting failed")
+        }
+        let content = string(input, "content") ?? ""
+        let overview = string(input, "overview") ?? ""
+        let actionItems = string(input, "action_items") ?? ""
+        let participants = stringArray(input, "participants")
+        let organizer = string(input, "organizer") ?? ""
+        let durationMinutes: Int = {
+            if let n = input["duration_minutes"] as? Int { return n }
+            if let n = input["duration_minutes"] as? Double { return Int(n) }
+            if let s = string(input, "duration_minutes"), let n = Int(s) { return n }
+            return 0
+        }()
+        let meetingDate = parseDate(string(input, "meeting_date")) ?? Date()
+        let tagNames = stringArray(input, "tags")
+        let tagIds = tagNames.isEmpty ? [] : await appState.resolveTagIds(tagNames)
+
+        let meeting = Meeting(
+            title: title,
+            content: content,
+            overview: overview,
+            actionItems: actionItems,
+            participants: participants,
+            organizer: organizer,
+            duration: max(0, durationMinutes) * 60,
+            meetingDate: meetingDate,
+            domainTagIds: tagIds
+        )
+        await appState.addMeeting(meeting)
+        return ok(
+            "Created meeting id=\(meeting.id.uuidString) title=\(title) date=\(ISO8601DateFormatter().string(from: meetingDate))",
+            summary: "Created meeting: \(title)"
         )
     }
 
@@ -386,7 +426,7 @@ final class OttoToolExecutor {
         }()
         let types: Set<String> = {
             if let arr = input["types"] as? [String], !arr.isEmpty { return Set(arr.map { $0.lowercased() }) }
-            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "file", "x_post", "x_follower", "x_dm"]
+            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "file", "x_post", "x_follower", "x_dm"]
         }()
         let limit = max(1, min((input["limit"] as? Int) ?? 20, 100))
         let sortKey = (string(input, "sort") ?? "recent").lowercased()
@@ -473,6 +513,16 @@ final class OttoToolExecutor {
                 matches.append(.init(id: c.id, type: "connection", title: c.fullName,
                                      snippet: c.displayInfo,
                                      date: c.updatedAt, dueDate: nil))
+            }
+        }
+        if types.contains("network") {
+            // Matches across the full entry incl. the structured LinkedIn profile
+            // (summary, every experience, education, skills, languages, certs).
+            for n in appState.networkEntries where textMatches([n.searchableContent]) {
+                matches.append(.init(id: n.id, type: "network",
+                                     title: n.name.isEmpty ? n.company : n.name,
+                                     snippet: n.displayInfo,
+                                     date: n.updatedAt, dueDate: nil))
             }
         }
         if types.contains("file") {
@@ -670,6 +720,38 @@ final class OttoToolExecutor {
                     "email": c.email ?? "",
                     "notes": c.notes
                 ]
+            }
+        case "network":
+            if let n = appState.networkEntries.first(where: { $0.id == id }) {
+                var out: [String: Any] = [
+                    "id": n.id.uuidString, "type": "network",
+                    "name": n.name,
+                    "entry_type": n.type.label,
+                    "role": n.individualType.label,
+                    "company": n.company,
+                    "industry": n.industry,
+                    "title": n.title,
+                    "location": n.location,
+                    "email": n.email,
+                    "closeness": n.closeness.label,
+                    "linkedin": n.linkedin ?? "",
+                    "notes": n.notes
+                ]
+                if let p = n.profile {
+                    out["headline"] = p.headline
+                    out["summary"] = p.summary
+                    out["skills"] = p.skills
+                    out["languages"] = p.languages
+                    out["certifications"] = p.certifications
+                    out["experience"] = p.experiences.map {
+                        ["company": $0.company, "title": $0.title, "dates": $0.dateRange,
+                         "location": $0.location, "description": $0.description]
+                    }
+                    out["education"] = p.education.map {
+                        ["school": $0.school, "detail": $0.detail]
+                    }
+                }
+                payload = out
             }
         case "file":
             if let f = appState.files.first(where: { $0.id == id }) {

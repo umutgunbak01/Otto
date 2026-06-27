@@ -283,6 +283,7 @@ struct OttoSidebar: View {
             case .meeting:    return s.meetings.count
             case .email:      return s.emails.filter { !$0.isRead }.count
             case .connection: return s.connections.count
+            case .networkHub: return s.networkEntries.count
             case .file:       return s.files.count
             case .xPost:      return s.xPosts.count
             case .xFollower:  return s.xFollowers.count
@@ -302,7 +303,8 @@ struct OttoSidebar: View {
             NavType(tab: .habit,      label: "HABITS",      icon: "♨", counter: "—"),
             NavType(tab: .meeting,    label: "MEETING",     icon: "▶", counter: "870"),
             NavType(tab: .email,      label: "EMAIL",       icon: "✉", counter: "8.351"),
-            NavType(tab: .connection, label: "CONNECTIONS", icon: "⌬", counter: "4.128"),
+            NavType(tab: .connection, label: "LINKEDIN", icon: "⌬", counter: "4.128"),
+            NavType(tab: .networkHub, label: "NETWORK HUB", icon: "⬡", counter: "—"),
             NavType(tab: .file,       label: "FILES",       icon: "◰", counter: "1"),
             NavType(tab: .xPost,      label: "X-POSTS",     icon: "✕", counter: "—"),
             NavType(tab: .xFollower,  label: "X-FOLLOWERS", icon: "⊙", counter: "—"),

@@ -19,6 +19,14 @@ struct ConnectionDetailView: View {
     @State private var isEditingTags: Bool = false
     @State private var showingFollowerPicker: Bool = false
 
+    // CRM fields — drafted values for the "More info" section.
+    @State private var draftEmail: String = ""
+    @State private var draftEducation: String = ""
+    @State private var draftBirthday: Date = Date()
+    @State private var hasBirthday: Bool = false
+    @State private var isEditingMoreInfo: Bool = false
+    @State private var showRecentTouchpoints: Bool = false
+
     /// Always reads the latest connection data from appState
     private var connection: Connection {
         appState.connections.first(where: { $0.id == connectionId }) ?? initialConnection
@@ -57,10 +65,21 @@ struct ConnectionDetailView: View {
 
                     OttoDivider()
 
+                    // More info — CRM additions (birthday, email, education, last contact)
+                    moreInfoSection
+
+                    OttoDivider()
+
                     // Linked X Account
                     linkedXSection
 
                     OttoDivider()
+
+                    // Custom fields — user-defined CRM columns
+                    if !appState.connectionCustomFields.isEmpty {
+                        customFieldsSection
+                        OttoDivider()
+                    }
 
                     // Tags
                     tagsSection
@@ -79,6 +98,15 @@ struct ConnectionDetailView: View {
         .onAppear {
             editedNotes = connection.notes
             editedTags = connection.tags
+            draftEmail = connection.email ?? ""
+            draftEducation = connection.education ?? ""
+            if let bd = connection.birthday {
+                draftBirthday = bd
+                hasBirthday = true
+            } else {
+                draftBirthday = Date()
+                hasBirthday = false
+            }
         }
     }
 
@@ -340,6 +368,189 @@ struct ConnectionDetailView: View {
                         .font(Theme.Typography.body)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .italic()
+                }
+            }
+        }
+    }
+
+    // MARK: - More Info Section (CRM additions)
+
+    private var moreInfoSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack {
+                Text("More Info")
+                    .font(Theme.Typography.headline)
+                Spacer()
+                Button {
+                    if isEditingMoreInfo {
+                        saveMoreInfo()
+                    }
+                    isEditingMoreInfo.toggle()
+                } label: {
+                    Text(isEditingMoreInfo ? "Done" : "Edit")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.accent)
+                }
+                .buttonStyle(.plain)
+            }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                if isEditingMoreInfo {
+                    moreInfoEditRow(icon: "envelope", label: "Email") {
+                        TextField("name@example.com", text: $draftEmail)
+                            .textFieldStyle(.plain)
+                            .font(Theme.Typography.body)
+                    }
+
+                    moreInfoEditRow(icon: "graduationcap", label: "Education") {
+                        TextField("e.g. MIT, BS CS, 2018", text: $draftEducation)
+                            .textFieldStyle(.plain)
+                            .font(Theme.Typography.body)
+                    }
+
+                    moreInfoEditRow(icon: "gift", label: "Birthday") {
+                        HStack(spacing: 8) {
+                            Toggle("", isOn: $hasBirthday)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            if hasBirthday {
+                                DatePicker("", selection: $draftBirthday, displayedComponents: .date)
+                                    .datePickerStyle(.field)
+                                    .labelsHidden()
+                            } else {
+                                Text("None")
+                                    .font(Theme.Typography.body)
+                                    .foregroundStyle(Theme.Colors.tertiaryText)
+                                    .italic()
+                            }
+                            Spacer()
+                        }
+                    }
+                } else {
+                    moreInfoDisplayRow(icon: "envelope", label: "Email", value: connection.email, placeholder: "Not set")
+                    moreInfoDisplayRow(icon: "graduationcap", label: "Education", value: connection.education, placeholder: "Not set")
+                    moreInfoDisplayRow(
+                        icon: "gift",
+                        label: "Birthday",
+                        value: connection.birthday.map { formatDate($0) },
+                        placeholder: "Not set"
+                    )
+                    lastContactRow
+                }
+            }
+        }
+    }
+
+    private func moreInfoEditRow<Content: View>(icon: String, label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Colors.secondaryText)
+                .frame(width: 20)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func moreInfoDisplayRow(icon: String, label: String, value: String?, placeholder: String) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Image(systemName: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.Colors.secondaryText)
+                .frame(width: 20)
+            if let value = value, !value.isEmpty {
+                Text(value)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.text)
+            } else {
+                Text(placeholder)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .italic()
+            }
+            Spacer()
+        }
+    }
+
+    private var lastContactRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .frame(width: 20)
+                if let date = connection.lastContactedAt {
+                    Text("Last contact: \(ConnectionDateFormat.relative(date))")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.text)
+                    Text(ConnectionDateFormat.short(date))
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                } else {
+                    Text("No recorded touchpoints")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .italic()
+                }
+                Spacer()
+                if connection.lastContactedAt != nil {
+                    Button {
+                        showRecentTouchpoints.toggle()
+                    } label: {
+                        Image(systemName: showRecentTouchpoints ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if showRecentTouchpoints {
+                let touchpoints = ContactActivityIndexer.recentTouchpoints(
+                    for: connection,
+                    emails: appState.emails,
+                    calendarEvents: appState.calendarEvents
+                )
+                if touchpoints.isEmpty {
+                    Text("No recent emails or meetings matched.")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .padding(.leading, 30)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(touchpoints) { touchpoint in
+                            HStack(spacing: 6) {
+                                Image(systemName: touchpoint.kind == .email ? "envelope" : (touchpoint.kind == .meeting ? "calendar" : "message"))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Theme.Colors.tertiaryText)
+                                Text(ConnectionDateFormat.short(touchpoint.date))
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Theme.Colors.secondaryText)
+                                Text(touchpoint.title)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Theme.Colors.text)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .padding(.leading, 30)
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom Fields Section
+
+    private var customFieldsSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Custom Fields")
+                .font(Theme.Typography.headline)
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                ForEach(appState.connectionCustomFields.sorted(by: { $0.sortIndex < $1.sortIndex })) { definition in
+                    DetailCustomFieldRow(definition: definition, connection: connection)
                 }
             }
         }
@@ -712,6 +923,62 @@ struct ConnectionDetailView: View {
         Task {
             await appState.updateConnection(updated)
         }
+    }
+
+    private func saveMoreInfo() {
+        var updated = connection
+        let email = draftEmail.trimmingCharacters(in: .whitespaces)
+        updated.email = email.isEmpty ? nil : email
+        let education = draftEducation.trimmingCharacters(in: .whitespaces)
+        updated.education = education.isEmpty ? nil : education
+        updated.birthday = hasBirthday ? draftBirthday : nil
+        Task {
+            await appState.updateConnection(updated)
+        }
+    }
+}
+
+// MARK: - Detail-view wrapper around CustomFieldCell that holds its own edit state.
+
+private struct DetailCustomFieldRow: View {
+    @Environment(AppState.self) private var appState
+    let definition: CustomFieldDefinition
+    let connection: Connection
+
+    @State private var isEditing: Bool = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+            HStack(spacing: 4) {
+                Image(systemName: definition.kind.icon)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Text(definition.name)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+            }
+            .frame(width: 140, alignment: .leading)
+
+            CustomFieldCell(
+                definition: definition,
+                value: connection.customFields[definition.id],
+                isEditing: isEditing,
+                onBeginEdit: { isEditing = true },
+                onEndEdit: { isEditing = false },
+                onCommit: { newValue in
+                    Task {
+                        await appState.setCustomFieldValue(
+                            on: connection.id,
+                            fieldId: definition.id,
+                            value: newValue
+                        )
+                    }
+                    isEditing = false
+                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 4)
     }
 }
 

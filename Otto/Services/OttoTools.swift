@@ -6,7 +6,7 @@ enum OttoTools {
 
     /// Compile-time set of tool names. Executor switches on these.
     enum Name: String {
-        case create_todo, create_note, create_idea, create_reminder, create_bookmark
+        case create_todo, create_note, create_idea, create_reminder, create_bookmark, create_meeting
         case update_todo, update_note, update_idea
         case complete_todo, uncomplete_todo, complete_reminder
         case delete_item
@@ -82,6 +82,24 @@ enum OttoTools {
                     "description": stringProp("Optional description.")
                 ],
                 required: ["url"]
+            )
+        ],
+        [
+            "name": Name.create_meeting.rawValue,
+            "description": "Create a meeting note. Use when the user wants to record a meeting they had or plan to have — capturing notes, a summary, action items, and participants. Distinct from a plain note because meetings have structured fields the Meetings tab renders (overview card, action items list, participant chips). For a one-off thought with no meeting context, prefer `create_note` instead.",
+            "input_schema": objectSchema(
+                properties: [
+                    "title": stringProp("Meeting title (required)."),
+                    "content": stringProp("Full notes / transcript body. Plain text or markdown."),
+                    "overview": stringProp("Short summary of what was discussed; shown at the top of the meeting card."),
+                    "action_items": stringProp("Action items / follow-ups, one per line. Plain text."),
+                    "participants": arrayOfStrings("Names or emails of people who attended."),
+                    "organizer": stringProp("Name or email of who organized the meeting."),
+                    "duration_minutes": ["type": "integer", "description": "Length of the meeting in minutes. Optional.", "minimum": 0],
+                    "meeting_date": stringProp("ISO8601 datetime when the meeting happened or will happen, e.g. 2026-05-19T15:00:00Z. Defaults to now."),
+                    "tags": arrayOfStrings("Domain tag names.")
+                ],
+                required: ["title"]
             )
         ],
 
@@ -177,10 +195,10 @@ enum OttoTools {
                     "query": stringProp("Optional free-text query (case-insensitive substring match on title/content; also matches file names, tags, OCR'd / extracted text, X post text, follower bio/handle, DM body). Omit to list everything matching the other filters."),
                     "types": [
                         "type": "array",
-                        "description": "Limit to these types. Default: all of (todo, note, idea, reminder, bookmark, meeting, email, connection, file, x_post, x_follower, x_dm). `file` covers user-imported PDFs / CSVs / images / text files. `x_post`/`x_follower`/`x_dm` cover synced X (Twitter) data.",
+                        "description": "Limit to these types. Default: all of (todo, note, idea, reminder, bookmark, meeting, email, connection, network, file, x_post, x_follower, x_dm). `connection` is the raw LinkedIn CSV import; `network` is the curated Network Hub (people & orgs with structured LinkedIn profiles — summary, experience, education, skills, languages, certifications — all of it searchable). `file` covers user-imported PDFs / CSVs / images / text files. `x_post`/`x_follower`/`x_dm` cover synced X (Twitter) data.",
                         "items": [
                             "type": "string",
-                            "enum": ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"]
+                            "enum": ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "habit", "file", "x_post", "x_follower", "x_dm"]
                         ]
                     ],
                     "sort": enumProp(
@@ -210,7 +228,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"],
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "habit", "file", "x_post", "x_follower", "x_dm"],
                         "Which collection the item lives in."
                     )
                 ],
@@ -224,7 +242,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item (from search_items or get_item)."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "habit", "file", "x_post", "x_follower", "x_dm"],
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "habit", "file", "x_post", "x_follower", "x_dm"],
                         "Which collection the item lives in."
                     )
                 ],

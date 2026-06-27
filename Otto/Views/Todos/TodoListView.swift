@@ -103,13 +103,17 @@ struct TodoListView: View {
 
         // Create day groups
         let groups = allDays.sorted().map { date -> DayGroup in
+            // Sort by time first so todos interleave chronologically with
+            // calendar events in DaySection (which merges both by time).
+            // Priority and recency are tie-breakers when times match. Keeping
+            // this in sync with DaySection's order means keyboard navigation
+            // (allVisibleTodos) follows the same sequence the user sees.
             let todos = (todosByDay[date] ?? []).sorted { todo1, todo2 in
+                if let d1 = todo1.dueDate, let d2 = todo2.dueDate, d1 != d2 {
+                    return d1 < d2
+                }
                 if todo1.priority != todo2.priority {
                     return todo1.priority > todo2.priority
-                }
-                // Sort by time if both have specific times
-                if let d1 = todo1.dueDate, let d2 = todo2.dueDate {
-                    return d1 < d2
                 }
                 return todo1.createdAt > todo2.createdAt
             }
