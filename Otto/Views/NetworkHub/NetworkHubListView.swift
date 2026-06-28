@@ -576,6 +576,10 @@ struct NetworkEntryEditor: View {
                     .padding(.top, 6)
 
                     profileSection
+
+                    if let e = entry {
+                        EntryCompanyLinker(entryId: e.id, entryCompanyText: company)
+                    }
                 }
                 .padding(20)
             }
@@ -829,4 +833,149 @@ struct NetworkEntryEditor: View {
     NetworkHubListView()
         .environment(AppState())
         .frame(width: 1000, height: 700)
+}
+
+// MARK: - Company linker (reverse side: link companies to a network entry)
+
+/// Shown in a Network Hub entry's editor. Lists the companies this person is
+/// linked to and lets you link/unlink — written straight to each Company's
+/// `linkedNetworkEntryIds` (the same field the company side edits, so it's one
+/// shared two-way link). Tapping a linked company opens its editor. With an
+/// empty search it suggests companies whose name matches the entry's company.
+private struct EntryCompanyLinker: View {
+    let entryId: UUID
+    let entryCompanyText: String
+    @Environment(AppState.self) private var appState
+
+    @State private var search = ""
+    @State private var adding = false
+    @State private var openCompany: Company?
+
+    private var linked: [Company] {
+        appState.companies.filter { $0.linkedNetworkEntryIds.contains(entryId) }
+    }
+
+    private var candidates: [Company] {
+        let pool = appState.companies.filter { !$0.linkedNetworkEntryIds.contains(entryId) }
+        let q = search.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty {
+            let key = LocationNormalizer.fold(entryCompanyText)
+            guard key.count >= 2 else { return [] }
+            return Array(pool.filter {
+                let n = LocationNormalizer.fold($0.name)
+                return !n.isEmpty && (n.contains(key) || key.contains(n))
+            }.prefix(8))
+        }
+        return Array(pool.filter { $0.searchableContent.localizedCaseInsensitiveContains(q) }.prefix(20))
+    }
+
+    private func link(_ c: Company) {
+        guard !c.linkedNetworkEntryIds.contains(entryId) else { return }
+        var u = c
+        u.linkedNetworkEntryIds.append(entryId)
+        Task { await appState.updateCompany(u) }
+    }
+
+    private func unlink(_ c: Company) {
+        var u = c
+        u.linkedNetworkEntryIds.removeAll { $0 == entryId }
+        Task { await appState.updateCompany(u) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("LINKED COMPANIES")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .tracking(1.5)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+
+            if linked.isEmpty {
+                Text("No companies linked yet.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.Colors.tertiaryText)
+            } else {
+                ForEach(linked) { c in
+                    HStack(spacing: 0) {
+                        Button { openCompany = c } label: {
+                            companyRowContent(c, trailingIcon: nil, trailingTint: .clear)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open \(c.name)")
+
+                        Button { unlink(c) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).help("Unlink")
+                    }
+                    .background(Theme.Colors.bg2)
+                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                }
+            }
+
+            Button { withAnimation { adding.toggle() } } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: adding ? "chevron.down" : "plus.circle").font(.system(size: 11))
+                    Text(adding ? "Done" : "Link company").font(.system(size: 12))
+                }
+                .foregroundStyle(Theme.Colors.accent)
+            }
+            .buttonStyle(.plain)
+
+            if adding {
+                TextField("Search companies…", text: $search)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .background(Theme.Colors.hoverTint)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.Colors.border, lineWidth: 1))
+                if candidates.isEmpty {
+                    Text(search.isEmpty ? "No name match — type to search all companies." : "No matches.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.Colors.tertiaryText)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(candidates) { c in
+                            Button { link(c) } label: {
+                                companyRowContent(c, trailingIcon: "plus", trailingTint: Theme.Colors.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                }
+            }
+        }
+        .sheet(item: $openCompany) { c in
+            CompanyEditorSheet(company: appState.companies.first(where: { $0.id == c.id }) ?? c)
+                .environment(appState)
+        }
+    }
+
+    private func companyRowContent(_ c: Company, trailingIcon: String?, trailingTint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: c.type.icon)
+                .font(.system(size: 11))
+                .foregroundStyle(c.type == .unknown ? Theme.Colors.tertiaryText : c.type.color)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(c.name).font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text).lineLimit(1)
+                let sub = [c.type.label, c.isCustomer ? "Customer" : "", c.formattedCommitment ?? ""]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+                if !sub.isEmpty {
+                    Text(sub).font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if let trailingIcon {
+                Image(systemName: trailingIcon).font(.system(size: 12)).foregroundStyle(trailingTint)
+            }
+        }
+        .padding(.vertical, 5).padding(.horizontal, 8)
+        .contentShape(Rectangle())
+    }
 }

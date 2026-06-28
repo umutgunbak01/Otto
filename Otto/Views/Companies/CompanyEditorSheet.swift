@@ -15,6 +15,7 @@ struct CompanyEditorSheet: View {
     @State private var website: String
     @State private var notes: String
     @State private var linkedNetworkIds: [UUID]
+    @State private var openPerson: NetworkEntry?
 
     private var isEditing: Bool { company != nil }
 
@@ -79,7 +80,8 @@ struct CompanyEditorSheet: View {
                         CompanyPeopleLinker(
                             linkedIds: $linkedNetworkIds,
                             companyName: name,
-                            allEntries: appState.networkEntries
+                            allEntries: appState.networkEntries,
+                            onOpenPerson: { openPerson = $0 }
                         )
                     }
                 }
@@ -89,6 +91,14 @@ struct CompanyEditorSheet: View {
         }
         .frame(minWidth: 520, minHeight: 560)
         .background(Theme.Colors.bg1)
+        .sheet(item: $openPerson) { person in
+            NetworkEntryEditor(
+                entry: appState.networkEntries.first(where: { $0.id == person.id }) ?? person,
+                onClose: { openPerson = nil }
+            )
+            .environment(appState)
+            .frame(minWidth: 600, minHeight: 640)
+        }
     }
 
     private var header: some View {
@@ -169,6 +179,7 @@ private struct CompanyPeopleLinker: View {
     @Binding var linkedIds: [UUID]
     let companyName: String
     let allEntries: [NetworkEntry]
+    var onOpenPerson: (NetworkEntry) -> Void
 
     @State private var search = ""
     @State private var adding = false
@@ -200,8 +211,7 @@ private struct CompanyPeopleLinker: View {
                     .foregroundStyle(Theme.Colors.tertiaryText)
             } else {
                 ForEach(linked) { e in
-                    personRow(e, action: { linkedIds.removeAll { $0 == e.id } },
-                              icon: "xmark.circle.fill", iconTint: Theme.Colors.tertiaryText)
+                    linkedRow(e)
                         .background(Theme.Colors.bg2)
                         .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
                 }
@@ -228,8 +238,10 @@ private struct CompanyPeopleLinker: View {
                     }
                     VStack(spacing: 0) {
                         ForEach(candidates) { e in
-                            personRow(e, action: { linkedIds.append(e.id) },
-                                      icon: "plus", iconTint: Theme.Colors.accent)
+                            Button { linkedIds.append(e.id) } label: {
+                                personRowContent(e, trailingIcon: "plus", trailingTint: Theme.Colors.accent)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
@@ -238,25 +250,45 @@ private struct CompanyPeopleLinker: View {
         }
     }
 
-    private func personRow(_ e: NetworkEntry, action: @escaping () -> Void, icon: String, iconTint: Color) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: e.individualType.icon)
-                    .font(.system(size: 11)).foregroundStyle(e.type.color).frame(width: 16)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(e.name).font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Theme.Colors.text).lineLimit(1)
-                    if !e.displayInfo.isEmpty {
-                        Text(e.displayInfo).font(.system(size: 10))
-                            .foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-                Image(systemName: icon).font(.system(size: 12)).foregroundStyle(iconTint)
+    /// Linked row: tapping the person opens their detail; the × unlinks.
+    private func linkedRow(_ e: NetworkEntry) -> some View {
+        HStack(spacing: 0) {
+            Button { onOpenPerson(e) } label: {
+                personRowContent(e, trailingIcon: nil, trailingTint: .clear)
             }
-            .padding(.vertical, 5).padding(.horizontal, 8)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help("Open \(e.name)'s details")
+
+            Button { linkedIds.removeAll { $0 == e.id } } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Unlink")
         }
-        .buttonStyle(.plain)
+    }
+
+    private func personRowContent(_ e: NetworkEntry, trailingIcon: String?, trailingTint: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: e.individualType.icon)
+                .font(.system(size: 11)).foregroundStyle(e.type.color).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(e.name).font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text).lineLimit(1)
+                if !e.displayInfo.isEmpty {
+                    Text(e.displayInfo).font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            if let trailingIcon {
+                Image(systemName: trailingIcon).font(.system(size: 12)).foregroundStyle(trailingTint)
+            }
+        }
+        .padding(.vertical, 5).padding(.horizontal, 8)
+        .contentShape(Rectangle())
     }
 }
