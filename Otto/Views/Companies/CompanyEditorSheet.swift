@@ -80,7 +80,7 @@ struct CompanyEditorSheet: View {
                         CompanyPeopleLinker(
                             linkedIds: $linkedNetworkIds,
                             companyName: name,
-                            allEntries: appState.networkEntries,
+                            companyLocation: location,
                             onOpenPerson: { openPerson = $0 }
                         )
                     }
@@ -178,11 +178,14 @@ struct CompanyEditorSheet: View {
 private struct CompanyPeopleLinker: View {
     @Binding var linkedIds: [UUID]
     let companyName: String
-    let allEntries: [NetworkEntry]
+    let companyLocation: String
     var onOpenPerson: (NetworkEntry) -> Void
 
+    @Environment(AppState.self) private var appState
     @State private var search = ""
     @State private var adding = false
+
+    private var allEntries: [NetworkEntry] { appState.networkEntries }
 
     private var linked: [NetworkEntry] {
         linkedIds.compactMap { id in allEntries.first { $0.id == id } }
@@ -227,16 +230,20 @@ private struct CompanyPeopleLinker: View {
             .buttonStyle(.plain)
 
             if adding {
-                FormText(text: $search, placeholder: "Search network people…")
-                if candidates.isEmpty {
-                    Text(search.isEmpty ? "No company-name matches — type to search your whole network." : "No matches.")
+                FormText(text: $search, placeholder: "Search people, or type a new name to create…")
+                let q = search.trimmingCharacters(in: .whitespaces)
+                if q.isEmpty && candidates.isEmpty {
+                    Text("Type a name to search your network — or to create a new person.")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 } else {
-                    if search.isEmpty {
+                    if q.isEmpty && !candidates.isEmpty {
                         Text("SUGGESTED · \(companyName.uppercased())").hudLabel(tracking: Theme.Tracking.wide)
                     }
                     VStack(spacing: 0) {
+                        if !q.isEmpty {
+                            createRow(name: q)
+                        }
                         ForEach(candidates) { e in
                             Button { linkedIds.append(e.id) } label: {
                                 personRowContent(e, trailingIcon: "plus", trailingTint: Theme.Colors.accent)
@@ -248,6 +255,41 @@ private struct CompanyPeopleLinker: View {
                 }
             }
         }
+    }
+
+    /// Inline "create a new Network Hub person and link them" row. Pre-fills the
+    /// person's company + city from this company so they land on the map.
+    private func createRow(name: String) -> some View {
+        Button { createAndLink(name) } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Colors.green).frame(width: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Create “\(name)”")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.text).lineLimit(1)
+                    Text("New Network Hub person · \(companyName.isEmpty ? "linked here" : companyName)")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 5).padding(.horizontal, 8)
+            .background(Theme.Colors.green.opacity(0.06))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func createAndLink(_ name: String) {
+        let entry = NetworkEntry(
+            company: companyName.trimmingCharacters(in: .whitespaces),
+            name: name,
+            location: companyLocation.trimmingCharacters(in: .whitespaces)
+        )
+        Task { await appState.addNetworkEntry(entry) }
+        linkedIds.append(entry.id)
+        search = ""
     }
 
     /// Linked row: tapping the person opens their detail; the × unlinks.
