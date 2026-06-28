@@ -316,23 +316,32 @@ struct NoteBlockEditor: View {
         }
     }
 
-    /// Clickable checkboxes for todo lines, positioned over the hidden "- [ ] "
-    /// marker using the same line rects the gutter handles use.
+    /// Real markers overlaid on list lines (clickable checkbox for todos, a "•"
+    /// for bullets), positioned over the hidden markdown using the same line
+    /// rects the gutter handles use.
     private var todoCheckboxLayer: some View {
         GeometryReader { _ in
-            let todos = parseLineBlocks(content).filter { $0.type == .todo }
-            ForEach(todos, id: \.lineIndex) { block in
+            let blocks = parseLineBlocks(content).filter { $0.type == .todo || $0.type == .bulletList }
+            ForEach(blocks, id: \.lineIndex) { block in
                 if let rect = lineRects[block.lineIndex] {
-                    Button { toggleTodo(block.lineIndex) } label: {
-                        Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
-                            .font(.system(size: 15))
-                            .foregroundStyle(block.isCompleted ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
+                    if block.type == .todo {
+                        Button { toggleTodo(block.lineIndex) } label: {
+                            Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 15))
+                                .foregroundStyle(block.isCompleted ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(block.isCompleted ? "Mark not done" : "Mark done")
+                        .position(x: 44 + 10, y: rect.midY)
+                    } else {
+                        Text("•")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .frame(width: 12, alignment: .center)
+                            .position(x: 44 + 5, y: rect.midY)
                     }
-                    .buttonStyle(.plain)
-                    .help(block.isCompleted ? "Mark not done" : "Mark done")
-                    .position(x: 44 + 10, y: rect.midY)
                 }
             }
         }
@@ -816,9 +825,13 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     bulletPara.headIndent = 0
                     bulletPara.lineSpacing = 3
                     bulletPara.paragraphSpacing = 1
-                    storage.addAttributes([
-                        .paragraphStyle: bulletPara
-                    ], range: contentRange)
+                    storage.addAttribute(.paragraphStyle, value: bulletPara, range: contentRange)
+                    // Hide the literal "- " marker; a "•" bullet is overlaid instead.
+                    let dashLen = min(2, contentRange.length)
+                    storage.addAttribute(
+                        .foregroundColor, value: NSColor.clear,
+                        range: NSRange(location: contentRange.location, length: dashLen)
+                    )
 
                 case .numberedList:
                     let numPara = NSMutableParagraphStyle()
