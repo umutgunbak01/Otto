@@ -289,7 +289,11 @@ struct NoteBlockEditor: View {
         GeometryReader { geo in
             let blocks = parseLineBlocks(content)
 
-            ForEach(blocks) { block in
+            // Identify by line index, not the per-parse UUID — otherwise every
+            // hover re-render recreates these rows, which destroys the "+"/"⋮⋮"
+            // button a popover is anchored to and dismisses it the moment you
+            // move onto the menu.
+            ForEach(blocks, id: \.lineIndex) { block in
                 if let rect = lineRects[block.lineIndex] {
                     let isHoveredLine = hoveredLineIndex == block.lineIndex
                     let isPickerLine = showBlockPicker && pickerLineIndex == block.lineIndex
