@@ -123,6 +123,9 @@ private struct InlineTable<Header: View, Rows: View>: View {
                     .background(Theme.Colors.borderSubtle.opacity(0.7))
                     .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border).frame(height: 1) }
                 LazyVStack(spacing: 0) { rows() }
+                // Breathing room so the last row can scroll clear of the dock's
+                // floating suggestion chips (which overhang the content bottom).
+                Color.clear.frame(height: 72)
             }
             .frame(width: totalWidth, alignment: .leading)
         }
