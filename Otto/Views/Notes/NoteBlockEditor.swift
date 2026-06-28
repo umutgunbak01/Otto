@@ -295,6 +295,10 @@ struct NoteBlockEditor: View {
                 .frame(maxWidth: .infinity, minHeight: 400)
             }
 
+            // Real, clickable checkboxes overlaid on todo lines (the markdown
+            // "- [ ] " marker is hidden by the styling pass).
+            todoCheckboxLayer
+
             // Slash menu overlay
             if showSlashMenu {
                 SlashCommandMenu(
@@ -311,7 +315,44 @@ struct NoteBlockEditor: View {
             }
         }
     }
+
+    /// Clickable checkboxes for todo lines, positioned over the hidden "- [ ] "
+    /// marker using the same line rects the gutter handles use.
+    private var todoCheckboxLayer: some View {
+        GeometryReader { _ in
+            let todos = parseLineBlocks(content).filter { $0.type == .todo }
+            ForEach(todos, id: \.lineIndex) { block in
+                if let rect = lineRects[block.lineIndex] {
+                    Button { toggleTodo(block.lineIndex) } label: {
+                        Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 15))
+                            .foregroundStyle(block.isCompleted ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(block.isCompleted ? "Mark not done" : "Mark done")
+                    .position(x: 44 + 10, y: rect.midY)
+                }
+            }
+        }
+    }
     #endif
+
+    /// Toggle a todo line's checkbox in the underlying markdown.
+    private func toggleTodo(_ lineIndex: Int) {
+        var lines = content.components(separatedBy: "\n")
+        guard lineIndex < lines.count else { return }
+        let line = lines[lineIndex]
+        if line.hasPrefix("- [ ] ") {
+            lines[lineIndex] = "- [x] " + line.dropFirst(6)
+        } else if line.hasPrefix("- [x] ") {
+            lines[lineIndex] = "- [ ] " + line.dropFirst(6)
+        } else {
+            return
+        }
+        content = lines.joined(separator: "\n")
+    }
 
     // MARK: - Block Gutter (macOS only)
 
@@ -792,16 +833,21 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     let todoPara = NSMutableParagraphStyle()
                     todoPara.lineSpacing = 3
                     todoPara.paragraphSpacing = 1
-                    if isCompleted {
+                    storage.addAttribute(.paragraphStyle, value: todoPara, range: contentRange)
+                    // Hide the "- [ ] " / "- [x] " marker (still in the text) —
+                    // a real clickable checkbox is overlaid at this line instead.
+                    let markerLen = min(6, contentRange.length)
+                    storage.addAttribute(
+                        .foregroundColor, value: NSColor.clear,
+                        range: NSRange(location: contentRange.location, length: markerLen)
+                    )
+                    // Strike through only the text after the marker when done.
+                    if isCompleted, contentRange.length > markerLen {
                         storage.addAttributes([
                             .foregroundColor: NSColor(Theme.Colors.tertiaryText),
-                            .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                            .paragraphStyle: todoPara
-                        ], range: contentRange)
-                    } else {
-                        storage.addAttributes([
-                            .paragraphStyle: todoPara
-                        ], range: contentRange)
+                            .strikethroughStyle: NSUnderlineStyle.single.rawValue
+                        ], range: NSRange(location: contentRange.location + markerLen,
+                                          length: contentRange.length - markerLen))
                     }
 
                 case .quote:
