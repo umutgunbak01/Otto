@@ -1033,6 +1033,37 @@ class BlockNSTextView: NSTextView {
             insertText("\n" + nextListMarker(type, currentLine: line), replacementRange: sel)
         }
     }
+
+    /// Backspace at the start of a list item's content removes the whole marker
+    /// in one step (de-lists the line) instead of nibbling the "- [ ] " text
+    /// char-by-char — which would otherwise expose the raw markdown.
+    override func deleteBackward(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length == 0, sel.location > 0 else { super.deleteBackward(sender); return }
+
+        let ns = string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        var line = ns.substring(with: lineRange)
+        if line.hasSuffix("\n") { line.removeLast() }
+
+        let (type, _) = blockTypeForLine(line)
+        switch type {
+        case .bulletList, .numberedList, .todo, .quote:
+            break
+        default:
+            super.deleteBackward(sender)
+            return
+        }
+
+        let markerLen = (listMarkerPrefix(line, type: type) as NSString).length
+        let lineStart = lineRange.location
+        // Caret within or just after the marker → drop the whole marker.
+        if markerLen > 0, sel.location > lineStart, sel.location <= lineStart + markerLen {
+            insertText("", replacementRange: NSRange(location: lineStart, length: markerLen))
+        } else {
+            super.deleteBackward(sender)
+        }
+    }
 }
 
 // Helper extension for italic NSFont
