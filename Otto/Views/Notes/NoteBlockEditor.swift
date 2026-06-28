@@ -153,6 +153,10 @@ struct NoteBlockEditor: View {
     @Binding var content: String
 
     @State private var hoveredLineIndex: Int? = nil
+    /// Set while the pointer is over a line's gutter handles, so moving from the
+    /// text out to the + / ⋮⋮ buttons keeps them visible (the text view's
+    /// mouseExited clears `hoveredLineIndex` as soon as you leave the text).
+    @State private var gutterHoveredLine: Int? = nil
     @State private var showBlockPicker: Bool = false
     @State private var showActionsMenu: Bool = false
     @State private var pickerLineIndex: Int = 0
@@ -290,7 +294,7 @@ struct NoteBlockEditor: View {
                     let isHoveredLine = hoveredLineIndex == block.lineIndex
                     let isPickerLine = showBlockPicker && pickerLineIndex == block.lineIndex
                     let isActionsLine = showActionsMenu && actionsLineIndex == block.lineIndex
-                    let showHandles = isHoveredLine || isPickerLine || isActionsLine
+                    let showHandles = isHoveredLine || isPickerLine || isActionsLine || gutterHoveredLine == block.lineIndex
 
                     HStack(spacing: 0) {
                         if showHandles {
@@ -360,6 +364,16 @@ struct NoteBlockEditor: View {
                     .frame(width: 44, alignment: .trailing)
                     .position(x: 22, y: rect.midY)
                     .animation(.easeInOut(duration: 0.08), value: showHandles)
+                    // Keep the handles alive while the pointer is over the gutter
+                    // (the stable Color.clear placeholder makes this region always
+                    // hoverable, so there's no gap between the text and the buttons).
+                    .onHover { hovering in
+                        if hovering {
+                            gutterHoveredLine = block.lineIndex
+                        } else if gutterHoveredLine == block.lineIndex {
+                            gutterHoveredLine = nil
+                        }
+                    }
                 }
             }
         }
