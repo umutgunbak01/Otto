@@ -137,6 +137,37 @@ func blockTypeForLine(_ line: String) -> (type: BlockType, isCompleted: Bool) {
     return (.text, false)
 }
 
+/// The leading marker of a list-type line (so it can be stripped or continued).
+func listMarkerPrefix(_ line: String, type: BlockType) -> String {
+    switch type {
+    case .bulletList: return "- "
+    case .todo:       return line.hasPrefix("- [x] ") ? "- [x] " : "- [ ] "
+    case .quote:      return "> "
+    case .numberedList:
+        if let m = line.range(of: #"^\d+\. "#, options: .regularExpression) {
+            return String(line[line.startIndex..<m.upperBound])
+        }
+        return ""
+    default: return ""
+    }
+}
+
+/// The marker that starts the next item when continuing a list on Return.
+func nextListMarker(_ type: BlockType, currentLine: String) -> String {
+    switch type {
+    case .bulletList: return "- "
+    case .todo:       return "- [ ] "   // new items start unchecked
+    case .quote:      return "> "
+    case .numberedList:
+        if let m = currentLine.range(of: #"^\d+\. "#, options: .regularExpression) {
+            let digits = currentLine[currentLine.startIndex..<m.upperBound].prefix { $0.isNumber }
+            if let n = Int(digits) { return "\(n + 1). " }
+        }
+        return "1. "
+    default: return ""
+    }
+}
+
 func parseLineBlocks(_ text: String) -> [NoteBlock] {
     let lines = text.components(separatedBy: "\n")
     if lines.isEmpty { return [NoteBlock(lineIndex: 0)] }
@@ -610,55 +641,10 @@ struct RichNoteTextEditor: NSViewRepresentable {
                 }
             }
 
-            // Handle Enter key for list continuation
-            if replacementString == "\n" {
-                let text = textView.string
-                let cursorPos = affectedCharRange.location
-                let lineRange = (text as NSString).lineRange(for: NSRange(location: cursorPos, length: 0))
-                let currentLine = (text as NSString).substring(with: lineRange).trimmingCharacters(in: .newlines)
-
-                let (blockType, _) = blockTypeForLine(currentLine)
-
-                // If empty list/todo line, strip the prefix instead of continuing
-                let stripped = stripLinePrefix(currentLine)
-                if stripped.isEmpty && (blockType == .bulletList || blockType == .numberedList || blockType == .todo) {
-                    // Replace the current line's prefix with empty (undo-friendly)
-                    let lineWithNewline = NSRange(location: lineRange.location, length: max(lineRange.length - 1, 0))
-                    textView.insertText("", replacementRange: lineWithNewline)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-
-                // Continue list type on new line
-                if blockType == .bulletList {
-                    let insertion = "\n- "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-                if blockType == .numberedList {
-                    // Parse current number and increment
-                    if let match = currentLine.range(of: #"^(\d+)\. "#, options: .regularExpression) {
-                        let numStr = currentLine[currentLine.startIndex..<currentLine.index(before: match.upperBound)]
-                        if let num = Int(numStr.trimmingCharacters(in: .punctuationCharacters)) {
-                            let insertion = "\n\(num + 1). "
-                            textView.insertText(insertion, replacementRange: affectedCharRange)
-                            textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                            return false
-                        }
-                    }
-                    let insertion = "\n1. "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-                if blockType == .todo {
-                    let insertion = "\n- [ ] "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-            }
+            // Return-key list continuation (numbered / bullets / checkboxes /
+            // quote) is handled in BlockNSTextView.insertNewline — doing it here
+            // meant calling insertText re-entrantly inside shouldChangeText,
+            // which AppKit runs unreliably.
 
             return true
         }
@@ -966,6 +952,39 @@ class BlockNSTextView: NSTextView {
         super.mouseExited(with: event)
         if let coordinator = hoverDelegate as? RichNoteTextEditor.Coordinator {
             coordinator.handleMouseExited(event)
+        }
+    }
+
+    /// Continue list / checkbox / numbered / quote blocks on Return, and end the
+    /// list when Return is pressed on an empty item (so a "double Enter" exits).
+    override func insertNewline(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length == 0 else { super.insertNewline(sender); return }
+
+        let ns = string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        var line = ns.substring(with: lineRange)
+        if line.hasSuffix("\n") { line.removeLast() }
+
+        let (type, _) = blockTypeForLine(line)
+        switch type {
+        case .bulletList, .numberedList, .todo, .quote:
+            break
+        default:
+            super.insertNewline(sender)
+            return
+        }
+
+        let prefix = listMarkerPrefix(line, type: type)
+        let body = String(line.dropFirst(prefix.count))
+
+        if body.trimmingCharacters(in: .whitespaces).isEmpty {
+            // Empty item → end the list: clear this line's marker, stay on it.
+            let markerRange = NSRange(location: lineRange.location, length: (line as NSString).length)
+            insertText("", replacementRange: markerRange)
+        } else {
+            // Continue with the next marker (numbered increments).
+            insertText("\n" + nextListMarker(type, currentLine: line), replacementRange: sel)
         }
     }
 }
