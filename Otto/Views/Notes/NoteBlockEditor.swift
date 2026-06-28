@@ -133,6 +133,10 @@ func blockTypeForLine(_ line: String) -> (type: BlockType, isCompleted: Bool) {
     if line.hasPrefix("- [ ] ") { return (.todo, false) }
     if line.hasPrefix("- ") { return (.bulletList, false) }
     if line.range(of: #"^\d+\. "#, options: .regularExpression) != nil { return (.numberedList, false) }
+    // Toggles encode their state in the marker: "▾ " expanded, "▸ " collapsed.
+    // (isCompleted carries "isCollapsed" for toggle blocks.)
+    if line.hasPrefix("▾ ") { return (.toggle, false) }
+    if line.hasPrefix("▸ ") { return (.toggle, true) }
     if line.hasPrefix("> ") { return (.quote, false) }
     return (.text, false)
 }
@@ -143,6 +147,7 @@ func listMarkerPrefix(_ line: String, type: BlockType) -> String {
     case .bulletList: return "- "
     case .todo:       return line.hasPrefix("- [x] ") ? "- [x] " : "- [ ] "
     case .quote:      return "> "
+    case .toggle:     return line.hasPrefix("▸ ") ? "▸ " : "▾ "
     case .numberedList:
         if let m = line.range(of: #"^\d+\. "#, options: .regularExpression) {
             return String(line[line.startIndex..<m.upperBound])
@@ -321,10 +326,13 @@ struct NoteBlockEditor: View {
     /// rects the gutter handles use.
     private var todoCheckboxLayer: some View {
         GeometryReader { _ in
-            let blocks = parseLineBlocks(content).filter { $0.type == .todo || $0.type == .bulletList }
+            let blocks = parseLineBlocks(content).filter {
+                $0.type == .todo || $0.type == .bulletList || $0.type == .toggle
+            }
             ForEach(blocks, id: \.lineIndex) { block in
                 if let rect = lineRects[block.lineIndex] {
-                    if block.type == .todo {
+                    switch block.type {
+                    case .todo:
                         Button { toggleTodo(block.lineIndex) } label: {
                             Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
                                 .font(.system(size: 15))
@@ -335,7 +343,19 @@ struct NoteBlockEditor: View {
                         .buttonStyle(.plain)
                         .help(block.isCompleted ? "Mark not done" : "Mark done")
                         .position(x: 44 + 10, y: rect.midY)
-                    } else {
+                    case .toggle:
+                        // isCompleted carries "isCollapsed" for toggles.
+                        Button { toggleCollapse(block.lineIndex) } label: {
+                            Image(systemName: block.isCompleted ? "chevron.right" : "chevron.down")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .frame(width: 16, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(block.isCompleted ? "Expand" : "Collapse")
+                        .position(x: 44 + 8, y: rect.midY)
+                    default:
                         Text("•")
                             .font(.system(size: 17, weight: .bold))
                             .foregroundStyle(Theme.Colors.secondaryText)
@@ -357,6 +377,21 @@ struct NoteBlockEditor: View {
             lines[lineIndex] = "- [x] " + line.dropFirst(6)
         } else if line.hasPrefix("- [x] ") {
             lines[lineIndex] = "- [ ] " + line.dropFirst(6)
+        } else {
+            return
+        }
+        content = lines.joined(separator: "\n")
+    }
+
+    /// Collapse / expand a toggle by swapping its marker (state lives in the text).
+    private func toggleCollapse(_ lineIndex: Int) {
+        var lines = content.components(separatedBy: "\n")
+        guard lineIndex < lines.count else { return }
+        let line = lines[lineIndex]
+        if line.hasPrefix("▾ ") {
+            lines[lineIndex] = "▸ " + line.dropFirst(2)
+        } else if line.hasPrefix("▸ ") {
+            lines[lineIndex] = "▾ " + line.dropFirst(2)
         } else {
             return
         }
@@ -478,7 +513,7 @@ struct NoteBlockEditor: View {
         case .bulletList: newLine = "- "
         case .numberedList: newLine = "1. "
         case .todo: newLine = "- [ ] "
-        case .toggle: newLine = "> "
+        case .toggle: newLine = "▾ "
         case .quote: newLine = "> "
         case .divider: newLine = "---"
         }
@@ -504,7 +539,7 @@ struct NoteBlockEditor: View {
         case .bulletList: lines[lineIndex] = "- \(rawContent)"
         case .numberedList: lines[lineIndex] = "1. \(rawContent)"
         case .todo: lines[lineIndex] = "- [ ] \(rawContent)"
-        case .toggle: lines[lineIndex] = "> \(rawContent)"
+        case .toggle: lines[lineIndex] = "▾ \(rawContent)"
         case .quote: lines[lineIndex] = "> \(rawContent)"
         case .divider: lines[lineIndex] = "---"
         }
@@ -546,7 +581,7 @@ struct NoteBlockEditor: View {
         case .bulletList: prefix = "- "
         case .numberedList: prefix = "1. "
         case .todo: prefix = "- [ ] "
-        case .toggle: prefix = "> "
+        case .toggle: prefix = "▾ "
         case .quote: prefix = "> "
         case .divider: prefix = "---"
         }
@@ -559,7 +594,7 @@ struct NoteBlockEditor: View {
     private func stripMarkdownPrefix(_ line: String) -> String {
         let trimmed = line
         if trimmed == "---" { return "" }
-        let prefixes = ["### ", "## ", "# ", "- [x] ", "- [ ] ", "- ", "> "]
+        let prefixes = ["### ", "## ", "# ", "- [x] ", "- [ ] ", "- ", "▾ ", "▸ ", "> "]
         for prefix in prefixes {
             if trimmed.hasPrefix(prefix) {
                 return String(trimmed.dropFirst(prefix.count))
@@ -779,12 +814,31 @@ struct RichNoteTextEditor: NSViewRepresentable {
             // Style each line based on its block type
             let nsText = text as NSString
             var lineStart = 0
+            var hideChildren = false   // inside a collapsed toggle's body
             while lineStart < nsText.length {
                 let lineRange = nsText.lineRange(for: NSRange(location: lineStart, length: 0))
                 let line = nsText.substring(with: lineRange).trimmingCharacters(in: .newlines)
                 let contentRange = NSRange(location: lineRange.location, length: max(lineRange.length - 1, 0))
 
                 let (blockType, isCompleted) = blockTypeForLine(line)
+
+                // Collapse: hide the indented body lines under a collapsed toggle.
+                if hideChildren {
+                    if line.hasPrefix("\t") || line.hasPrefix("  ") {
+                        let cp = NSMutableParagraphStyle()
+                        cp.maximumLineHeight = 0.1
+                        cp.minimumLineHeight = 0.1
+                        storage.addAttributes([
+                            .font: NSFont.systemFont(ofSize: 0.1),
+                            .foregroundColor: NSColor.clear,
+                            .paragraphStyle: cp
+                        ], range: NSRange(location: lineRange.location, length: lineRange.length))
+                        lineStart = NSMaxRange(lineRange)
+                        continue
+                    } else {
+                        hideChildren = false
+                    }
+                }
 
                 switch blockType {
                 case .heading1:
@@ -889,13 +943,18 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
                 case .toggle:
                     let toggleFont = NSFont.systemFont(ofSize: 15, weight: .medium)
-                    storage.addAttributes([
-                        .font: toggleFont
-                    ], range: contentRange)
+                    storage.addAttribute(.font, value: toggleFont, range: contentRange)
+                    // Hide the "▾ "/"▸ " marker — a clickable triangle is overlaid.
+                    let tMarkerLen = min(2, contentRange.length)
+                    storage.addAttribute(.foregroundColor, value: NSColor.clear,
+                                         range: NSRange(location: contentRange.location, length: tMarkerLen))
 
                 case .text:
                     break // default styling already applied
                 }
+
+                // A collapsed toggle hides the indented lines that follow it.
+                if blockType == .toggle, line.hasPrefix("▸ ") { hideChildren = true }
 
                 lineStart = NSMaxRange(lineRange)
             }
@@ -1061,7 +1120,7 @@ class BlockNSTextView: NSTextView {
 
         let (type, _) = blockTypeForLine(line)
         switch type {
-        case .bulletList, .numberedList, .todo, .quote:
+        case .bulletList, .numberedList, .todo, .quote, .toggle:
             break
         default:
             super.deleteBackward(sender)
