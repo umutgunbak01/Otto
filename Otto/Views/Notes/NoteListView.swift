@@ -334,6 +334,21 @@ struct NoteListView: View {
             handleNoteClick(note, shift: false, command: false)
         }
         #endif
+        .contextMenu {
+            Button {
+                handleNoteClick(note, shift: false, command: false)
+            } label: {
+                Label("Open", systemImage: "arrow.up.right.square")
+            }
+            Divider()
+            Button(role: .destructive) {
+                if selectedNoteId == note.id { selectedNoteId = nil }
+                selectedNoteIds.remove(note.id)
+                Task { await appState.deleteNote(note) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 
     // MARK: - Click Handling
