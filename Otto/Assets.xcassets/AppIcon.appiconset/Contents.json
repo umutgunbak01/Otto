@@ -1,67 +1,67 @@
 {
   "images" : [
     {
-      "filename" : "Otto Logo.png",
+      "filename" : "2kx6qg4gL_GIeQLCV06N1_otto_1024.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
     },
     {
-      "filename" : "Otto Logo-7.png",
+      "filename" : "MoWyk2Zqj1XzPL3Sm87EJ_otto_16.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "16x16"
     },
     {
-      "filename" : "Otto Logo-6.png",
+      "filename" : "wgtHnoUShGX4ktEgFmxIJ_otto_32.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "16x16"
     },
     {
-      "filename" : "Otto Logo-6 1.png",
+      "filename" : "wgtHnoUShGX4ktEgFmxIJ_otto_32 1.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "32x32"
     },
     {
-      "filename" : "Otto Logo-5.png",
+      "filename" : "ez8NLq2f56VmdpBESi7rQ_otto_64.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "32x32"
     },
     {
-      "filename" : "Otto Logo-4.png",
+      "filename" : "B3xd21vndldFyYtaf0GGd_otto_128.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "128x128"
     },
     {
-      "filename" : "Otto Logo-3.png",
+      "filename" : "SrWc7OsWIkzmk0Pl4sJDt_otto_256.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "128x128"
     },
     {
-      "filename" : "Otto Logo-3 1.png",
+      "filename" : "SrWc7OsWIkzmk0Pl4sJDt_otto_256 1.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
-      "filename" : "Otto Logo-2.png",
+      "filename" : "NrYNZWsnnkkzi_ve1sr77_otto_512.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
-      "filename" : "Otto Logo-2 1.png",
+      "filename" : "NrYNZWsnnkkzi_ve1sr77_otto_512 1.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
-      "filename" : "Otto Logo 1.png",
+      "filename" : "2kx6qg4gL_GIeQLCV06N1_otto_1024 1.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"
