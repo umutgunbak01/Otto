@@ -9,9 +9,9 @@ enum PrimaryCategory: String, Codable, CaseIterable, Identifiable {
 
     var color: Color {
         switch self {
-        case .work: return .blue
-        case .personal: return .green
-        case .hobby: return .purple
+        case .work: return Theme.Colors.work
+        case .personal: return Theme.Colors.personal
+        case .hobby: return Theme.Colors.hobby
         }
     }
 

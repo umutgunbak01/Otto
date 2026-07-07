@@ -144,7 +144,7 @@ struct VoiceOverlayView: View {
     private var orbColor: Color {
         switch appState.voice.phase {
         case .speaking: return Theme.Colors.aiAccent
-        case .error: return .orange
+        case .error: return Theme.Colors.amber
         default: return Theme.Colors.accent
         }
     }

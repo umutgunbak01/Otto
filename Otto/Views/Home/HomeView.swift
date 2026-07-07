@@ -8,6 +8,7 @@ struct HomeView: View {
     @Environment(AppState.self) private var appState
 
     @State private var isSearchMode: Bool = false
+    @State private var showHistory: Bool = false
 
     // Search state
     @State private var searchText: String = ""
@@ -31,7 +32,7 @@ struct HomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             homeHeader
-            Divider()
+            OttoDivider()
 
             if isSearchMode {
                 searchContent
@@ -42,6 +43,18 @@ struct HomeView: View {
             }
         }
         .background(Theme.Colors.background)
+        .onChange(of: appState.homeSearchRequested) { _, requested in
+            // One-shot request from the top bar's ⌘K search pill.
+            if requested {
+                appState.homeSearchRequested = false
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isSearchMode = true
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    isSearchFieldFocused = true
+                }
+            }
+        }
         .sheet(item: $selectedResult) { result in
             SearchResultDetailPopup(result: result, onClose: {
                 selectedResult = nil
@@ -59,7 +72,7 @@ struct HomeView: View {
     // MARK: - Home Header
 
     private var homeHeader: some View {
-        HStack(spacing: Theme.Spacing.md) {
+        HStack(spacing: 10) {
             if isSearchMode {
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -68,50 +81,87 @@ struct HomeView: View {
                 } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
                         Text("Home")
-                            .font(Theme.Typography.body)
+                            .font(Theme.Typography.caption)
                     }
                     .foregroundStyle(Theme.Colors.secondaryText)
                 }
                 .buttonStyle(.plain)
 
-                Spacer()
-
                 Text("Search")
                     .font(Theme.Typography.title)
+
+                Spacer()
             } else {
                 Text("Home")
                     .font(Theme.Typography.title)
 
                 Spacer()
 
-                Button {
+                headerIconButton(
+                    systemImage: "clock.arrow.circlepath",
+                    help: "Chat history",
+                    isActive: showHistory
+                ) {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showHistory.toggle()
+                    }
+                }
+
+                headerIconButton(systemImage: "plus.bubble", help: "New chat") {
+                    appState.activeChatSessionId = nil
+                }
+
+                headerIconButton(systemImage: "magnifyingglass", help: "Search") {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         isSearchMode = true
                     }
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                        .frame(width: 28, height: 28)
-                        .background(Theme.Colors.secondaryBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
                 }
-                .buttonStyle(.plain)
-                .help("Search")
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
+        .padding(.top, Theme.Spacing.lg)
         .padding(.bottom, Theme.Spacing.md)
+    }
+
+    private func headerIconButton(
+        systemImage: String,
+        help: String,
+        isActive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.secondaryText)
+                .frame(width: 27, height: 27)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     // MARK: - Ask Content
 
     private var askContent: some View {
-        OttoChatView()
-            .environment(appState)
+        HStack(spacing: 0) {
+            if showHistory {
+                ChatHistorySidebar()
+                    .environment(appState)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+
+            OttoChatView()
+                .environment(appState)
+        }
     }
 
         // MARK: - Search Content

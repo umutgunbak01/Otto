@@ -15,6 +15,10 @@ DerivedData/
 *.app
 *.app.zip
 Otto [0-9]*/
+Otto v*/
+
+# Local design scratch files
+*-mockup.html
 
 # Local Claude Code / AI tool state
 .claude/

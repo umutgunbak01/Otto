@@ -90,19 +90,19 @@ struct NoteDetailView: View {
             // Breadcrumb
             HStack(spacing: 6) {
                 Image(systemName: "doc.text")
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.Colors.tertiaryText)
                 Text("Notes")
-                    .font(.system(size: 12))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 if !title.isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9))
+                    Text("/")
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
                     Text(title)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .lineLimit(1)
                 }
             }
@@ -160,7 +160,8 @@ struct NoteDetailView: View {
     private var titleArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Untitled", text: $title, axis: .vertical)
-                .font(.system(size: 36, weight: .bold))
+                .font(Theme.Typography.largeTitle)
+                .kerning(-0.4)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.Colors.text)
                 .focused($isTitleFocused)
@@ -210,15 +211,15 @@ struct NoteDetailView: View {
                     // Created
                     notionPropertyRow(icon: "calendar", label: "Created") {
                         Text(formatDate(note.createdAt))
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(Theme.Typography.monoCaption)
+                            .foregroundStyle(Theme.Colors.textDim)
                     }
 
                     // Last edited
                     notionPropertyRow(icon: "clock", label: "Last edited") {
                         Text(timeAgo(note.updatedAt))
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(Theme.Typography.monoCaption)
+                            .foregroundStyle(Theme.Colors.textDim)
                     }
                 }
                 .padding(.top, 4)
@@ -263,7 +264,15 @@ struct NoteDetailView: View {
 
     private func loadNote() {
         title = note.title
+        // Normalize line separators: the editor's line math splits on "\n",
+        // but AppKit layout also breaks on \r / \u{2028} / \u{2029} — notes
+        // imported before separators were normalized at the source would
+        // otherwise misalign every gutter handle below the odd separator.
         content = note.content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
         primaryCategory = note.primaryCategory
     }
 

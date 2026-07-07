@@ -23,7 +23,7 @@ struct ReminderRowView: View {
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(reminder.title)
-                    .font(Theme.Typography.body)
+                    .font(.system(size: 13.5, weight: .medium))
                     .strikethrough(reminder.isCompleted, color: Theme.Colors.secondaryText)
                     .foregroundStyle(reminder.isCompleted ? Theme.Colors.secondaryText : Theme.Colors.text)
                     .lineLimit(2)
@@ -35,15 +35,15 @@ struct ReminderRowView: View {
                         Image(systemName: "clock")
                             .font(.system(size: 10))
                         Text(formatTime(reminder.reminderDate))
-                            .font(Theme.Typography.caption)
+                            .font(Theme.Typography.monoCaption)
                     }
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
 
                     // Relative time (only for non-completed)
                     if !reminder.isCompleted {
                         Text(relativeTime(reminder.reminderDate))
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(reminder.isPastDue ? Theme.Colors.priorityUrgent : Theme.Colors.work)
+                            .font(Theme.Typography.monoCaption)
+                            .foregroundStyle(reminder.isPastDue ? Theme.Colors.red : Theme.Colors.textDim)
                     }
                 }
             }
@@ -80,16 +80,22 @@ struct ReminderRowView: View {
                 }
             }
         }
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.sm)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear))
+                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                .strokeBorder(
+                    isSelected
+                        ? Theme.Colors.accent.opacity(0.35)
+                        : (isHovered ? Theme.Colors.borderStrong : Theme.Colors.border),
+                    lineWidth: 1
+                )
         )
+        .padding(.vertical, 3)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering

@@ -11,18 +11,18 @@ struct PriorityBadge: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: iconName)
-                .font(.system(size: isCompact ? 10 : 11))
+                .font(.system(size: isCompact ? 9 : 10))
 
             if showLabel {
                 Text(priority.displayName)
-                    .font(isCompact ? Theme.Typography.small : Theme.Typography.caption)
+                    .font(Theme.Typography.monoSmall)
             }
         }
         .padding(.horizontal, isCompact ? Theme.Spacing.sm : Theme.Spacing.md)
         .padding(.vertical, isCompact ? 2 : Theme.Spacing.xs)
-        .background(priorityColor.opacity(0.12))
+        .background(chipBackground)
         .foregroundStyle(priorityColor)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
         .scaleEffect(animated && !isVisible ? 0.8 : 1.0)
         .opacity(animated && !isVisible ? 0 : 1)
         .onAppear {
@@ -36,19 +36,28 @@ struct PriorityBadge: View {
 
     private var iconName: String {
         switch priority {
-        case .low: return "arrow.down"
-        case .medium: return "minus"
-        case .high: return "arrow.up"
-        case .urgent: return "exclamationmark.2"
+        case .low: return "flag"
+        case .medium: return "flag.fill"
+        case .high: return "flag.fill"
+        case .urgent: return "flag.fill"
         }
     }
 
     private var priorityColor: Color {
         switch priority {
-        case .low: return Theme.Colors.priorityLow
-        case .medium: return Theme.Colors.priorityMedium
-        case .high: return Theme.Colors.priorityHigh
-        case .urgent: return Theme.Colors.priorityUrgent
+        case .low: return Theme.Colors.textDim
+        case .medium: return Theme.Colors.accentText
+        case .high: return Theme.Colors.amber
+        case .urgent: return Theme.Colors.red
+        }
+    }
+
+    private var chipBackground: Color {
+        switch priority {
+        case .low: return Theme.Colors.hoverTint
+        case .medium: return Theme.Colors.selectTint
+        case .high: return Theme.Colors.tintAmber
+        case .urgent: return Theme.Colors.tintRed
         }
     }
 }

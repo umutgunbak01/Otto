@@ -11,25 +11,22 @@ struct UndoToastView: View {
         HStack(spacing: 12) {
             Image(systemName: "trash")
                 .font(.system(size: 11))
-                .foregroundStyle(Theme.Colors.cyan.opacity(0.7))
+                .foregroundStyle(Theme.Colors.textDim)
 
-            Text(label.uppercased())
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .tracking(1.5)
+            Text(label)
+                .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Colors.text)
 
             Rectangle()
-                .fill(Theme.Colors.cyan.opacity(0.25))
+                .fill(Theme.Colors.border)
                 .frame(width: 1, height: 14)
 
             Button {
                 onUndo()
             } label: {
-                Text("UNDO")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                Text("Undo")
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.accentText)
             }
             .buttonStyle(.plain)
 
@@ -50,14 +47,14 @@ struct UndoToastView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            AngledPanelShape(cut: .topRightBottomLeft(8))
-                .fill(Theme.Colors.bg1.opacity(0.95))
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .fill(Theme.Colors.bg2)
         )
         .overlay(
-            AngledPanelShape(cut: .topRightBottomLeft(8))
-                .stroke(Theme.Colors.cyan, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .strokeBorder(Theme.Colors.borderStrong, lineWidth: 1)
         )
-        .shadow(color: Theme.Colors.cyanGlow.opacity(0.4), radius: 12)
+        .shadow(color: .black.opacity(0.35), radius: 20, y: 8)
         .opacity(isVisible ? 1 : 0)
         .offset(y: isVisible ? 0 : 20)
         .onAppear {

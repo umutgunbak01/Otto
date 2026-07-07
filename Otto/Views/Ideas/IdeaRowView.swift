@@ -25,12 +25,12 @@ struct IdeaRowView: View {
 
                 // Status badge
                 Text(idea.status.rawValue)
-                    .font(Theme.Typography.small)
-                    .padding(.horizontal, 6)
+                    .font(Theme.Typography.monoSmall)
+                    .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(statusColor.opacity(0.12))
+                    .background(statusTint)
                     .foregroundStyle(statusColor)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
             // Preview text
@@ -46,7 +46,7 @@ struct IdeaRowView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 // Category
                 Text(idea.primaryCategory.rawValue)
-                    .font(Theme.Typography.small)
+                    .font(Theme.Typography.monoSmall)
                     .foregroundStyle(categoryColor)
 
                 // Research/Validation prompt indicators
@@ -74,7 +74,7 @@ struct IdeaRowView: View {
 
                 // Time ago
                 Text(timeAgo(idea.updatedAt))
-                    .font(Theme.Typography.small)
+                    .font(Theme.Typography.monoSmall)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 // Hover actions
@@ -92,11 +92,7 @@ struct IdeaRowView: View {
             .padding(.leading, 22)
         }
         .padding(Theme.Spacing.sm)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) :
-                      isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear)
-        )
+        .ottoRow(isSelected: isSelected, isHovered: isHovered)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
@@ -106,18 +102,27 @@ struct IdeaRowView: View {
 
     private var statusColor: Color {
         switch idea.status {
-        case .raw: return Theme.Colors.tertiaryText
-        case .researched: return Theme.Colors.work
-        case .validated: return Theme.Colors.personal
-        case .archived: return Theme.Colors.priorityHigh
+        case .raw: return Theme.Colors.textDim
+        case .researched: return Theme.Colors.amber
+        case .validated: return Theme.Colors.green
+        case .archived: return Theme.Colors.tertiaryText
+        }
+    }
+
+    private var statusTint: Color {
+        switch idea.status {
+        case .raw: return Theme.Colors.hoverTint
+        case .researched: return Theme.Colors.tintAmber
+        case .validated: return Theme.Colors.tintGreen
+        case .archived: return Theme.Colors.hoverTint
         }
     }
 
     private var categoryColor: Color {
         switch idea.primaryCategory {
-        case .work: return Theme.Colors.work
-        case .personal: return Theme.Colors.personal
-        case .hobby: return Theme.Colors.hobby
+        case .work: return Theme.Colors.accentText
+        case .personal: return Theme.Colors.green
+        case .hobby: return Theme.Colors.violet
         }
     }
 

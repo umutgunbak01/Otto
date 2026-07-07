@@ -37,7 +37,7 @@ struct IdeaListView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
                 Rectangle()
-                    .fill(Theme.Colors.cyan.opacity(0.18))
+                    .fill(Theme.Colors.border)
                     .frame(width: 1)
             }
 
@@ -107,20 +107,21 @@ struct IdeaListView: View {
             // Header
             VStack(spacing: 10) {
                 HStack {
-                    Text("⌬ IDEAS")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .tracking(3)
-                        .foregroundStyle(Theme.Colors.cyan)
-                        .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                    Text("Ideas")
+                        .font(Theme.Typography.headline)
+                        .foregroundStyle(Theme.Colors.text)
 
                     Spacer()
 
                     Text("\(filteredIdeas.count)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Theme.Colors.borderSubtle)
-                        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
 
                     // Create new idea button
                     Button {
@@ -189,7 +190,7 @@ struct IdeaListView: View {
                 }
             }
         }
-        .background(Theme.Colors.background.opacity(0.5))
+        .background(Theme.Colors.bg1)
     }
 
     // MARK: - Sidebar Idea Row (compact, Notion-style)
@@ -206,17 +207,17 @@ struct IdeaListView: View {
                 // Lightbulb icon
                 Image(systemName: "lightbulb")
                     .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                    .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(idea.title.isEmpty ? "Untitled" : idea.title)
-                        .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                        .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.secondaryText)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.text)
                         .lineLimit(1)
 
                     if !idea.content.isEmpty {
                         Text(strippedNotePreview(idea.content))
-                            .font(.system(size: 11))
+                            .font(.system(size: 11.5))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
@@ -224,16 +225,22 @@ struct IdeaListView: View {
 
                 Spacer()
 
-                // Status indicator dot
-                Circle()
-                    .fill(statusColor(idea.status))
-                    .frame(width: 6, height: 6)
+                // Status indicator dot — outline for archived, filled otherwise
+                if idea.status == .archived {
+                    Circle()
+                        .strokeBorder(Theme.Colors.tertiaryText, lineWidth: 1)
+                        .frame(width: 7, height: 7)
+                } else {
+                    Circle()
+                        .fill(statusColor(idea.status))
+                        .frame(width: 7, height: 7)
+                }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(isSelected ? Theme.Colors.accent.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -251,11 +258,11 @@ struct IdeaListView: View {
             }
         } label: {
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 12, weight: .medium))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(isSelected ? Theme.Colors.accent.opacity(0.12) : Theme.Colors.hoverTint)
-                .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                .background(isSelected ? Theme.Colors.selectTint : Color.clear)
+                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.textDim)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
         }
         .buttonStyle(.plain)
@@ -285,9 +292,9 @@ struct IdeaListView: View {
     private func statusColor(_ status: Idea.Status) -> Color {
         switch status {
         case .raw: return Theme.Colors.tertiaryText
-        case .researched: return Theme.Colors.work
-        case .validated: return Theme.Colors.personal
-        case .archived: return Theme.Colors.priorityHigh
+        case .researched: return Theme.Colors.amber
+        case .validated: return Theme.Colors.green
+        case .archived: return Theme.Colors.tertiaryText
         }
     }
 }

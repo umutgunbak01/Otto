@@ -133,8 +133,44 @@ func blockTypeForLine(_ line: String) -> (type: BlockType, isCompleted: Bool) {
     if line.hasPrefix("- [ ] ") { return (.todo, false) }
     if line.hasPrefix("- ") { return (.bulletList, false) }
     if line.range(of: #"^\d+\. "#, options: .regularExpression) != nil { return (.numberedList, false) }
+    // Toggles encode their state in the marker: "▾ " expanded, "▸ " collapsed.
+    // (isCompleted carries "isCollapsed" for toggle blocks.)
+    if line.hasPrefix("▾ ") { return (.toggle, false) }
+    if line.hasPrefix("▸ ") { return (.toggle, true) }
     if line.hasPrefix("> ") { return (.quote, false) }
     return (.text, false)
+}
+
+/// The leading marker of a list-type line (so it can be stripped or continued).
+func listMarkerPrefix(_ line: String, type: BlockType) -> String {
+    switch type {
+    case .bulletList: return "- "
+    case .todo:       return line.hasPrefix("- [x] ") ? "- [x] " : "- [ ] "
+    case .quote:      return "> "
+    case .toggle:     return line.hasPrefix("▸ ") ? "▸ " : "▾ "
+    case .numberedList:
+        if let m = line.range(of: #"^\d+\. "#, options: .regularExpression) {
+            return String(line[line.startIndex..<m.upperBound])
+        }
+        return ""
+    default: return ""
+    }
+}
+
+/// The marker that starts the next item when continuing a list on Return.
+func nextListMarker(_ type: BlockType, currentLine: String) -> String {
+    switch type {
+    case .bulletList: return "- "
+    case .todo:       return "- [ ] "   // new items start unchecked
+    case .quote:      return "> "
+    case .numberedList:
+        if let m = currentLine.range(of: #"^\d+\. "#, options: .regularExpression) {
+            let digits = currentLine[currentLine.startIndex..<m.upperBound].prefix { $0.isNumber }
+            if let n = Int(digits) { return "\(n + 1). " }
+        }
+        return "1. "
+    default: return ""
+    }
 }
 
 func parseLineBlocks(_ text: String) -> [NoteBlock] {
@@ -153,6 +189,10 @@ struct NoteBlockEditor: View {
     @Binding var content: String
 
     @State private var hoveredLineIndex: Int? = nil
+    /// Set while the pointer is over a line's gutter handles, so moving from the
+    /// text out to the + / ⋮⋮ buttons keeps them visible (the text view's
+    /// mouseExited clears `hoveredLineIndex` as soon as you leave the text).
+    @State private var gutterHoveredLine: Int? = nil
     @State private var showBlockPicker: Bool = false
     @State private var showActionsMenu: Bool = false
     @State private var pickerLineIndex: Int = 0
@@ -260,6 +300,10 @@ struct NoteBlockEditor: View {
                 .frame(maxWidth: .infinity, minHeight: 400)
             }
 
+            // Real, clickable checkboxes overlaid on todo lines (the markdown
+            // "- [ ] " marker is hidden by the styling pass).
+            todoCheckboxLayer
+
             // Slash menu overlay
             if showSlashMenu {
                 SlashCommandMenu(
@@ -276,7 +320,83 @@ struct NoteBlockEditor: View {
             }
         }
     }
+
+    /// Real markers overlaid on list lines (clickable checkbox for todos, a "•"
+    /// for bullets), positioned over the hidden markdown using the same line
+    /// rects the gutter handles use.
+    private var todoCheckboxLayer: some View {
+        GeometryReader { _ in
+            let blocks = parseLineBlocks(content).filter {
+                $0.type == .todo || $0.type == .bulletList || $0.type == .toggle
+            }
+            ForEach(blocks, id: \.lineIndex) { block in
+                if let rect = lineRects[block.lineIndex] {
+                    switch block.type {
+                    case .todo:
+                        Button { toggleTodo(block.lineIndex) } label: {
+                            Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 14))
+                                .foregroundStyle(block.isCompleted ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(block.isCompleted ? "Mark not done" : "Mark done")
+                        .position(x: 44 + 10, y: rect.midY)
+                    case .toggle:
+                        // isCompleted carries "isCollapsed" for toggles.
+                        Button { toggleCollapse(block.lineIndex) } label: {
+                            Image(systemName: block.isCompleted ? "chevron.right" : "chevron.down")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .frame(width: 16, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(block.isCompleted ? "Expand" : "Collapse")
+                        .position(x: 44 + 8, y: rect.midY)
+                    default:
+                        Text("•")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .frame(width: 12, alignment: .center)
+                            .position(x: 44 + 5, y: rect.midY)
+                    }
+                }
+            }
+        }
+    }
     #endif
+
+    /// Toggle a todo line's checkbox in the underlying markdown.
+    private func toggleTodo(_ lineIndex: Int) {
+        var lines = content.components(separatedBy: "\n")
+        guard lineIndex < lines.count else { return }
+        let line = lines[lineIndex]
+        if line.hasPrefix("- [ ] ") {
+            lines[lineIndex] = "- [x] " + line.dropFirst(6)
+        } else if line.hasPrefix("- [x] ") {
+            lines[lineIndex] = "- [ ] " + line.dropFirst(6)
+        } else {
+            return
+        }
+        content = lines.joined(separator: "\n")
+    }
+
+    /// Collapse / expand a toggle by swapping its marker (state lives in the text).
+    private func toggleCollapse(_ lineIndex: Int) {
+        var lines = content.components(separatedBy: "\n")
+        guard lineIndex < lines.count else { return }
+        let line = lines[lineIndex]
+        if line.hasPrefix("▾ ") {
+            lines[lineIndex] = "▸ " + line.dropFirst(2)
+        } else if line.hasPrefix("▸ ") {
+            lines[lineIndex] = "▾ " + line.dropFirst(2)
+        } else {
+            return
+        }
+        content = lines.joined(separator: "\n")
+    }
 
     // MARK: - Block Gutter (macOS only)
 
@@ -285,12 +405,16 @@ struct NoteBlockEditor: View {
         GeometryReader { geo in
             let blocks = parseLineBlocks(content)
 
-            ForEach(blocks) { block in
+            // Identify by line index, not the per-parse UUID — otherwise every
+            // hover re-render recreates these rows, which destroys the "+"/"⋮⋮"
+            // button a popover is anchored to and dismisses it the moment you
+            // move onto the menu.
+            ForEach(blocks, id: \.lineIndex) { block in
                 if let rect = lineRects[block.lineIndex] {
                     let isHoveredLine = hoveredLineIndex == block.lineIndex
                     let isPickerLine = showBlockPicker && pickerLineIndex == block.lineIndex
                     let isActionsLine = showActionsMenu && actionsLineIndex == block.lineIndex
-                    let showHandles = isHoveredLine || isPickerLine || isActionsLine
+                    let showHandles = isHoveredLine || isPickerLine || isActionsLine || gutterHoveredLine == block.lineIndex
 
                     HStack(spacing: 0) {
                         if showHandles {
@@ -363,6 +487,36 @@ struct NoteBlockEditor: View {
                 }
             }
         }
+        .contentShape(Rectangle())
+        // One continuous hover region for the whole gutter column. Per-row
+        // onHover strips left dead zones (paragraph spacing, wrapped lines)
+        // where the handles vanished while traveling from the text to the
+        // buttons; here any pointer position in the gutter maps to a line.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                gutterHoveredLine = gutterLine(at: point.y)
+            case .ended:
+                gutterHoveredLine = nil
+            }
+        }
+    }
+
+    /// The line whose first visual row contains (or is nearest to) a y position
+    /// in the gutter. Collapsed-toggle children are hidden at ~0 height and are
+    /// skipped so they can't capture the hover.
+    private func gutterLine(at y: CGFloat) -> Int? {
+        var nearest: (index: Int, distance: CGFloat)? = nil
+        for (index, rect) in lineRects {
+            guard rect.height > 1 else { continue }
+            if y >= rect.minY && y <= rect.maxY { return index }
+            let distance = min(abs(y - rect.minY), abs(y - rect.maxY))
+            if nearest == nil || distance < nearest!.distance {
+                nearest = (index, distance)
+            }
+        }
+        guard let nearest, nearest.distance <= 16 else { return nil }
+        return nearest.index
     }
     #endif
 
@@ -379,7 +533,7 @@ struct NoteBlockEditor: View {
         case .bulletList: newLine = "- "
         case .numberedList: newLine = "1. "
         case .todo: newLine = "- [ ] "
-        case .toggle: newLine = "> "
+        case .toggle: newLine = "▾ "
         case .quote: newLine = "> "
         case .divider: newLine = "---"
         }
@@ -405,7 +559,7 @@ struct NoteBlockEditor: View {
         case .bulletList: lines[lineIndex] = "- \(rawContent)"
         case .numberedList: lines[lineIndex] = "1. \(rawContent)"
         case .todo: lines[lineIndex] = "- [ ] \(rawContent)"
-        case .toggle: lines[lineIndex] = "> \(rawContent)"
+        case .toggle: lines[lineIndex] = "▾ \(rawContent)"
         case .quote: lines[lineIndex] = "> \(rawContent)"
         case .divider: lines[lineIndex] = "---"
         }
@@ -447,7 +601,7 @@ struct NoteBlockEditor: View {
         case .bulletList: prefix = "- "
         case .numberedList: prefix = "1. "
         case .todo: prefix = "- [ ] "
-        case .toggle: prefix = "> "
+        case .toggle: prefix = "▾ "
         case .quote: prefix = "> "
         case .divider: prefix = "---"
         }
@@ -460,7 +614,7 @@ struct NoteBlockEditor: View {
     private func stripMarkdownPrefix(_ line: String) -> String {
         let trimmed = line
         if trimmed == "---" { return "" }
-        let prefixes = ["### ", "## ", "# ", "- [x] ", "- [ ] ", "- ", "> "]
+        let prefixes = ["### ", "## ", "# ", "- [x] ", "- [ ] ", "- ", "▾ ", "▸ ", "> "]
         for prefix in prefixes {
             if trimmed.hasPrefix(prefix) {
                 return String(trimmed.dropFirst(prefix.count))
@@ -508,7 +662,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 0, height: 0)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
-        textView.font = NSFont.systemFont(ofSize: 15)
+        textView.font = NSFont.systemFont(ofSize: 13.5)
         textView.insertionPointColor = NSColor(Theme.Colors.text)
 
         // Enable tracking for hover
@@ -592,55 +746,10 @@ struct RichNoteTextEditor: NSViewRepresentable {
                 }
             }
 
-            // Handle Enter key for list continuation
-            if replacementString == "\n" {
-                let text = textView.string
-                let cursorPos = affectedCharRange.location
-                let lineRange = (text as NSString).lineRange(for: NSRange(location: cursorPos, length: 0))
-                let currentLine = (text as NSString).substring(with: lineRange).trimmingCharacters(in: .newlines)
-
-                let (blockType, _) = blockTypeForLine(currentLine)
-
-                // If empty list/todo line, strip the prefix instead of continuing
-                let stripped = stripLinePrefix(currentLine)
-                if stripped.isEmpty && (blockType == .bulletList || blockType == .numberedList || blockType == .todo) {
-                    // Replace the current line's prefix with empty (undo-friendly)
-                    let lineWithNewline = NSRange(location: lineRange.location, length: max(lineRange.length - 1, 0))
-                    textView.insertText("", replacementRange: lineWithNewline)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-
-                // Continue list type on new line
-                if blockType == .bulletList {
-                    let insertion = "\n- "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-                if blockType == .numberedList {
-                    // Parse current number and increment
-                    if let match = currentLine.range(of: #"^(\d+)\. "#, options: .regularExpression) {
-                        let numStr = currentLine[currentLine.startIndex..<currentLine.index(before: match.upperBound)]
-                        if let num = Int(numStr.trimmingCharacters(in: .punctuationCharacters)) {
-                            let insertion = "\n\(num + 1). "
-                            textView.insertText(insertion, replacementRange: affectedCharRange)
-                            textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                            return false
-                        }
-                    }
-                    let insertion = "\n1. "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-                if blockType == .todo {
-                    let insertion = "\n- [ ] "
-                    textView.insertText(insertion, replacementRange: affectedCharRange)
-                    textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
-                    return false
-                }
-            }
+            // Return-key list continuation (numbered / bullets / checkboxes /
+            // quote) is handled in BlockNSTextView.insertNewline — doing it here
+            // meant calling insertText re-entrantly inside shouldChangeText,
+            // which AppKit runs unreliably.
 
             return true
         }
@@ -709,12 +818,12 @@ struct RichNoteTextEditor: NSViewRepresentable {
             textView.undoManager?.disableUndoRegistration()
             storage.beginEditing()
 
-            // Default style
-            let defaultFont = NSFont.systemFont(ofSize: 15)
+            // Default style — mockup editor body: 13.5px, line-height ~1.7.
+            let defaultFont = NSFont.systemFont(ofSize: 13.5)
             let defaultColor = NSColor(Theme.Colors.text)
             let defaultParagraph = NSMutableParagraphStyle()
-            defaultParagraph.lineSpacing = 4
-            defaultParagraph.paragraphSpacing = 2
+            defaultParagraph.lineSpacing = 6
+            defaultParagraph.paragraphSpacing = 3
 
             storage.addAttributes([
                 .font: defaultFont,
@@ -725,6 +834,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
             // Style each line based on its block type
             let nsText = text as NSString
             var lineStart = 0
+            var hideChildren = false   // inside a collapsed toggle's body
             while lineStart < nsText.length {
                 let lineRange = nsText.lineRange(for: NSRange(location: lineStart, length: 0))
                 let line = nsText.substring(with: lineRange).trimmingCharacters(in: .newlines)
@@ -732,9 +842,27 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
                 let (blockType, isCompleted) = blockTypeForLine(line)
 
+                // Collapse: hide the indented body lines under a collapsed toggle.
+                if hideChildren {
+                    if line.hasPrefix("\t") || line.hasPrefix("  ") {
+                        let cp = NSMutableParagraphStyle()
+                        cp.maximumLineHeight = 0.1
+                        cp.minimumLineHeight = 0.1
+                        storage.addAttributes([
+                            .font: NSFont.systemFont(ofSize: 0.1),
+                            .foregroundColor: NSColor.clear,
+                            .paragraphStyle: cp
+                        ], range: NSRange(location: lineRange.location, length: lineRange.length))
+                        lineStart = NSMaxRange(lineRange)
+                        continue
+                    } else {
+                        hideChildren = false
+                    }
+                }
+
                 switch blockType {
                 case .heading1:
-                    let h1Font = NSFont.systemFont(ofSize: 28, weight: .bold)
+                    let h1Font = NSFont.systemFont(ofSize: 21, weight: .bold)
                     let h1Para = NSMutableParagraphStyle()
                     h1Para.lineSpacing = 6
                     h1Para.paragraphSpacingBefore = 10
@@ -745,7 +873,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .heading2:
-                    let h2Font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+                    let h2Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
                     let h2Para = NSMutableParagraphStyle()
                     h2Para.lineSpacing = 5
                     h2Para.paragraphSpacingBefore = 8
@@ -756,7 +884,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .heading3:
-                    let h3Font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+                    let h3Font = NSFont.systemFont(ofSize: 14, weight: .semibold)
                     let h3Para = NSMutableParagraphStyle()
                     h3Para.lineSpacing = 4
                     h3Para.paragraphSpacingBefore = 6
@@ -771,9 +899,13 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     bulletPara.headIndent = 0
                     bulletPara.lineSpacing = 3
                     bulletPara.paragraphSpacing = 1
-                    storage.addAttributes([
-                        .paragraphStyle: bulletPara
-                    ], range: contentRange)
+                    storage.addAttribute(.paragraphStyle, value: bulletPara, range: contentRange)
+                    // Hide the literal "- " marker; a "•" bullet is overlaid instead.
+                    let dashLen = min(2, contentRange.length)
+                    storage.addAttribute(
+                        .foregroundColor, value: NSColor.clear,
+                        range: NSRange(location: contentRange.location, length: dashLen)
+                    )
 
                 case .numberedList:
                     let numPara = NSMutableParagraphStyle()
@@ -788,20 +920,25 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     let todoPara = NSMutableParagraphStyle()
                     todoPara.lineSpacing = 3
                     todoPara.paragraphSpacing = 1
-                    if isCompleted {
+                    storage.addAttribute(.paragraphStyle, value: todoPara, range: contentRange)
+                    // Hide the "- [ ] " / "- [x] " marker (still in the text) —
+                    // a real clickable checkbox is overlaid at this line instead.
+                    let markerLen = min(6, contentRange.length)
+                    storage.addAttribute(
+                        .foregroundColor, value: NSColor.clear,
+                        range: NSRange(location: contentRange.location, length: markerLen)
+                    )
+                    // Strike through only the text after the marker when done.
+                    if isCompleted, contentRange.length > markerLen {
                         storage.addAttributes([
                             .foregroundColor: NSColor(Theme.Colors.tertiaryText),
-                            .strikethroughStyle: NSUnderlineStyle.single.rawValue,
-                            .paragraphStyle: todoPara
-                        ], range: contentRange)
-                    } else {
-                        storage.addAttributes([
-                            .paragraphStyle: todoPara
-                        ], range: contentRange)
+                            .strikethroughStyle: NSUnderlineStyle.single.rawValue
+                        ], range: NSRange(location: contentRange.location + markerLen,
+                                          length: contentRange.length - markerLen))
                     }
 
                 case .quote:
-                    let quoteFont = NSFont.systemFont(ofSize: 15).italic() ?? NSFont.systemFont(ofSize: 15)
+                    let quoteFont = NSFont.systemFont(ofSize: 13.5).italic() ?? NSFont.systemFont(ofSize: 13.5)
                     let quoteColor = NSColor(Theme.Colors.secondaryText)
                     let quotePara = NSMutableParagraphStyle()
                     quotePara.headIndent = 16
@@ -825,14 +962,19 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .toggle:
-                    let toggleFont = NSFont.systemFont(ofSize: 15, weight: .medium)
-                    storage.addAttributes([
-                        .font: toggleFont
-                    ], range: contentRange)
+                    let toggleFont = NSFont.systemFont(ofSize: 13.5, weight: .medium)
+                    storage.addAttribute(.font, value: toggleFont, range: contentRange)
+                    // Hide the "▾ "/"▸ " marker — a clickable triangle is overlaid.
+                    let tMarkerLen = min(2, contentRange.length)
+                    storage.addAttribute(.foregroundColor, value: NSColor.clear,
+                                         range: NSRange(location: contentRange.location, length: tMarkerLen))
 
                 case .text:
                     break // default styling already applied
                 }
+
+                // A collapsed toggle hides the indented lines that follow it.
+                if blockType == .toggle, line.hasPrefix("▸ ") { hideChildren = true }
 
                 lineStart = NSMaxRange(lineRange)
             }
@@ -843,9 +985,13 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
         // MARK: - Line Rects (for gutter positioning)
 
+        private var lastLineRects: [Int: CGRect] = [:]
+
         func updateLineRects(_ textView: NSTextView) {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else { return }
+
+            layoutManager.ensureLayout(for: textContainer)
 
             let text = textView.string
             let nsText = text as NSString
@@ -856,7 +1002,16 @@ struct RichNoteTextEditor: NSViewRepresentable {
             while lineStart < nsText.length {
                 let lineRange = nsText.lineRange(for: NSRange(location: lineStart, length: 0))
                 let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
-                let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                // A long line wraps into several fragments; anchor the gutter
+                // handles and overlaid markers to the FIRST fragment so they sit
+                // on the line's first visual row (like Notion) instead of being
+                // vertically centered over the whole wrapped block.
+                let rect: CGRect
+                if glyphRange.length > 0 {
+                    rect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+                } else {
+                    rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                }
                 rects[lineIndex] = rect
 
                 lineIndex += 1
@@ -865,9 +1020,18 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
             // Handle empty last line
             if text.hasSuffix("\n") || text.isEmpty {
-                let lastRect = rects[lineIndex - 1] ?? .zero
-                rects[lineIndex] = CGRect(x: 0, y: lastRect.maxY, width: lastRect.width, height: lastRect.height > 0 ? lastRect.height : 20)
+                var rect = layoutManager.extraLineFragmentRect
+                if rect.isEmpty {
+                    let lastRect = rects[lineIndex - 1] ?? .zero
+                    rect = CGRect(x: 0, y: lastRect.maxY, width: lastRect.width, height: lastRect.height > 0 ? lastRect.height : 20)
+                }
+                rects[lineIndex] = rect
             }
+
+            // layout() calls this on every pass — only push real changes so the
+            // SwiftUI overlay isn't invalidated in a loop.
+            guard rects != lastLineRects else { return }
+            lastLineRects = rects
 
             Task { @MainActor in
                 self.parent.lineRects = rects
@@ -937,6 +1101,17 @@ extension RichNoteTextEditor.Coordinator: BlockTextViewHoverDelegate {
 class BlockNSTextView: NSTextView {
     weak var hoverDelegate: BlockTextViewHoverDelegate?
 
+    /// Line rects go stale whenever layout reflows the text — the first layout
+    /// pass happens before SwiftUI hands the view its real width, and resizes
+    /// change how long lines wrap. Recompute so the gutter overlays stay
+    /// aligned (updateLineRects itself dedupes unchanged results).
+    override func layout() {
+        super.layout()
+        if let coordinator = hoverDelegate as? RichNoteTextEditor.Coordinator {
+            coordinator.updateLineRects(self)
+        }
+    }
+
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
         if let coordinator = hoverDelegate as? RichNoteTextEditor.Coordinator {
@@ -948,6 +1123,70 @@ class BlockNSTextView: NSTextView {
         super.mouseExited(with: event)
         if let coordinator = hoverDelegate as? RichNoteTextEditor.Coordinator {
             coordinator.handleMouseExited(event)
+        }
+    }
+
+    /// Continue list / checkbox / numbered / quote blocks on Return, and end the
+    /// list when Return is pressed on an empty item (so a "double Enter" exits).
+    override func insertNewline(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length == 0 else { super.insertNewline(sender); return }
+
+        let ns = string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        var line = ns.substring(with: lineRange)
+        if line.hasSuffix("\n") { line.removeLast() }
+
+        let (type, _) = blockTypeForLine(line)
+        switch type {
+        case .bulletList, .numberedList, .todo, .quote:
+            break
+        default:
+            super.insertNewline(sender)
+            return
+        }
+
+        let prefix = listMarkerPrefix(line, type: type)
+        let body = String(line.dropFirst(prefix.count))
+
+        if body.trimmingCharacters(in: .whitespaces).isEmpty {
+            // Empty item → end the list: clear this line's marker, stay on it.
+            let markerRange = NSRange(location: lineRange.location, length: (line as NSString).length)
+            insertText("", replacementRange: markerRange)
+        } else {
+            // Continue with the next marker (numbered increments).
+            insertText("\n" + nextListMarker(type, currentLine: line), replacementRange: sel)
+        }
+    }
+
+    /// Backspace at the start of a list item's content removes the whole marker
+    /// in one step (de-lists the line) instead of nibbling the "- [ ] " text
+    /// char-by-char — which would otherwise expose the raw markdown.
+    override func deleteBackward(_ sender: Any?) {
+        let sel = selectedRange()
+        guard sel.length == 0, sel.location > 0 else { super.deleteBackward(sender); return }
+
+        let ns = string as NSString
+        let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
+        var line = ns.substring(with: lineRange)
+        if line.hasSuffix("\n") { line.removeLast() }
+
+        let (type, _) = blockTypeForLine(line)
+        switch type {
+        case .bulletList, .numberedList, .todo, .quote, .toggle:
+            break
+        default:
+            super.deleteBackward(sender)
+            return
+        }
+
+        let markerLen = (listMarkerPrefix(line, type: type) as NSString).length
+        let lineStart = lineRange.location
+        // Caret within or just after the marker → drop the whole marker.
+        if markerLen > 0, sel.location > lineStart, sel.location <= lineStart + markerLen {
+            insertText("", replacementRange: NSRange(location: lineStart, length: markerLen))
+        } else {
+            super.deleteBackward(sender)
         }
     }
 }
@@ -1674,7 +1913,8 @@ struct SlashCommandMenu: View {
                     // Basic blocks section
                     HStack {
                         Text("BASIC BLOCKS")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(Theme.Typography.label)
+                            .tracking(Theme.Tracking.xwide)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                         Spacer()
                     }

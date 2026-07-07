@@ -14,7 +14,7 @@ struct HabitDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider().background(Theme.Colors.border)
+            OttoDivider()
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                     statsBlock
@@ -27,8 +27,12 @@ struct HabitDetailView: View {
         }
         .frame(maxWidth: 720, maxHeight: 640)
         .background(Theme.Colors.bg1)
-        .overlay(Rectangle().stroke(Theme.Colors.cyan.opacity(0.4), lineWidth: 1))
-        .neonGlow(color: Theme.Colors.cyan, intensity: 0.5)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 24, x: 0, y: 8)
     }
 
     // MARK: - Header
@@ -36,19 +40,24 @@ struct HabitDetailView: View {
     private var header: some View {
         HStack(spacing: Theme.Spacing.md) {
             Image(systemName: current.iconName)
-                .font(.system(size: 22))
+                .font(.system(size: 18))
                 .foregroundStyle(color)
                 .frame(width: 36, height: 36)
-                .overlay(Rectangle().stroke(color.opacity(0.5), lineWidth: 1))
-                .background(color.opacity(0.08))
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(color.opacity(0.1))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .strokeBorder(color.opacity(0.3), lineWidth: 1)
+                )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(current.title)
                     .font(Theme.Typography.title)
                     .foregroundStyle(Theme.Colors.text)
-                Text("\(current.kind.displayName.uppercased()) · \(current.frequency.displayName.uppercased()) · \(current.category.displayName.uppercased())")
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.tight)
+                Text("\(current.kind.displayName) · \(current.frequency.displayName) · \(current.category.displayName)")
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(Theme.Colors.textDim)
             }
 
@@ -87,9 +96,13 @@ struct HabitDetailView: View {
 
     private func statCell(label: String, value: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).hudLabel(tracking: Theme.Tracking.wide)
+            Text(label)
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .tracking(Theme.Tracking.xwide)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.Colors.tertiaryText)
             Text(value)
-                .font(Theme.Typography.title)
+                .font(.system(size: 18, weight: .semibold, design: .monospaced))
                 .foregroundStyle(color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,10 +148,9 @@ struct HabitDetailView: View {
             if inFuture || beforeStart { return 0 }
             return min(1, progress / target)
         }()
-        return Rectangle()
-            .fill(color.opacity(intensity > 0 ? 0.25 + intensity * 0.6 : 0.06))
+        return RoundedRectangle(cornerRadius: 2)
+            .fill(intensity > 0 ? color.opacity(0.25 + intensity * 0.6) : Theme.Colors.hoverTint)
             .frame(width: 12, height: 12)
-            .overlay(Rectangle().stroke(color.opacity(intensity > 0 ? 0.7 : 0.15), lineWidth: 0.5))
             .help(dateLabel(day) + " · " + cellLabel(progress: progress, target: target))
     }
 
@@ -177,7 +189,11 @@ struct HabitDetailView: View {
                     }
                 }
                 .background(Theme.Colors.panel)
-                .overlay(Rectangle().strokeBorder(Theme.Colors.panelEdge, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             }
         }
     }
@@ -185,12 +201,12 @@ struct HabitDetailView: View {
     private func entryRow(_ entry: HabitEntry) -> some View {
         HStack(spacing: Theme.Spacing.sm) {
             Text(formatDateTime(entry.date))
-                .font(Theme.Typography.caption)
+                .font(Theme.Typography.monoCaption)
                 .foregroundStyle(Theme.Colors.textDim)
                 .frame(width: 130, alignment: .leading)
             let unit = current.unit ?? ""
             Text("\(format(entry.value))\(unit.isEmpty ? "" : " \(unit)")")
-                .font(Theme.Typography.caption)
+                .font(Theme.Typography.monoCaption)
                 .foregroundStyle(Theme.Colors.text)
                 .frame(width: 90, alignment: .leading)
             if let n = entry.note, !n.isEmpty {
@@ -218,32 +234,35 @@ struct HabitDetailView: View {
     private var actions: some View {
         HStack(spacing: Theme.Spacing.md) {
             if current.isArchived {
-                Button("UNARCHIVE") {
+                Button("Unarchive") {
                     Task {
                         var u = current; u.isArchived = false
                         await appState.updateHabit(u)
                     }
                 }
+                .font(.system(size: 12, weight: .medium))
                 .buttonStyle(GhostButtonStyle())
             } else {
-                Button("ARCHIVE") {
+                Button("Archive") {
                     Task {
                         var u = current; u.isArchived = true
                         await appState.updateHabit(u)
                         onClose()
                     }
                 }
+                .font(.system(size: 12, weight: .medium))
                 .buttonStyle(GhostButtonStyle())
             }
 
             Spacer()
 
-            Button("DELETE") {
+            Button("Delete") {
                 Task {
                     await appState.deleteHabit(current)
                     onClose()
                 }
             }
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Theme.Colors.red)
             .buttonStyle(GhostButtonStyle())
         }

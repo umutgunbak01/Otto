@@ -27,12 +27,14 @@ enum ConnectionCloseness: String, CaseIterable, Codable {
         }
     }
 
+    // Mirrors NetworkCloseness: tie strength ramps through the cyan accent
+    // and fades to neutral, instead of a per-tier rainbow.
     var color: Color {
         switch self {
-        case .unknown: return .gray
-        case .acquaintance: return .blue
-        case .friendly: return .orange
-        case .close: return .pink
+        case .unknown: return Theme.Colors.tertiaryText
+        case .acquaintance: return Theme.Colors.textDim
+        case .friendly: return Theme.Colors.cyanDim
+        case .close: return Theme.Colors.cyan
         }
     }
 }
@@ -75,16 +77,11 @@ enum ConnectionCategory: String, CaseIterable, Codable {
         }
     }
 
+    // Category is taxonomy, not status — neutral like NetworkType/IndividualType.
     var color: Color {
         switch self {
-        case .unknown: return .gray
-        case .investor: return .green
-        case .founder: return .purple
-        case .engineer: return .blue
-        case .ecosystem: return .teal
-        case .friend: return .orange
-        case .family: return .pink
-        case .other: return .indigo
+        case .unknown, .other: return Theme.Colors.tertiaryText
+        default:               return Theme.Colors.textDim
         }
     }
 }
@@ -108,6 +105,18 @@ struct Connection: Identifiable, Codable, Equatable {
     var linkedXFollowerId: UUID?
     let importedAt: Date
     var updatedAt: Date
+
+    // CRM fields — all optional, decoded with try? for backward compatibility.
+    var phone: String?
+    var birthday: Date?
+    var education: String?
+    /// Cached "last time we talked" — written by ContactActivityIndexer after
+    /// Gmail / Calendar / X syncs. Read-only from the UI.
+    var lastContactedAt: Date?
+
+    /// User-defined columns. Keys are `CustomFieldDefinition.id`; orphaned
+    /// keys (definition deleted) are pruned on app load.
+    var customFields: [UUID: CustomFieldValue]
 
     // MARK: - Computed Properties
 
@@ -150,7 +159,12 @@ struct Connection: Identifiable, Codable, Equatable {
         category: ConnectionCategory = .unknown,
         linkedXFollowerId: UUID? = nil,
         importedAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        phone: String? = nil,
+        birthday: Date? = nil,
+        education: String? = nil,
+        lastContactedAt: Date? = nil,
+        customFields: [UUID: CustomFieldValue] = [:]
     ) {
         self.id = id
         self.firstName = firstName
@@ -168,6 +182,11 @@ struct Connection: Identifiable, Codable, Equatable {
         self.linkedXFollowerId = linkedXFollowerId
         self.importedAt = importedAt
         self.updatedAt = updatedAt
+        self.phone = phone
+        self.birthday = birthday
+        self.education = education
+        self.lastContactedAt = lastContactedAt
+        self.customFields = customFields
     }
 
     // MARK: - Search Helpers
@@ -193,6 +212,7 @@ extension Connection {
         case id, firstName, lastName, headline, company, location
         case email, profileUrl, connectionDate, notes, tags, closeness, category
         case linkedXFollowerId, importedAt, updatedAt
+        case phone, birthday, education, lastContactedAt, customFields
     }
 
     init(from decoder: Decoder) throws {
@@ -214,5 +234,53 @@ extension Connection {
         linkedXFollowerId = try? container.decode(UUID.self, forKey: .linkedXFollowerId)
         importedAt = (try? container.decode(Date.self, forKey: .importedAt)) ?? Date()
         updatedAt = (try? container.decode(Date.self, forKey: .updatedAt)) ?? Date()
+
+        // CRM additions — all optional / default-empty so existing data loads.
+        phone = try? container.decode(String.self, forKey: .phone)
+        birthday = try? container.decode(Date.self, forKey: .birthday)
+        education = try? container.decode(String.self, forKey: .education)
+        lastContactedAt = try? container.decode(Date.self, forKey: .lastContactedAt)
+        // [UUID: V] doesn't round-trip via JSON's keyed container (JSON keys
+        // must be strings), so encode/decode through a string-keyed dict and
+        // translate at the boundary.
+        if let stringKeyed = try? container.decode([String: CustomFieldValue].self, forKey: .customFields) {
+            var translated: [UUID: CustomFieldValue] = [:]
+            for (key, value) in stringKeyed {
+                if let uuid = UUID(uuidString: key) {
+                    translated[uuid] = value
+                }
+            }
+            customFields = translated
+        } else {
+            customFields = [:]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(firstName, forKey: .firstName)
+        try container.encode(lastName, forKey: .lastName)
+        try container.encode(headline, forKey: .headline)
+        try container.encode(company, forKey: .company)
+        try container.encode(location, forKey: .location)
+        try container.encodeIfPresent(email, forKey: .email)
+        try container.encodeIfPresent(profileUrl, forKey: .profileUrl)
+        try container.encodeIfPresent(connectionDate, forKey: .connectionDate)
+        try container.encode(notes, forKey: .notes)
+        try container.encode(tags, forKey: .tags)
+        try container.encode(closeness, forKey: .closeness)
+        try container.encode(category, forKey: .category)
+        try container.encodeIfPresent(linkedXFollowerId, forKey: .linkedXFollowerId)
+        try container.encode(importedAt, forKey: .importedAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(phone, forKey: .phone)
+        try container.encodeIfPresent(birthday, forKey: .birthday)
+        try container.encodeIfPresent(education, forKey: .education)
+        try container.encodeIfPresent(lastContactedAt, forKey: .lastContactedAt)
+        if !customFields.isEmpty {
+            let stringKeyed = Dictionary(uniqueKeysWithValues: customFields.map { ($0.key.uuidString, $0.value) })
+            try container.encode(stringKeyed, forKey: .customFields)
+        }
     }
 }

@@ -123,29 +123,22 @@ final class GoogleAuthService: @unchecked Sendable {
     private let lock = NSLock()
 
     private init() {
-        // One-time cleanup: an earlier build wrote these accounts WITHOUT a
-        // service attribute, so the slot can hold a stale value belonging to
-        // a different keychain entry. Wipe both the legacy slot and any
-        // partially-written items in the new slot, so the next OAuth round
-        // starts from zero. Idempotent — safe to run on every launch.
-        Self.purgeLegacyKeychainItems(accounts: [accessTokenKey, refreshTokenKey])
-    }
-
-    /// Delete any GenericPassword item with the given `account` and an empty
-    /// service. These were created by the older code that didn't set
-    /// `kSecAttrService` and can shadow / confuse the real entries.
-    private static func purgeLegacyKeychainItems(accounts: [String]) {
-        for account in accounts {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrAccount as String: account
-            ]
-            // SecItemDelete with no service deletes ALL entries with this
-            // account regardless of service — that's what we want here, since
-            // we're re-keying everything under the new service identifier on
-            // the next OAuth flow anyway.
-            SecItemDelete(query as CFDictionary)
-        }
+        // Intentionally empty.
+        //
+        // A previous build ran a "legacy keychain cleanup" here on every launch:
+        // a SecItemDelete keyed on (class, account) but WITHOUT a service. On
+        // macOS an omitted attribute is a wildcard, so that delete matched
+        // EVERY generic-password item with these account names — including the
+        // real tokens we store under `keychainService`. The net effect was that
+        // each relaunch wiped the access + refresh tokens before anything could
+        // read them, so Gmail/Calendar appeared disconnected on every restart.
+        //
+        // The cleanup is also unnecessary: every read/write/delete below pins
+        // `kSecAttrService = keychainService`, so any legacy item written
+        // without a service can never be returned by our service-scoped reads.
+        // Such items are inert, so we simply leave them alone and let the
+        // tokens persist across launches (see `kSecAttrAccessible` below — the
+        // tokens are kept on this device until the user explicitly disconnects).
     }
 
     // MARK: - Token Management
@@ -394,8 +387,18 @@ final class GoogleAuthService: @unchecked Sendable {
             // error envelope on some failure modes); just log the status.
             let body = String(data: data, encoding: .utf8) ?? "<no body>"
             NSLog("[Google refresh failed %d]", httpResponse.statusCode)
-            // If refresh fails, user needs to re-authenticate
-            signOut()
+            // Only wipe the stored tokens when the grant is genuinely dead.
+            // A 4xx from the OAuth token endpoint (invalid_grant — refresh
+            // token revoked / expired after long inactivity / password change,
+            // invalid_client, invalid_scope, etc.) is terminal: the user must
+            // reconnect. But a 5xx or 429 is transient (Google outage, rate
+            // limit) — signing out there would disconnect a user who did
+            // nothing wrong and whose refresh token is still perfectly valid.
+            // Keep the tokens in that case and let the caller retry later, so
+            // the connection persists until the user explicitly disconnects.
+            if (400...499).contains(httpResponse.statusCode) {
+                signOut()
+            }
             throw GoogleAuthError.refreshFailedWithReason(status: httpResponse.statusCode, body: body)
         }
 

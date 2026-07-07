@@ -20,18 +20,22 @@ struct DaySection: View {
             // Content (collapsible)
             if !isCollapsed {
                 VStack(spacing: 0) {
-                    // Calendar events first
-                    ForEach(events) { event in
-                        CalendarEventRowView(event: event)
-                    }
-
-                    // Then todos
-                    ForEach(todos) { todo in
-                        TodoRowView(
-                            todo: todo,
-                            isSelected: selectedTodoId == todo.id
-                        ) {
-                            onSelectTodo?(todo)
+                    // Calendar events and todos interleaved in chronological
+                    // order. Rendering events and todos as two separate blocks
+                    // would push a late-day event (e.g. a 19:00 meeting) above
+                    // an earlier todo (e.g. a 10:00 task); merging by time fixes
+                    // that so the day reads top-to-bottom in clock order.
+                    ForEach(dayItems) { item in
+                        switch item {
+                        case .event(let event):
+                            CalendarEventRowView(event: event)
+                        case .todo(let todo):
+                            TodoRowView(
+                                todo: todo,
+                                isSelected: selectedTodoId == todo.id
+                            ) {
+                                onSelectTodo?(todo)
+                            }
                         }
                     }
 
@@ -40,6 +44,55 @@ struct DaySection: View {
                         addTaskButton(action: onAddTask)
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Merged day items
+
+    /// A single row in the day — either a synced calendar event or a todo.
+    private enum DayItem: Identifiable {
+        case event(CalendarEvent)
+        case todo(Todo)
+
+        var id: String {
+            switch self {
+            case .event(let e): return "event-\(e.id.uuidString)"
+            case .todo(let t): return "todo-\(t.id.uuidString)"
+            }
+        }
+
+        /// Time used to order items within the day. Events use their start
+        /// time; todos use their due date — which carries the time-of-day when
+        /// one is set, or midnight for date-only todos (so those sort to the
+        /// top of the day). A todo with no due date sorts last as a fallback.
+        var sortTime: Date {
+            switch self {
+            case .event(let e): return e.startTime
+            case .todo(let t): return t.dueDate ?? .distantFuture
+            }
+        }
+    }
+
+    /// Events and todos for this day, merged and sorted chronologically.
+    /// When two items share the same instant we keep a deterministic order:
+    /// events ahead of todos, then todos by priority (high→low) and newest
+    /// first, finally falling back to id so the sort is fully stable.
+    private var dayItems: [DayItem] {
+        let combined = events.map(DayItem.event) + todos.map(DayItem.todo)
+        return combined.sorted { lhs, rhs in
+            if lhs.sortTime != rhs.sortTime {
+                return lhs.sortTime < rhs.sortTime
+            }
+            switch (lhs, rhs) {
+            case (.event, .todo): return true
+            case (.todo, .event): return false
+            case let (.todo(a), .todo(b)):
+                if a.priority != b.priority { return a.priority > b.priority }
+                if a.createdAt != b.createdAt { return a.createdAt > b.createdAt }
+                return a.id.uuidString < b.id.uuidString
+            case let (.event(a), .event(b)):
+                return a.id.uuidString < b.id.uuidString
             }
         }
     }
@@ -54,17 +107,21 @@ struct DaySection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Text(formattedHeader)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
                     .foregroundStyle(headerColor)
 
                 if isToday {
                     Text("Today")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Colors.personal)
-                        .padding(.horizontal, 6)
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.green)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Theme.Colors.personal.opacity(0.12))
-                        .clipShape(Capsule())
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Colors.tintGreen)
+                        )
                 }
 
                 Spacer()
@@ -73,7 +130,7 @@ struct DaySection: View {
                 let totalItems = todos.count + events.count
                 if totalItems > 0 {
                     Text("\(totalItems)")
-                        .font(.system(size: 11))
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
@@ -88,7 +145,8 @@ struct DaySection: View {
         }
         .buttonStyle(.plain)
         .background(
-            isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(isHovered ? Theme.Colors.hoverTint : Color.clear)
         )
         .onHover { hovering in
             isHovered = hovering
@@ -132,11 +190,11 @@ struct DaySection: View {
 
     private var headerColor: Color {
         if isToday {
-            return Theme.Colors.personal
+            return Theme.Colors.textDim
         } else if isTomorrow {
-            return Theme.Colors.priorityHigh
+            return Theme.Colors.tertiaryText
         }
-        return Theme.Colors.text
+        return Theme.Colors.tertiaryText
     }
 
     private var formattedHeader: String {
@@ -216,17 +274,19 @@ struct OverdueSection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.Colors.priorityUrgent)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.red)
 
                 Text("Overdue")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.priorityUrgent)
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.red)
 
                 Spacer()
 
                 Text("\(overdueTodos.count)")
-                    .font(.system(size: 11))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Image(systemName: isOverdueCollapsed ? "chevron.right" : "chevron.down")
@@ -248,17 +308,19 @@ struct OverdueSection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "tray")
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Text("No Date")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Spacer()
 
                 Text("\(noDateTodos.count)")
-                    .font(.system(size: 11))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Image(systemName: isNoDateCollapsed ? "chevron.right" : "chevron.down")

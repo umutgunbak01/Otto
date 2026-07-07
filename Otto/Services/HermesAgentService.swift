@@ -2,10 +2,12 @@ import Foundation
 
 /// Hermes backend — drives a long-lived `hermes acp` process running locally
 /// on the same Mac as Otto. Unlike `ClaudeCLIService` / `CodexCLIService`,
-/// which are stateless and spawn a fresh CLI per turn, this actor owns one
-/// ACP session for the lifetime of the Otto run. The agent keeps its
-/// conversation state in-memory, so every turn after the first is just a
-/// `session/prompt` write into the existing stdin.
+/// which are stateless and spawn a fresh CLI per turn, this actor keeps the
+/// process alive and maintains one ACP session per Otto conversation
+/// (`sessionKey`). The agent keeps each session's conversation state
+/// in-memory, so every turn after a session's first is just a
+/// `session/prompt` write into the existing stdin. Sessions can run turns
+/// concurrently — updates are routed by the ACP sessionId they carry.
 ///
 /// Transport stack:
 ///   Otto.app ── Process ──► `hermes acp` (local subprocess, stdio JSON-RPC)
@@ -30,7 +32,7 @@ actor HermesAgentService {
     enum ConnectionState {
         case idle
         case connecting
-        case live(sessionId: String)
+        case live
         case disconnected(Error?)
     }
 
@@ -84,26 +86,45 @@ actor HermesAgentService {
     }
     private var pendingApprovals: [String: PendingApproval] = [:]
 
-    /// `toolCallId` → human-readable title, captured from the `tool_call`
-    /// notification so we can label later approval requests and tool-result
-    /// chips. The same title is used as the `ToolApprovalPolicy` lookup key.
+    /// `toolCallId` → canonical tool name (MCP prefix stripped, e.g.
+    /// `attach_item_preview`), captured from the `tool_call` notification so
+    /// we can label later approval requests and tool-result chips. The same
+    /// name is used as the `ToolApprovalPolicy` lookup key.
     private var toolCallTitles: [String: String] = [:]
 
-    /// Per-turn event sinks. Set at the start of `streamChatWithTools`,
-    /// cleared at the end. Otto serializes turns, so a single pair is fine.
-    private var currentOnDelta: (@MainActor (String) -> Void)?
-    private var currentOnEvent: (@MainActor (ChatEvent) -> Void)?
+    /// `toolCallId` → tool argument object (ACP `rawInput`). The chat UI
+    /// needs the input to render item-preview cards; some agents attach it
+    /// on the initial `tool_call`, others only on later updates.
+    private var toolCallInputs: [String: [String: Any]] = [:]
 
-    /// Accumulator for the current turn's assistant text — fed by every
-    /// `agent_message_chunk` and emitted as `.text(...)` once the prompt
-    /// response arrives with a `stopReason`.
-    private var currentAssistantText: String = ""
+    /// Otto conversation id → ACP session id. One ACP session per Otto chat
+    /// (and one for background work like the daily briefing), created lazily
+    /// on the conversation's first turn after connect.
+    private var acpSessions: [UUID: String] = [:]
+
+    /// In-flight turn state, keyed by ACP session id. Installed at the start
+    /// of `streamChatWithTools`, removed at the end. Multiple sessions can
+    /// have a turn in flight at once; `session/update` frames carry the
+    /// sessionId that picks the right context.
+    private struct TurnContext {
+        var onDelta: (@MainActor (String) -> Void)?
+        var onEvent: (@MainActor (ChatEvent) -> Void)?
+        /// Accumulator for the turn's assistant text — fed by every
+        /// `agent_message_chunk`, emitted as `.text(...)` at end of turn.
+        var assistantText: String = ""
+        /// Ordered block log — text runs interleaved with tool calls/results,
+        /// mirroring what the other backends persist. Saved into the returned
+        /// assistant `ChatTurn` so reopened sessions rebuild tool chips.
+        var turnBlocks: [ChatBlock] = []
+    }
+    private var activeTurns: [String: TurnContext] = [:]
 
     private init() {}
 
     // MARK: - Public API (mirrors ClaudeCLIService.streamChatWithTools)
 
     func streamChatWithTools(
+        sessionKey: UUID,
         turns: [ChatTurn],
         systemPrompt: String,
         tools: [[String: Any]],         // ignored — tools come via MCP
@@ -113,13 +134,16 @@ actor HermesAgentService {
     ) async throws -> [ChatTurn] {
 
         try await ensureConnected()
-        guard case .live(let sessionId) = state else {
+        guard case .live = state else {
             throw HermesError.disconnected
         }
+        let (sessionId, isFreshSession) = try await ensureSession(for: sessionKey)
 
-        // Build the prompt for this turn. On a fresh session, prepend the
-        // system prompt to the first user turn (ACP doesn't have a separate
-        // system-prompt slot — same compromise CodexCLIService makes).
+        // Build the prompt for this turn. On a fresh ACP session, prepend the
+        // system prompt (ACP doesn't have a separate system-prompt slot —
+        // same compromise CodexCLIService makes) plus a compact replay of any
+        // earlier turns, so continuing a conversation that predates this
+        // session (say, after an app restart) doesn't lose its context.
         let lastUserText = turns.reversed().first { $0.role == "user" }
             .flatMap { turn -> String? in
                 let text = turn.blocks.compactMap { block -> String? in
@@ -130,8 +154,14 @@ actor HermesAgentService {
             } ?? ""
 
         var combined: String
-        if turns.filter({ $0.role == "user" }).count == 1 && !systemPrompt.isEmpty {
-            combined = "[system]\n\(systemPrompt)\n\n\(lastUserText)"
+        if isFreshSession {
+            var pieces: [String] = []
+            if !systemPrompt.isEmpty { pieces.append("[system]\n\(systemPrompt)") }
+            if let replay = Self.historyReplay(turns: turns) {
+                pieces.append("[Earlier conversation, replayed for context]\n\(replay)")
+            }
+            pieces.append(lastUserText)
+            combined = pieces.joined(separator: "\n\n")
         } else {
             combined = lastUserText
         }
@@ -164,17 +194,12 @@ actor HermesAgentService {
             }
         }
 
-        // Install per-turn sinks and reset the assistant accumulator.
-        currentOnDelta = onDelta
-        currentOnEvent = onEvent
-        currentAssistantText = ""
-        // Guarantee sinks get cleared even on throw, so a later turn that
-        // reuses them isn't routed to a stale closure.
-        defer {
-            currentOnDelta = nil
-            currentOnEvent = nil
-            currentAssistantText = ""
-        }
+        // Install this turn's context — sinks plus accumulators — under the
+        // ACP session id so the reader task routes concurrent sessions'
+        // updates to the right turn. Guaranteed removal even on throw, so a
+        // later turn isn't routed to a stale closure.
+        activeTurns[sessionId] = TurnContext(onDelta: onDelta, onEvent: onEvent)
+        defer { activeTurns[sessionId] = nil }
 
         // Send session/prompt and await the stopReason response. Tool calls,
         // approval round-trips, and streaming chunks all flow asynchronously
@@ -193,15 +218,62 @@ actor HermesAgentService {
 
         // Emit the final assistant text once at end-of-turn, mirroring how
         // ClaudeCLIService caps the stream with a `.text(...)` event.
-        let finalText = currentAssistantText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let assistantText = activeTurns[sessionId]?.assistantText ?? ""
+        let finalText = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !finalText.isEmpty {
             let captured = finalText
             await MainActor.run { onEvent(.text(captured)) }
         }
 
+        // Persist the full block log (text + tool calls + results) so the
+        // saved session rebuilds chips and preview cards; fall back to a bare
+        // text block if nothing was logged.
+        let turnBlocks = activeTurns[sessionId]?.turnBlocks ?? []
+        let blocks = turnBlocks.isEmpty
+            ? [ChatBlock.text(assistantText)]
+            : turnBlocks
         var updated = turns
-        updated.append(ChatTurn(role: "assistant", blocks: [.text(currentAssistantText)]))
+        updated.append(ChatTurn(role: "assistant", blocks: blocks))
         return updated
+    }
+
+    /// Create (or reuse) the ACP session backing an Otto conversation.
+    /// Returns `isFresh: true` when the session was just created — the caller
+    /// then prepends the system prompt and any history replay.
+    private func ensureSession(for key: UUID) async throws -> (sessionId: String, isFresh: Bool) {
+        if let existing = acpSessions[key] { return (existing, false) }
+        // Google MCP servers are injected per session with a freshly
+        // refreshed Bearer token, so later-created sessions don't inherit a
+        // stale token from connect time.
+        let googleServers = await Self.buildGoogleMcpServers()
+        let sessionId = try await performSessionNew(extraMcpServers: googleServers)
+        acpSessions[key] = sessionId
+        return (sessionId, true)
+    }
+
+    /// Compact text replay of every turn before the final user turn — used to
+    /// seed a fresh ACP session with a conversation that already has history
+    /// (continued after an app restart or backend switch). Text blocks only;
+    /// tool chatter is noise at this altitude. Tail-capped so a monster
+    /// conversation doesn't blow up the prompt.
+    private static func historyReplay(turns: [ChatTurn]) -> String? {
+        guard let lastUserIdx = turns.lastIndex(where: { $0.role == "user" }),
+              lastUserIdx > 0 else { return nil }
+        var lines: [String] = []
+        for turn in turns[..<lastUserIdx] {
+            let text = turn.blocks.compactMap { block -> String? in
+                if case .text(let s) = block { return s }
+                return nil
+            }.joined(separator: "\n")
+            guard !text.isEmpty else { continue }
+            lines.append("\(turn.role == "user" ? "User" : "Assistant"): \(text)")
+        }
+        guard !lines.isEmpty else { return nil }
+        let replay = lines.joined(separator: "\n\n")
+        if replay.count > 12_000 {
+            return "…" + String(replay.suffix(12_000))
+        }
+        return replay
     }
 
     /// Idempotent: spawns `hermes acp` and runs the ACP handshake if we
@@ -230,8 +302,10 @@ actor HermesAgentService {
         do {
             try launchHermes(binaryPath: binPath)
             try await performInitialize()
-            let sessionId = try await performSessionNew()
-            state = .live(sessionId: sessionId)
+            // Sessions are created lazily per Otto conversation in
+            // `ensureSession(for:)` — each gets its own ACP session (and a
+            // freshly refreshed Google MCP Bearer token at creation time).
+            state = .live
         } catch {
             disconnect()
             state = .disconnected(error)
@@ -272,8 +346,33 @@ actor HermesAgentService {
         // immediately anyway.
         pendingApprovals.removeAll()
         toolCallTitles.removeAll()
+        toolCallInputs.removeAll()
+        acpSessions.removeAll()
+        activeTurns.removeAll()
 
         state = .disconnected(nil)
+    }
+
+    // MARK: - Cancel turns
+
+    /// Stop one conversation's in-flight prompt via ACP `session/cancel`,
+    /// leaving its long-lived session (and conversation history) intact.
+    /// Hermes sets its cancel event, aborts the turn, and resolves the
+    /// pending `session/prompt` with `stopReason: cancelled` — which unblocks
+    /// the `sendAndAwait` continuation in `streamChatWithTools` so that
+    /// session is immediately ready for the next prompt. No-op when the
+    /// conversation has no ACP session yet.
+    func cancelTurn(sessionKey: UUID) {
+        guard case .live = state, let sessionId = acpSessions[sessionKey] else { return }
+        writeFrame(ACPParser.cancelNotification(sessionId: sessionId))
+    }
+
+    /// Legacy global stop — cancels every in-flight turn.
+    func cancelActiveTurn() {
+        guard case .live = state else { return }
+        for sessionId in activeTurns.keys {
+            writeFrame(ACPParser.cancelNotification(sessionId: sessionId))
+        }
     }
 
     // MARK: - Approval resolution (called from UI)
@@ -421,14 +520,14 @@ actor HermesAgentService {
         }
     }
 
-    private func performSessionNew() async throws -> String {
+    private func performSessionNew(extraMcpServers: [[String: Any]] = []) async throws -> String {
         let id = allocateRequestId()
         // `cwd` isn't meaningful to Otto — Otto's tools all flow through MCP,
         // and Otto doesn't expose fs/terminal capabilities, so the agent has
         // no reason to touch a working directory. Pass our session tmp dir
         // so any errant filesystem ops land in a contained spot.
         let cwd = sessionTmpDir?.path ?? "/tmp"
-        let request = ACPParser.newSessionRequest(id: .int(id), cwd: cwd)
+        let request = ACPParser.newSessionRequest(id: .int(id), cwd: cwd, mcpServers: extraMcpServers)
         let result: [String: Any]
         do {
             result = try await sendAndAwait(id: id, request: request)
@@ -439,6 +538,61 @@ actor HermesAgentService {
             throw HermesError.sessionCreateFailed("Missing sessionId in response.")
         }
         return sessionId
+    }
+
+    // MARK: - Google MCP server injection
+
+    /// Build the ACP `mcpServers` payload for whichever Google MCP integrations
+    /// the user has connected (Calendar / Drive). These are Google-hosted
+    /// streamable-HTTP MCP servers that authenticate with an OAuth Bearer
+    /// token; we mint a fresh one from `GoogleAuthService` so the session
+    /// starts with a valid grant. Mirrors the per-turn injection the Claude /
+    /// Codex backends do, but expressed as ACP `HttpMcpServer` entries.
+    ///
+    /// Both servers share Otto's single Google OAuth token (same client, the
+    /// extra scopes were granted when the user connected each card), so we
+    /// fetch it once. If the token can't be refreshed, we skip injection
+    /// entirely — Hermes still gets a working session with the `otto` tools,
+    /// and the agent simply won't see calendar/drive tools this run.
+    private static func buildGoogleMcpServers() async -> [[String: Any]] {
+        let auth = GoogleAuthService.shared
+        let wantCalendar = auth.hasCalendarMcpScopes()
+        let wantDrive = auth.hasDriveScopes()
+        guard wantCalendar || wantDrive else { return [] }
+
+        let token: String
+        do {
+            token = try await auth.getValidAccessToken()
+        } catch {
+            NSLog("[Hermes] Google MCP skipped — token unavailable: %@", error.localizedDescription)
+            return []
+        }
+
+        func httpServer(name: String, url: String) -> [String: Any] {
+            return [
+                "type": "http",
+                "name": name,
+                "url": url,
+                "headers": [
+                    ["name": "Authorization", "value": "Bearer \(token)"] as [String: Any]
+                ]
+            ]
+        }
+
+        var servers: [[String: Any]] = []
+        if wantCalendar {
+            servers.append(httpServer(
+                name: "calendar",
+                url: "https://calendarmcp.googleapis.com/mcp/v1"
+            ))
+        }
+        if wantDrive {
+            servers.append(httpServer(
+                name: "drive",
+                url: "https://drivemcp.googleapis.com/mcp/v1"
+            ))
+        }
+        return servers
     }
 
     // MARK: - Reader loop
@@ -507,11 +661,11 @@ actor HermesAgentService {
                 }
             }
 
-        case .sessionUpdate(let update):
-            handleSessionUpdate(update)
+        case .sessionUpdate(let sessionId, let update):
+            handleSessionUpdate(sessionId: sessionId, update)
 
-        case .requestPermission(let id, _, let toolCallId, let options):
-            handlePermissionRequest(id: id, toolCallId: toolCallId, options: options)
+        case .requestPermission(let id, let sessionId, let toolCallId, let options):
+            handlePermissionRequest(id: id, sessionId: sessionId, toolCallId: toolCallId, options: options)
 
         case .unknown:
             // Modeled-but-unhandled ACP shapes (plan updates, etc.) end up
@@ -520,42 +674,84 @@ actor HermesAgentService {
         }
     }
 
-    private func handleSessionUpdate(_ update: ACPParser.SessionUpdate) {
+    /// Resolve which in-flight turn an agent frame belongs to. Frames carry
+    /// the ACP sessionId; if an agent omits it and exactly one turn is
+    /// running, route there (the pre-multi-session behavior).
+    private func resolveTurnSession(_ sessionId: String) -> String? {
+        if !sessionId.isEmpty {
+            return activeTurns[sessionId] != nil ? sessionId : nil
+        }
+        return activeTurns.count == 1 ? activeTurns.keys.first : nil
+    }
+
+    private func handleSessionUpdate(sessionId rawSessionId: String, _ update: ACPParser.SessionUpdate) {
+        guard let sid = resolveTurnSession(rawSessionId) else { return }
         switch update {
         case .agentMessageChunk(let text):
             guard !text.isEmpty else { return }
-            currentAssistantText += text
-            if let onDelta = currentOnDelta {
+            activeTurns[sid]?.assistantText += text
+            appendTurnText(text, session: sid)
+            if let onDelta = activeTurns[sid]?.onDelta {
                 let captured = text
                 Task { @MainActor in onDelta(captured) }
             }
-            if let onEvent = currentOnEvent {
+            if let onEvent = activeTurns[sid]?.onEvent {
                 let captured = text
                 Task { @MainActor in onEvent(.partialText(captured)) }
             }
 
         case .agentThoughtChunk(let text):
             guard !text.isEmpty else { return }
-            if let onEvent = currentOnEvent {
+            if let onEvent = activeTurns[sid]?.onEvent {
                 let captured = text
                 Task { @MainActor in onEvent(.thinkingDelta(captured)) }
             }
 
-        case .toolCall(let toolCallId, let title, _):
-            toolCallTitles[toolCallId] = title
-            if let onEvent = currentOnEvent {
+        case .toolCall(let toolCallId, let title, _, let rawInput):
+            // Hermes announces MCP tools as `mcp__otto__<tool>` — strip the
+            // prefix so the UI (and ToolApprovalPolicy) sees the bare name.
+            let name = OttoTools.canonicalToolName(title)
+            toolCallTitles[toolCallId] = name
+            let input = rawInput ?? [:]
+            toolCallInputs[toolCallId] = input
+            activeTurns[sid]?.turnBlocks.append(
+                .toolUse(id: toolCallId, name: name, input: JSONValue.from(any: input))
+            )
+            if let onEvent = activeTurns[sid]?.onEvent {
                 let id = toolCallId
-                let name = title
-                Task { @MainActor in onEvent(.toolCall(id: id, name: name, input: [:])) }
+                Task { @MainActor in onEvent(.toolCall(id: id, name: name, input: input)) }
             }
 
-        case .toolCallUpdate(let toolCallId, let status, let contentSummary, let isError):
+        case .toolCallUpdate(let toolCallId, let status, let contentSummary, let isError, let rawInput):
+            // Some agents deliver the argument object only on updates —
+            // backfill our records (and the persisted toolUse block) so the
+            // preview-card path has real inputs.
+            if let rawInput, !rawInput.isEmpty {
+                toolCallInputs[toolCallId] = rawInput
+                patchToolUseBlock(id: toolCallId, input: rawInput, session: sid)
+            }
             // Only fire `toolResult` for terminal statuses (completed/failed).
             // Intermediate "in_progress" updates exist but Otto's UI doesn't
             // model partial tool progress yet.
             guard status == "completed" || status == "failed" else { return }
             let name = toolCallTitles[toolCallId] ?? "tool"
-            if let onEvent = currentOnEvent {
+            // attach_item_preview: if the agent never delivered rawInput,
+            // recover {type, id} from the executor's result line so the saved
+            // toolUse block can rebuild the preview card on session reload.
+            if OttoTools.isAttachItemPreview(name),
+               (toolCallInputs[toolCallId] ?? [:]).isEmpty,
+               let parsed = OttoTools.parsePreviewResult(contentSummary) {
+                let recovered: [String: Any] = [
+                    "type": parsed.typeString,
+                    "id": parsed.id.uuidString
+                ]
+                toolCallInputs[toolCallId] = recovered
+                patchToolUseBlock(id: toolCallId, input: recovered, session: sid)
+            }
+            activeTurns[sid]?.turnBlocks.append(
+                .toolResult(toolUseId: toolCallId, content: contentSummary, isError: isError)
+            )
+            if let onEvent = activeTurns[sid]?.onEvent {
                 let id = toolCallId
                 let summary = contentSummary
                 let err = isError
@@ -570,8 +766,33 @@ actor HermesAgentService {
         }
     }
 
+    /// Append streamed assistant text to a turn's block log, merging into
+    /// the trailing text block so a text run isn't split per delta.
+    private func appendTurnText(_ text: String, session sid: String) {
+        guard var context = activeTurns[sid] else { return }
+        if case .text(let existing)? = context.turnBlocks.last {
+            context.turnBlocks[context.turnBlocks.count - 1] = .text(existing + text)
+        } else {
+            context.turnBlocks.append(.text(text))
+        }
+        activeTurns[sid] = context
+    }
+
+    /// Rewrite the input of an already-logged toolUse block (rawInput arrived
+    /// on a later update, or was recovered from the tool result).
+    private func patchToolUseBlock(id: String, input: [String: Any], session sid: String) {
+        guard var context = activeTurns[sid] else { return }
+        guard let idx = context.turnBlocks.lastIndex(where: { block in
+            if case .toolUse(let blockId, _, _) = block { return blockId == id }
+            return false
+        }), case .toolUse(_, let name, _) = context.turnBlocks[idx] else { return }
+        context.turnBlocks[idx] = .toolUse(id: id, name: name, input: JSONValue.from(any: input))
+        activeTurns[sid] = context
+    }
+
     private func handlePermissionRequest(
         id: ACPParser.JSONRPCID,
+        sessionId: String,
         toolCallId: String,
         options: [ACPParser.PermissionOption]
     ) {
@@ -596,14 +817,15 @@ actor HermesAgentService {
             break
         }
 
-        // No auto-policy — store for user resolution and emit the event.
+        // No auto-policy — store for user resolution and emit the event to
+        // the turn the request belongs to.
         let approvalKey = approvalKeyFor(id: id)
         pendingApprovals[approvalKey] = PendingApproval(
             jsonRpcId: id,
             options: options,
             toolName: toolName
         )
-        if let onEvent = currentOnEvent {
+        if let sid = resolveTurnSession(sessionId), let onEvent = activeTurns[sid]?.onEvent {
             let key = approvalKey
             let name = toolName
             let summary = "ask permission to run \(toolName)"

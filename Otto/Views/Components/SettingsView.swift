@@ -66,13 +66,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     // Agent (Backend + per-backend auth/model) Section
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.cyan)
-                        Text("Agent")
-                            .font(Theme.Typography.headline)
-                    }
+                    Text("Agent")
+                        .hudLabel()
 
                     // Backend picker — flipping this changes which CLI Otto
                     // routes to immediately, for chat and voice both.
@@ -106,13 +101,8 @@ struct SettingsView: View {
 
                 // Voice Mode (fal.ai) Section
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "waveform.and.mic")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.aiAccent)
-                        Text("Voice Mode (fal.ai)")
-                            .font(Theme.Typography.headline)
-                    }
+                    Text("Voice Mode (fal.ai)")
+                        .hudLabel()
 
                     Text("Powers voice mode — Wizper for transcription + ElevenLabs v3 for speech. Get your key at fal.ai/dashboard/keys.")
                         .font(Theme.Typography.caption)
@@ -142,11 +132,11 @@ struct SettingsView: View {
                         }
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.sm)
-                        .background(Theme.Colors.borderSubtle.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                        .background(Theme.Colors.bgInput)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                         .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
                         )
                     }
 
@@ -198,13 +188,8 @@ struct SettingsView: View {
 
                 // Interface (menu bar)
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "macwindow")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.cyan)
-                        Text("Interface")
-                            .font(Theme.Typography.headline)
-                    }
+                    Text("Interface")
+                        .hudLabel()
 
                     Toggle(isOn: $menuBarEnabled) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -222,13 +207,8 @@ struct SettingsView: View {
 
                 // About Section
                 VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "brain")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.accent)
-                        Text("About Otto")
-                            .font(Theme.Typography.headline)
-                    }
+                    Text("About Otto")
+                        .hudLabel()
 
                     VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                         Text("Version 1.0.0")
@@ -323,11 +303,11 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .background(Theme.Colors.bgInput)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
                     .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
                 }
 
@@ -368,11 +348,11 @@ struct SettingsView: View {
                         .font(Theme.Typography.body)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.sm)
-                        .background(Theme.Colors.borderSubtle.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                        .background(Theme.Colors.bgInput)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                         .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
                         )
 
                     Menu {
@@ -432,11 +412,11 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .background(Theme.Colors.bgInput)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
                     .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
                 }
 
@@ -477,11 +457,11 @@ struct SettingsView: View {
                         .font(Theme.Typography.body)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.sm)
-                        .background(Theme.Colors.borderSubtle.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                        .background(Theme.Colors.bgInput)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                         .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
                         )
 
                     Menu {
@@ -545,13 +525,17 @@ struct SettingsView: View {
                         .font(Theme.Typography.small)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                     Text("curl -LsSf https://astral.sh/uv/install.sh | sh && uv tool install 'hermes-agent[acp]'")
-                        .font(Theme.Typography.small)
+                        .font(Theme.Typography.monoSmall)
                         .foregroundStyle(Theme.Colors.text)
                         .textSelection(.enabled)
                         .padding(Theme.Spacing.sm)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Theme.Colors.borderSubtle.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                        .background(Theme.Colors.bgInput)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                     Text("Then run `hermes setup` once to configure a model provider.")
                         .font(Theme.Typography.small)
                         .foregroundStyle(Theme.Colors.tertiaryText)
@@ -722,28 +706,28 @@ struct SettingsView: View {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "key.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Theme.Colors.violet)
                 Text("Using stored Anthropic API key")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Theme.Colors.violet)
             }
         case .cliLogin:
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Theme.Colors.violet)
                 Text("Connected via Claude Code CLI")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(.purple)
+                    .foregroundStyle(Theme.Colors.violet)
             }
         case .none:
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 12))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Colors.amber)
                 Text("Not signed in — run `claude` in Terminal, or paste an API key below")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Colors.amber)
             }
         }
     }
@@ -774,10 +758,10 @@ struct SettingsView: View {
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 12))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Colors.amber)
                 Text("Not signed in — run `codex login` in Terminal, or paste an API key below")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Colors.amber)
             }
         }
     }

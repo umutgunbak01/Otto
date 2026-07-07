@@ -25,8 +25,12 @@ struct ConvertTypeMenu: View {
             .foregroundStyle(Theme.Colors.secondaryText)
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
-            .background(Theme.Colors.borderSubtle)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .background(Theme.Colors.panel)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
         }
         #if os(macOS)
         .menuStyle(.borderlessButton)

@@ -52,6 +52,9 @@ final class VoiceSessionManager {
 
     /// Currently-running Claude streaming task — cancellable on barge-in or close.
     private var claudeTask: Task<Void, Never>? = nil
+    /// Session key isolating voice-mode runs from text chats on the shared
+    /// backends (per-run subprocess tracking / per-conversation ACP session).
+    private let voiceSessionKey = UUID()
 
     /// True from the start of a turn until Claude finishes or is cancelled.
     /// Signals the TTS serial processor whether more sentences may arrive.
@@ -281,6 +284,7 @@ final class VoiceSessionManager {
 
             do {
                 let updated = try await state.claude.streamChatWithTools(
+                    sessionKey: self.voiceSessionKey,
                     turns: currentTurns,
                     systemPrompt: systemPrompt,
                     tools: OttoTools.all,

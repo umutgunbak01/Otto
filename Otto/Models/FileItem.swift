@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// Supported file types for the Files category
 enum FileType: String, Codable, CaseIterable {
@@ -35,6 +36,19 @@ enum FileType: String, Codable, CaseIterable {
         case .text: return "doc.text"
         case .video: return "film"
         case .audio: return "waveform"
+        }
+    }
+
+    /// Single source of truth for file-type accents — the row, detail,
+    /// preview, and search views all render from this.
+    var color: Color {
+        switch self {
+        case .csv, .excel: return Theme.Colors.green
+        case .image: return Theme.Colors.cyan
+        case .pdf: return Theme.Colors.red
+        case .text: return Theme.Colors.textDim
+        case .video: return Theme.Colors.hobby
+        case .audio: return Theme.Colors.amber
         }
     }
 

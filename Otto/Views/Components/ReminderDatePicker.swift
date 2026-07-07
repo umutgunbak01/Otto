@@ -25,7 +25,7 @@ struct ReminderDatePicker: View {
                         .foregroundStyle(dateColor)
 
                     Text(formatTime(date))
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.secondaryText)
 
                     Spacer()
@@ -38,11 +38,11 @@ struct ReminderDatePicker: View {
                 .padding(.vertical, Theme.Spacing.md)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(showingPicker ? Theme.Colors.accent.opacity(0.05) : Color.clear)
+                        .fill(showingPicker ? Theme.Colors.selectTint : Color.clear)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(showingPicker ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                        .strokeBorder(showingPicker ? Theme.Colors.accent.opacity(0.3) : Color.clear, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -149,20 +149,20 @@ struct ReminderDatePickerPopover: View {
                 .buttonStyle(.plain)
                 .font(Theme.Typography.caption)
                 .fontWeight(.medium)
-                .foregroundStyle(Theme.Colors.accent)
+                .foregroundStyle(Theme.Colors.accentText)
             }
             .padding(.top, Theme.Spacing.md)
         }
         .padding(Theme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(Theme.Colors.secondaryBackground)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(Theme.Colors.panel)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
                 .strokeBorder(Theme.Colors.border, lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.35), radius: 20, y: 8)
         .onAppear {
             let calendar = Calendar.current
             selectedHour = calendar.component(.hour, from: date)
@@ -344,7 +344,7 @@ struct ReminderDatePickerPopover: View {
                 .font(Theme.Typography.caption)
                 .fontWeight(isToday ? .bold : .regular)
                 .foregroundStyle(
-                    isSelected ? .white :
+                    isSelected ? Theme.Colors.onAccent :
                     isToday ? Theme.Colors.accent :
                     Theme.Colors.text
                 )
@@ -421,7 +421,7 @@ struct ReminderDatePickerPopover: View {
         } label: {
             HStack(spacing: Theme.Spacing.xs) {
                 Text(label(selection.wrappedValue))
-                    .font(Theme.Typography.body)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.text)
 
                 Image(systemName: "chevron.down")
@@ -431,12 +431,12 @@ struct ReminderDatePickerPopover: View {
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.bgInput)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
             )
         }
         #if os(macOS)

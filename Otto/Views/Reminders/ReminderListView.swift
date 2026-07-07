@@ -28,7 +28,7 @@ struct ReminderListView: View {
                 .frame(minWidth: 320, maxWidth: showDetailPanel ? 400 : .infinity)
 
             if showDetailPanel {
-                OttoDivider()
+                OttoVerticalDivider()
 
                 // Detail Panel - collapsible
                 detailPanel
@@ -93,24 +93,17 @@ struct ReminderListView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                Text("⌬ REMINDERS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Reminders")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(activeReminders.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: activeReminders.count)
 
                 Spacer()
             }
             .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.lg)
             .padding(.bottom, Theme.Spacing.md)
         }
     }

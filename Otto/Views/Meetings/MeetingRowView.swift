@@ -5,78 +5,88 @@ struct MeetingRowView: View {
     let meeting: Meeting
     var isSelected: Bool = false
 
+    @State private var isHovered: Bool = false
+
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.md) {
-            // Meeting icon
+        HStack(alignment: .center, spacing: 11) {
+            // Meeting icon (mockup .sq)
             ZStack {
-                Rectangle()
-                    .fill(Theme.Colors.cyan.opacity(0.1))
-                    .frame(width: 36, height: 36)
-                    .overlay(Rectangle().stroke(Theme.Colors.cyan.opacity(0.3), lineWidth: 1))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.selectTint)
+                    .frame(width: 30, height: 30)
 
                 Image(systemName: "video.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.Colors.cyan)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.accentText)
             }
 
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            VStack(alignment: .leading, spacing: 2) {
                 // Title
                 Text(meeting.title)
-                    .font(Theme.Typography.headline)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
-                // Meeting date and duration
-                HStack(spacing: Theme.Spacing.md) {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 10))
-                        Text(meeting.formattedMeetingDate)
-                    }
-
-                    if meeting.duration > 0 {
-                        HStack(spacing: Theme.Spacing.xs) {
-                            Image(systemName: "clock")
-                                .font(.system(size: 10))
-                            Text(meeting.formattedDuration)
-                        }
-                    }
-                }
-                .font(Theme.Typography.small)
-                .foregroundStyle(Theme.Colors.secondaryText)
-
-                // Participants preview
-                if !meeting.participants.isEmpty {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "person.2")
-                            .font(.system(size: 10))
+                // Participants + tags sub-line
+                HStack(spacing: 10) {
+                    if !meeting.participants.isEmpty {
                         Text(participantsPreview)
+                            .font(Theme.Typography.callout)
+                            .foregroundStyle(Theme.Colors.textDim)
                             .lineLimit(1)
                     }
-                    .font(Theme.Typography.small)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                }
 
-                // Tags
-                if !meeting.domainTagIds.isEmpty {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        ForEach(appState.tags(for: meeting.domainTagIds).prefix(3)) { tag in
-                            TagChipView(tag: tag, isCompact: true)
-                        }
+                    ForEach(appState.tags(for: meeting.domainTagIds).prefix(3)) { tag in
+                        TagChipView(tag: tag, isCompact: true)
                     }
                 }
             }
 
             Spacer()
 
-            // Selection indicator
-            if isSelected {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.accent)
+            // Transcript chip + date/duration (mockup .end)
+            HStack(spacing: Theme.Spacing.sm) {
+                if meeting.firefliesId != nil {
+                    AngularChip(fill: Theme.Colors.tintGreen) {
+                        Text("transcript")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.green)
+                    }
+                } else {
+                    AngularChip {
+                        Text("no transcript")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                }
+
+                Text(dateAndDuration)
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
             }
         }
-        .padding(Theme.Spacing.md)
-        .ottoRow(isSelected: isSelected)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+        )
+        #if os(macOS)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        #endif
+    }
+
+    private var dateAndDuration: String {
+        if meeting.duration > 0 {
+            return "\(meeting.formattedMeetingDate) · \(meeting.formattedDuration)"
+        }
+        return meeting.formattedMeetingDate
     }
 
     private var participantsPreview: String {
@@ -90,7 +100,7 @@ struct MeetingRowView: View {
 }
 
 #Preview {
-    VStack(spacing: 0) {
+    VStack(spacing: 6) {
         MeetingRowView(
             meeting: Meeting(
                 title: "Product Strategy Meeting",

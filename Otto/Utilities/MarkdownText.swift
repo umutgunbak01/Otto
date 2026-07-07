@@ -39,39 +39,21 @@ struct MarkdownText: View {
     }
 }
 
-/// A view that renders multi-line markdown content with proper line handling
-struct MarkdownContent: View {
-    let text: String
-    let font: Font
-    let color: Color
+/// One logical block of a markdown message. Shared by `MarkdownContent`
+/// (SwiftUI rendering) and `ChatMessageRenderer` (NSAttributedString for
+/// the selectable chat bubbles) so the two stay in sync.
+enum MarkdownBlock {
+    case h1(String)          // # Heading
+    case h2(String)          // ## Heading
+    case h3(String)          // ### Heading
+    case boldHeader(String)  // **Header**
+    case bulletPoint(String) // - Item
+    case numberedItem(Int, String) // 1. Item
+    case regular(String)
 
-    init(_ text: String, font: Font = Theme.Typography.body, color: Color = Theme.Colors.text) {
-        self.text = text
-        self.font = font
-        self.color = color
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            ForEach(Array(parseLines().enumerated()), id: \.offset) { _, line in
-                lineView(for: line)
-            }
-        }
-    }
-
-    private enum LineType {
-        case h1(String)          // # Heading
-        case h2(String)          // ## Heading
-        case h3(String)          // ### Heading
-        case boldHeader(String)  // **Header**
-        case bulletPoint(String) // - Item
-        case numberedItem(Int, String) // 1. Item
-        case regular(String)
-    }
-
-    private func parseLines() -> [LineType] {
+    static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.components(separatedBy: "\n")
-        var result: [LineType] = []
+        var result: [MarkdownBlock] = []
 
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -122,9 +104,30 @@ struct MarkdownContent: View {
 
         return result
     }
+}
+
+/// A view that renders multi-line markdown content with proper line handling
+struct MarkdownContent: View {
+    let text: String
+    let font: Font
+    let color: Color
+
+    init(_ text: String, font: Font = Theme.Typography.body, color: Color = Theme.Colors.text) {
+        self.text = text
+        self.font = font
+        self.color = color
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, line in
+                lineView(for: line)
+            }
+        }
+    }
 
     @ViewBuilder
-    private func lineView(for line: LineType) -> some View {
+    private func lineView(for line: MarkdownBlock) -> some View {
         switch line {
         case .h1(let text):
             MarkdownText(text, font: .system(size: 20, weight: .bold), color: color)

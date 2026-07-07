@@ -27,7 +27,15 @@ final class MicCapture: @unchecked Sendable {
         }
     }
 
-    private let engine = AVAudioEngine()
+    /// Lazily created and torn down each `start()` / `stop()` cycle.
+    ///
+    /// macOS's orange "mic in use" indicator stays lit as long as the process
+    /// holds an `AVAudioEngine` whose input node has ever been tapped — even
+    /// after `engine.stop()` and `removeTap(onBus:)`. Reusing a single engine
+    /// across cycles kept the indicator on after we logically stopped the wake
+    /// listener. Dropping the engine reference here lets the HAL release the
+    /// input and the menu-bar dot goes away.
+    private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
 
@@ -56,6 +64,10 @@ final class MicCapture: @unchecked Sendable {
 
     func start() throws {
         guard !isRunning else { return }
+
+        // Fresh engine every cycle — see comment on `engine` for why.
+        let engine = AVAudioEngine()
+        self.engine = engine
 
         let input = engine.inputNode
         // Note: we previously enabled setVoiceProcessingEnabled(true) for AEC, but
@@ -89,14 +101,27 @@ final class MicCapture: @unchecked Sendable {
             isRunning = true
         } catch {
             input.removeTap(onBus: 0)
+            self.engine = nil
+            self.converter = nil
+            self.targetFormat = nil
             throw MicError.engineStartFailed(error.localizedDescription)
         }
     }
 
     func stop() {
         guard isRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if let engine = engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            // Resetting the input node before dropping the reference helps the
+            // HAL clean up immediately; otherwise the orange mic indicator
+            // sometimes lingers until the next runloop tick.
+            engine.inputNode.reset()
+            engine.reset()
+        }
+        engine = nil
+        converter = nil
+        targetFormat = nil
         isRunning = false
     }
 

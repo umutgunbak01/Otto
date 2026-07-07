@@ -22,6 +22,12 @@ actor ClaudeCLIService {
     ]
     private var resolvedPath: String?
 
+    /// Live CLI subprocesses keyed by the conversation (`sessionKey`) that
+    /// launched them, so Stop can terminate the right one when several
+    /// conversations run concurrently. Entries are cleared when their turn
+    /// ends. Access is serialized by the actor.
+    private var activeProcesses: [UUID: Process] = [:]
+
     /// CLI-side built-in tool whitelist. Keeps Otto from running Bash / Edit /
     /// Write unless we explicitly opt into those later. MCP tools (Otto tools)
     /// aren't listed here — they're gated separately by `--permission-mode
@@ -62,6 +68,7 @@ actor ClaudeCLIService {
     // MARK: - Public API (mirrors AgentService.streamChatWithTools)
 
     func streamChatWithTools(
+        sessionKey: UUID,
         turns: [ChatTurn],
         systemPrompt: String,
         tools: [[String: Any]],         // ignored in Phase 1
@@ -102,6 +109,15 @@ actor ClaudeCLIService {
                     NSLog("[ClaudeCLI] failed to stage screenshot: \(error.localizedDescription)")
                 }
             }
+        }
+
+        // Data-workspace handoff: export every Otto tab as a grep-able
+        // CSV/JSONL snapshot into the CLI's cwd. The system prompt's
+        // "Data workspace" section advertises the files, so bulk questions
+        // become one Grep instead of a chain of search_items round trips.
+        if let state = OttoMCPServer.shared.appState {
+            let snap = await MainActor.run { AgentWorkspaceExporter.snapshot(from: state) }
+            AgentWorkspaceExporter.write(snap, into: tmpDir)
         }
 
         let proc = Process()
@@ -240,6 +256,10 @@ actor ClaudeCLIService {
             throw CLIError.launchFailed(error.localizedDescription)
         }
 
+        // Track the live subprocess so Stop can terminate it; clear on exit.
+        activeProcesses[sessionKey] = proc
+        defer { activeProcesses[sessionKey] = nil }
+
         // Feed prompt on stdin, then close — signals EOF so the CLI proceeds.
         if let data = prompt.data(using: .utf8) {
             try? stdinPipe.fileHandleForWriting.write(contentsOf: data)
@@ -286,6 +306,19 @@ actor ClaudeCLIService {
         var updated = turns
         updated.append(ChatTurn(role: "assistant", blocks: [.text(assistantText)]))
         return updated
+    }
+
+    /// Terminate one conversation's in-flight CLI subprocess, if any (the
+    /// Stop button reaches this via `AgentService.cancelRun`). Killing the
+    /// process closes its stdout, which unblocks the streaming reader and
+    /// unwinds that turn — other conversations' runs are untouched.
+    func cancelRun(sessionKey: UUID) {
+        activeProcesses[sessionKey]?.terminate()
+    }
+
+    /// Legacy global stop — terminates every in-flight subprocess.
+    func cancelActiveRun() {
+        for proc in activeProcesses.values { proc.terminate() }
     }
 
     // MARK: - Helpers

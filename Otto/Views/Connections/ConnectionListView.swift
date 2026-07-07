@@ -12,6 +12,22 @@ struct ConnectionListView: View {
     @State private var selectedConnectionIds: Set<UUID> = []
     @State private var isSelectionMode: Bool = false
     @State private var detailConnectionId: UUID?
+    @State private var showColumnsMenu: Bool = false
+    @State private var layout: ColumnLayout = ConnectionColumnLayoutStore.load()
+    /// The column header currently being dragged to reorder, if any.
+    @State private var draggingColumn: ConnectionColumn?
+    /// Which (row, column) is currently in edit mode. Only one at a time.
+    @State private var editingCell: EditingCell?
+    /// Row currently under the pointer — drives the hover tint.
+    @State private var hoveredRowId: UUID?
+
+    private struct EditingCell: Equatable {
+        let connectionId: UUID
+        let column: ConnectionColumn
+    }
+
+    private let nameColumnWidth: CGFloat = 240
+    private let rowHeight: CGFloat = 36
 
     enum SortOption: String, CaseIterable {
         case alphabetical = "A-Z"
@@ -19,14 +35,16 @@ struct ConnectionListView: View {
         case closeness = "Closeness"
         case category = "Category"
         case connectionDate = "Date Added"
+        case lastContact = "Last Contact"
 
         var description: String {
             switch self {
-            case .alphabetical: return "Sort alphabetically by name"
-            case .company: return "Sort by company name"
-            case .closeness: return "Sort by closeness"
-            case .category: return "Sort by category"
+            case .alphabetical:   return "Sort alphabetically by name"
+            case .company:        return "Sort by company name"
+            case .closeness:      return "Sort by closeness"
+            case .category:       return "Sort by category"
             case .connectionDate: return "Sort by connection date"
+            case .lastContact:    return "Sort by last contact"
             }
         }
     }
@@ -83,6 +101,12 @@ struct ConnectionListView: View {
                 let date1 = $1.connectionDate ?? Date.distantPast
                 return date0 > date1
             }
+        case .lastContact:
+            result.sort {
+                let date0 = $0.lastContactedAt ?? Date.distantPast
+                let date1 = $1.lastContactedAt ?? Date.distantPast
+                return date0 > date1
+            }
         }
 
         return result
@@ -97,53 +121,26 @@ struct ConnectionListView: View {
         }
     }
 
+    /// Sum of name column + every visible column width — fixes the inner
+    /// VStack width so the outer ScrollView gets a horizontal scroll bar.
+    private var totalTableWidth: CGFloat {
+        nameColumnWidth + layout.visible.reduce(0) { acc, column in
+            acc + layout.width(for: column, definitions: appState.connectionCustomFields)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
 
             OttoDivider()
 
-            // Column header row
-            columnHeader
-
-            OttoDivider()
-
-            // List content
             if filteredConnections.isEmpty && appState.connections.isEmpty {
                 emptyState
             } else if filteredConnections.isEmpty {
                 noResultsState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(filteredConnections) { connection in
-                            ConnectionRow(
-                                connection: connection,
-                                isSelectionMode: isSelectionMode,
-                                isSelected: selectedConnectionIds.contains(connection.id),
-                                onToggleSelection: {
-                                    if selectedConnectionIds.contains(connection.id) {
-                                        selectedConnectionIds.remove(connection.id)
-                                    } else {
-                                        selectedConnectionIds.insert(connection.id)
-                                    }
-                                },
-                                onOpen: { detailConnectionId = connection.id },
-                                onUpdateCloseness: { tier in
-                                    var updated = connection
-                                    updated.closeness = tier
-                                    Task { await appState.updateConnection(updated) }
-                                },
-                                onUpdateCategory: { cat in
-                                    var updated = connection
-                                    updated.category = cat
-                                    Task { await appState.updateConnection(updated) }
-                                }
-                            )
-                            OttoDivider()
-                        }
-                    }
-                }
+                table
             }
         }
         .sheet(item: sheetBinding) { connection in
@@ -171,6 +168,186 @@ struct ConnectionListView: View {
             handleFileImport(result)
         }
     }
+
+    // MARK: - Table
+
+    private var table: some View {
+        ScrollView([.horizontal, .vertical]) {
+            VStack(alignment: .leading, spacing: 0) {
+                columnHeaderRow
+                OttoDivider()
+                LazyVStack(spacing: 0) {
+                    ForEach(filteredConnections) { connection in
+                        connectionRow(connection)
+                        OttoDivider()
+                    }
+                }
+            }
+            .frame(width: totalTableWidth, alignment: .leading)
+        }
+    }
+
+    private var columnHeaderRow: some View {
+        HStack(spacing: 0) {
+            // Name column header (always present)
+            HStack(spacing: 8) {
+                if isSelectionMode {
+                    Button {
+                        if selectedConnectionIds.count == filteredConnections.count {
+                            selectedConnectionIds.removeAll()
+                        } else {
+                            selectedConnectionIds = Set(filteredConnections.map { $0.id })
+                        }
+                    } label: {
+                        Image(systemName: selectedConnectionIds.count == filteredConnections.count && !filteredConnections.isEmpty
+                              ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.Colors.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Text("Name")
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(width: nameColumnWidth, height: 32, alignment: .leading)
+
+            // Visible columns. Padding lives INSIDE the frame so the frame
+            // width equals the column-budget width — keeps totalTableWidth
+            // and the ScrollView's content extent in sync.
+            ForEach(layout.visible, id: \.self) { column in
+                Text(ColumnLayout.label(for: column, definitions: appState.connectionCustomFields))
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .padding(.horizontal, 8)
+                    .frame(
+                        width: layout.width(for: column, definitions: appState.connectionCustomFields),
+                        height: 32,
+                        alignment: .leading
+                    )
+                    .contentShape(Rectangle())
+                    // Drag a column header to reorder; the data cells follow
+                    // because every row iterates the same `layout.visible`.
+                    .opacity(draggingColumn == column ? 0.35 : 1)
+                    .onDrag {
+                        draggingColumn = column
+                        return NSItemProvider(object: column.storageKey as NSString)
+                    }
+                    .onDrop(
+                        of: [.text],
+                        delegate: ColumnReorderDropDelegate(
+                            target: column,
+                            layout: $layout,
+                            dragging: $draggingColumn
+                        )
+                    )
+                    #if os(macOS)
+                    .help("Drag to reorder")
+                    #endif
+            }
+        }
+        .background(Theme.Colors.bg1)
+        // Catch-all so a drop on the pinned Name column or a gap still
+        // finalizes the reorder (persist + clear the drag state).
+        .onDrop(
+            of: [.text],
+            delegate: ColumnReorderFinalizeDelegate(layout: $layout, dragging: $draggingColumn)
+        )
+    }
+
+    @ViewBuilder
+    private func connectionRow(_ connection: Connection) -> some View {
+        let isSelected = selectedConnectionIds.contains(connection.id)
+        HStack(spacing: 0) {
+            // Name cell (pinned visually but inside the same horizontal scroll)
+            HStack(spacing: 8) {
+                if isSelectionMode {
+                    Button {
+                        if isSelected {
+                            selectedConnectionIds.remove(connection.id)
+                        } else {
+                            selectedConnectionIds.insert(connection.id)
+                        }
+                    } label: {
+                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 13))
+                            .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    if isSelectionMode {
+                        if isSelected {
+                            selectedConnectionIds.remove(connection.id)
+                        } else {
+                            selectedConnectionIds.insert(connection.id)
+                        }
+                    } else {
+                        detailConnectionId = connection.id
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        let avatar = ConnectionAvatarPalette.colors(for: connection)
+                        ZStack {
+                            Circle()
+                                .fill(avatar.bg)
+                                .frame(width: 26, height: 26)
+                            Text(connection.initials)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(avatar.fg)
+                        }
+                        Text(connection.fullName)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(Theme.Colors.text)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .frame(width: nameColumnWidth, height: rowHeight, alignment: .leading)
+
+            ForEach(layout.visible, id: \.self) { column in
+                ConnectionCell(
+                    column: column,
+                    connection: connection,
+                    isEditing: editingCell == EditingCell(connectionId: connection.id, column: column),
+                    onBeginEdit: {
+                        editingCell = EditingCell(connectionId: connection.id, column: column)
+                    },
+                    onEndEdit: {
+                        editingCell = nil
+                    }
+                )
+                .padding(.horizontal, 8)
+                .frame(
+                    width: layout.width(for: column, definitions: appState.connectionCustomFields),
+                    height: rowHeight,
+                    alignment: .leading
+                )
+            }
+        }
+        .background(hoveredRowId == connection.id ? Theme.Colors.hoverTint : Color.clear)
+        #if os(macOS)
+        .onHover { hovering in
+            if hovering {
+                hoveredRowId = connection.id
+            } else if hoveredRowId == connection.id {
+                hoveredRowId = nil
+            }
+        }
+        #endif
+    }
+
 
     // MARK: - Sheet binding
 
@@ -221,18 +398,11 @@ struct ConnectionListView: View {
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
             HStack(alignment: .center) {
-                Text("⌬ CONNECTIONS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                Text("LinkedIn Connections")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filteredConnections.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredConnections.count)
 
                 Spacer()
 
@@ -251,16 +421,14 @@ struct ConnectionListView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: "trash")
-                                .font(.system(size: 11))
-                            Text("Delete (\(selectedConnectionIds.count))")
-                                .font(.system(size: 12))
+                            Image(systemName: "trash").font(.system(size: 11))
+                            Text("Delete (\(selectedConnectionIds.count))").font(.system(size: 12, weight: .medium))
                         }
                         .foregroundStyle(Theme.Colors.bg0)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(Theme.Colors.priorityUrgent)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .background(Theme.Colors.red)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
                 }
@@ -273,7 +441,17 @@ struct ConnectionListView: View {
                 } label: {
                     Text(isSelectionMode ? "Cancel" : "Select")
                         .font(.system(size: 12))
-                        .foregroundStyle(isSelectionMode ? Theme.Colors.secondaryText : Theme.Colors.accent)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(Theme.Colors.panel)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
 
@@ -281,18 +459,11 @@ struct ConnectionListView: View {
                     isImporting = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 11))
-                        Text("Import CSV")
-                            .font(.system(size: 12))
+                        Image(systemName: "square.and.arrow.down").font(.system(size: 11))
+                        Text("Import CSV").font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -315,11 +486,14 @@ struct ConnectionListView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(Theme.Colors.bgInput)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
                 .frame(maxWidth: 280)
 
-                // Sort picker
                 Menu {
                     ForEach(SortOption.allCases, id: \.self) { option in
                         Button {
@@ -340,7 +514,6 @@ struct ConnectionListView: View {
                 .menuStyle(.borderlessButton)
                 #endif
 
-                // Closeness filter
                 Menu {
                     Button {
                         filterCloseness = nil
@@ -373,7 +546,6 @@ struct ConnectionListView: View {
                 .menuStyle(.borderlessButton)
                 #endif
 
-                // Category filter
                 Menu {
                     Button {
                         filterCategory = nil
@@ -406,7 +578,6 @@ struct ConnectionListView: View {
                 .menuStyle(.borderlessButton)
                 #endif
 
-                // Tag filter
                 if !allTags.isEmpty {
                     Menu {
                         Button {
@@ -440,6 +611,18 @@ struct ConnectionListView: View {
                     #endif
                 }
 
+                // Columns popover trigger — entry point for visibility, reorder, and custom-field creation.
+                Button {
+                    showColumnsMenu.toggle()
+                } label: {
+                    filterChipLabel(icon: "rectangle.split.3x1", text: "Columns", isActive: false)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showColumnsMenu) {
+                    ConnectionColumnsMenu(layout: $layout, isPresented: $showColumnsMenu)
+                        .environment(appState)
+                }
+
                 Spacer()
             }
 
@@ -464,57 +647,20 @@ struct ConnectionListView: View {
 
     private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-            Text(text)
-                .font(.system(size: 11))
+            Image(systemName: icon).font(.system(size: 10))
+            Text(text).font(.system(size: 12, weight: .medium))
         }
-        .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
-        .padding(.horizontal, 8)
+        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+        .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background(isActive ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
-    }
-
-    // MARK: - Column header
-
-    private var columnHeader: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            if isSelectionMode {
-                Button {
-                    if selectedConnectionIds.count == filteredConnections.count {
-                        selectedConnectionIds.removeAll()
-                    } else {
-                        selectedConnectionIds = Set(filteredConnections.map { $0.id })
-                    }
-                } label: {
-                    Image(systemName: selectedConnectionIds.count == filteredConnections.count && !filteredConnections.isEmpty
-                          ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.Colors.accent)
-                        .frame(width: 20)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Text("Name")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("Closeness")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-                .frame(width: 150, alignment: .leading)
-
-            Text("Category")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-                .frame(width: 150, alignment: .leading)
-        }
-        .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, 8)
-        .background(Theme.Colors.borderSubtle.opacity(0.5))
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Empty states
@@ -585,194 +731,76 @@ struct ConnectionListView: View {
     }
 }
 
-// MARK: - Connection Row (with neon hover)
+/// Avatar tint rotation — pairs of (background tint, initials color) cycled
+/// deterministically per person, matching the mockup's .fava a1–a5 classes.
+enum ConnectionAvatarPalette {
+    static let pairs: [(bg: Color, fg: Color)] = [
+        (Theme.Colors.tintViolet, Theme.Colors.violet),
+        (Theme.Colors.tintGreen, Theme.Colors.green),
+        (Theme.Colors.selectTint, Theme.Colors.accentText),
+        (Theme.Colors.tintAmber, Theme.Colors.amber),
+        (Theme.Colors.tintRed, Theme.Colors.red),
+    ]
 
-private struct ConnectionRow: View {
-    let connection: Connection
-    let isSelectionMode: Bool
-    let isSelected: Bool
-    let onToggleSelection: () -> Void
-    let onOpen: () -> Void
-    let onUpdateCloseness: (ConnectionCloseness) -> Void
-    let onUpdateCategory: (ConnectionCategory) -> Void
-
-    @State private var isHovered: Bool = false
-
-    /// Neon accent color — tinted by the connection's category (falls back to the content-type accent)
-    private var neonColor: Color {
-        connection.category == .unknown ? ContentType.connection.color : connection.category.color
+    /// Stable across launches: derived from the name's scalar sum, not
+    /// `hashValue` (which is seeded per-process).
+    static func colors(for connection: Connection) -> (bg: Color, fg: Color) {
+        let sum = connection.fullName.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return pairs[sum % pairs.count]
     }
+}
 
-    var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            if isSelectionMode {
-                Button(action: onToggleSelection) {
-                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                        .frame(width: 20)
-                }
-                .buttonStyle(.plain)
-            }
+/// Drop delegate that reorders `layout.visible` as a column header is dragged
+/// over another. Reordering happens live in `dropEntered` (so the table
+/// animates as you drag), and the new order is persisted once on drop.
+private struct ColumnReorderDropDelegate: DropDelegate {
+    let target: ConnectionColumn
+    @Binding var layout: ColumnLayout
+    @Binding var dragging: ConnectionColumn?
 
-            Button {
-                if isSelectionMode {
-                    onToggleSelection()
-                } else {
-                    onOpen()
-                }
-            } label: {
-                HStack(spacing: Theme.Spacing.sm) {
-                    ZStack {
-                        Circle()
-                            .fill(ContentType.connection.color.opacity(isHovered ? 0.22 : 0.12))
-                            .frame(width: 30, height: 30)
-                            .shadow(
-                                color: neonColor.opacity(isHovered ? 0.7 : 0),
-                                radius: isHovered ? 8 : 0
-                            )
-
-                        Text(connection.initials)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(ContentType.connection.color)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(connection.fullName)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(isHovered ? neonColor : Theme.Colors.text)
-                            .lineLimit(1)
-
-                        if !connection.headline.isEmpty || !connection.company.isEmpty {
-                            Text(subtitle)
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            closenessMenu
-                .frame(width: 150, alignment: .leading)
-
-            categoryMenu
-                .frame(width: 150, alignment: .leading)
-        }
-        .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, 8)
-        .background(
-            ZStack {
-                // Neon glow fill
-                RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                    .fill(neonColor.opacity(isHovered ? 0.10 : 0))
-
-                // Neon border
-                RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                    .strokeBorder(neonColor.opacity(isHovered ? 0.65 : 0), lineWidth: 1)
-            }
-            .padding(.horizontal, Theme.Spacing.md)
-        )
-        .shadow(color: neonColor.opacity(isHovered ? 0.35 : 0), radius: isHovered ? 10 : 0)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
-    }
-
-    private var subtitle: String {
-        if !connection.headline.isEmpty && !connection.company.isEmpty {
-            return "\(connection.headline) @ \(connection.company)"
-        } else if !connection.headline.isEmpty {
-            return connection.headline
-        } else {
-            return connection.company
-        }
-    }
-
-    private var closenessMenu: some View {
-        Menu {
-            ForEach(ConnectionCloseness.allCases, id: \.self) { tier in
-                Button {
-                    onUpdateCloseness(tier)
-                } label: {
-                    HStack {
-                        Image(systemName: tier.icon)
-                        Text(tier.label)
-                        if connection.closeness == tier {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: connection.closeness.icon)
-                    .font(.system(size: 11))
-                Text(connection.closeness.label)
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(connection.closeness == .unknown ? Theme.Colors.tertiaryText : connection.closeness.color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(connection.closeness == .unknown ? Theme.Colors.hoverTint : connection.closeness.color.opacity(0.1))
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging != target,
+              let from = layout.visible.firstIndex(of: dragging),
+              let to = layout.visible.firstIndex(of: target) else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            layout.visible.move(
+                fromOffsets: IndexSet(integer: from),
+                toOffset: to > from ? to + 1 : to
             )
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        #if os(macOS)
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        #endif
     }
 
-    private var categoryMenu: some View {
-        Menu {
-            ForEach(ConnectionCategory.allCases, id: \.self) { cat in
-                Button {
-                    onUpdateCategory(cat)
-                } label: {
-                    HStack {
-                        Image(systemName: cat.icon)
-                        Text(cat.label)
-                        if connection.category == cat {
-                            Image(systemName: "checkmark")
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: connection.category.icon)
-                    .font(.system(size: 11))
-                Text(connection.category.label)
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(connection.category == .unknown ? Theme.Colors.tertiaryText : connection.category.color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(connection.category == .unknown ? Theme.Colors.hoverTint : connection.category.color.opacity(0.1))
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        #if os(macOS)
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        #endif
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        ConnectionColumnLayoutStore.save(layout)
+        return true
+    }
+
+    /// If the drag ends outside any header (no drop), clear the drag state so
+    /// the faded column snaps back to normal.
+    func dropExited(info: DropInfo) {}
+}
+
+/// Fallback drop target for the whole header row: finalizes a reorder when the
+/// drop lands somewhere other than a specific column header (the pinned Name
+/// cell, padding, or a gap). The live reordering already happened in the
+/// per-column `ColumnReorderDropDelegate`, so this just persists + resets.
+private struct ColumnReorderFinalizeDelegate: DropDelegate {
+    @Binding var layout: ColumnLayout
+    @Binding var dragging: ConnectionColumn?
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        ConnectionColumnLayoutStore.save(layout)
+        return true
     }
 }
 

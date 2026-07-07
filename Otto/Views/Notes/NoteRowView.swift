@@ -25,12 +25,12 @@ struct NoteRowView: View {
 
                 // Category badge
                 Text(note.primaryCategory.rawValue)
-                    .font(Theme.Typography.small)
-                    .padding(.horizontal, 6)
+                    .font(Theme.Typography.monoSmall)
+                    .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(categoryColor.opacity(0.12))
+                    .background(categoryTint)
                     .foregroundStyle(categoryColor)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
             // Preview text
@@ -47,19 +47,19 @@ struct NoteRowView: View {
                 // Tags
                 ForEach(appState.tags(for: note.domainTagIds).prefix(2)) { tag in
                     Text(tag.name)
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                        .padding(.horizontal, 6)
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .background(Theme.Colors.hoverTint)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
 
                 Spacer()
 
                 // Time ago
                 Text(timeAgo(note.updatedAt))
-                    .font(Theme.Typography.small)
+                    .font(Theme.Typography.monoSmall)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 // Hover actions
@@ -79,11 +79,7 @@ struct NoteRowView: View {
             .padding(.leading, 22)
         }
         .padding(Theme.Spacing.sm)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) :
-                      isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear)
-        )
+        .ottoRow(isSelected: isSelected, isHovered: isHovered)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
@@ -93,9 +89,17 @@ struct NoteRowView: View {
 
     private var categoryColor: Color {
         switch note.primaryCategory {
-        case .work: return Theme.Colors.work
-        case .personal: return Theme.Colors.personal
-        case .hobby: return Theme.Colors.hobby
+        case .work: return Theme.Colors.accentText
+        case .personal: return Theme.Colors.green
+        case .hobby: return Theme.Colors.violet
+        }
+    }
+
+    private var categoryTint: Color {
+        switch note.primaryCategory {
+        case .work: return Theme.Colors.selectTint
+        case .personal: return Theme.Colors.tintGreen
+        case .hobby: return Theme.Colors.tintViolet
         }
     }
 

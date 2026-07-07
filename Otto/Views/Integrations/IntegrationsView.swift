@@ -157,11 +157,11 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
             }
 
@@ -191,7 +191,7 @@ struct IntegrationsView: View {
                 .font(Theme.Typography.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Spacing.md)
-                .background(todoistTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                .background(todoistTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -253,18 +253,18 @@ struct IntegrationsView: View {
                             if appState.needsGoogleReauth && (integration == .gmail || integration == .googleCalendar) {
                                 Text("Session Expired")
                                     .font(Theme.Typography.small)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(Theme.Colors.amber)
                                     .padding(.horizontal, Theme.Spacing.sm)
                                     .padding(.vertical, 2)
-                                    .background(Color.orange.opacity(0.1))
+                                    .background(Theme.Colors.amber.opacity(0.1))
                                     .clipShape(Capsule())
                             } else {
                                 Text("Connected")
                                     .font(Theme.Typography.small)
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(Theme.Colors.green)
                                     .padding(.horizontal, Theme.Spacing.sm)
                                     .padding(.vertical, 2)
-                                    .background(Color.green.opacity(0.1))
+                                    .background(Theme.Colors.green.opacity(0.1))
                                     .clipShape(Capsule())
                             }
                         }
@@ -334,18 +334,18 @@ struct IntegrationsView: View {
 
     private func integrationColor(_ integration: IntegrationType) -> Color {
         switch integration {
-        case .fireflies: return .purple
-        case .gmail: return .red
-        case .googleCalendar: return .blue
-        case .googleCalendarLive: return .blue
-        case .googleDrive: return .blue
-        case .todoist: return .red
-        case .notion: return .gray
-        case .tally: return .pink
-        case .linkedin: return .indigo
-        case .twitter: return .primary
-        case .supabase: return .green
-        case .genmedia: return .pink
+        case .fireflies: return Theme.Colors.hobby
+        case .gmail: return Theme.Colors.red
+        case .googleCalendar: return Theme.Colors.cyan
+        case .googleCalendarLive: return Theme.Colors.cyan
+        case .googleDrive: return Theme.Colors.cyan
+        case .todoist: return Theme.Colors.red
+        case .notion: return Theme.Colors.textDim
+        case .tally: return Theme.Colors.amber
+        case .linkedin: return Theme.Colors.cyanDim
+        case .twitter: return Theme.Colors.text
+        case .supabase: return Theme.Colors.green
+        case .genmedia: return Theme.Colors.hobby
         }
     }
 
@@ -544,7 +544,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.Colors.green)
 
                     Text(lastResult)
                         .font(Theme.Typography.caption)
@@ -557,7 +557,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -723,7 +723,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -852,11 +852,11 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
             }
 
@@ -886,7 +886,7 @@ struct IntegrationsView: View {
                 .font(Theme.Typography.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Spacing.md)
-                .background(notionTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                .background(notionTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -909,7 +909,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -993,7 +993,7 @@ struct IntegrationsView: View {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "exclamationmark.shield.fill")
                             .font(.system(size: 14))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.Colors.amber)
 
                         Text("Your Google session has expired. Please sign in again to continue syncing.")
                             .font(Theme.Typography.caption)
@@ -1018,7 +1018,7 @@ struct IntegrationsView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(Theme.Spacing.sm)
-                .background(Color.orange.opacity(0.06))
+                .background(Theme.Colors.amber.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
 
@@ -1027,7 +1027,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -1139,7 +1139,7 @@ struct IntegrationsView: View {
                     HStack(spacing: Theme.Spacing.sm) {
                         Image(systemName: "exclamationmark.shield.fill")
                             .font(.system(size: 14))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.Colors.amber)
 
                         Text("Your Google session has expired. Please sign in again to continue syncing.")
                             .font(Theme.Typography.caption)
@@ -1164,7 +1164,7 @@ struct IntegrationsView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(Theme.Spacing.sm)
-                .background(Color.orange.opacity(0.06))
+                .background(Theme.Colors.amber.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
 
@@ -1173,7 +1173,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -1254,7 +1254,7 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
@@ -1371,11 +1371,11 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
             }
 
@@ -1406,7 +1406,7 @@ struct IntegrationsView: View {
                 .font(Theme.Typography.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Theme.Spacing.md)
-                .background(xClientIdInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                .background(xClientIdInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -1502,7 +1502,7 @@ struct IntegrationsView: View {
                     .font(Theme.Typography.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(firefliesApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                    .background(firefliesApiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -1581,7 +1581,7 @@ struct IntegrationsView: View {
                     .font(Theme.Typography.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(googleClientIdInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                    .background(googleClientIdInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -1604,9 +1604,22 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
 
                     Text(error)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+            }
+
+            // DM sync status (partial / rate-limited pull — newest still saved)
+            if let dmStatus = appState.xDMSyncStatus {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.cyan)
+
+                    Text(dmStatus)
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.secondaryText)
                 }
@@ -1738,12 +1751,12 @@ struct IntegrationsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(connected ? .green : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.green : Theme.Colors.amber)
                 Text(connected
                      ? "Connected — Drive scopes granted to Otto's OAuth token."
                      : "Drive scopes not granted yet. Click Re-authorize to add them to your Google grant.")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.text : Theme.Colors.amber)
                 Spacer(minLength: 0)
             }
 
@@ -1751,10 +1764,10 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 11))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                     Text(error)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
             }
 
@@ -1859,12 +1872,12 @@ struct IntegrationsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(connected ? .green : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.green : Theme.Colors.amber)
                 Text(connected
                      ? "Connected — Calendar MCP scopes granted."
                      : "Calendar MCP scopes not granted yet. Click Connect to re-consent with the extra scopes.")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.text : Theme.Colors.amber)
                 Spacer(minLength: 0)
             }
 
@@ -1872,10 +1885,10 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 11))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                     Text(error)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
             }
 
@@ -1976,12 +1989,12 @@ struct IntegrationsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: connected ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(connected ? .green : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.green : Theme.Colors.amber)
                 Text(connected
                      ? "Connected — Tally MCP server wired into chat."
                      : "Not connected yet. Click Set API key to paste a tly-… token.")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(connected ? Theme.Colors.text : .orange)
+                    .foregroundStyle(connected ? Theme.Colors.text : Theme.Colors.amber)
                 Spacer(minLength: 0)
             }
 
@@ -2104,7 +2117,7 @@ struct IntegrationsView: View {
                     .font(Theme.Typography.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(tallyKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Theme.Colors.accent)
+                    .background(tallyKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Theme.Colors.textDim.opacity(0.3) : Theme.Colors.accent)
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -2221,7 +2234,7 @@ struct IntegrationsView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 12))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Theme.Colors.red)
             }
             .buttonStyle(.plain)
             #if os(macOS)
@@ -2321,10 +2334,10 @@ struct IntegrationsView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                     Text(supabaseError)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -2349,7 +2362,7 @@ struct IntegrationsView: View {
                     .font(Theme.Typography.headline)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Theme.Spacing.md)
-                    .background(supabaseSaveEnabled ? Theme.Colors.accent : Color.gray.opacity(0.3))
+                    .background(supabaseSaveEnabled ? Theme.Colors.accent : Theme.Colors.textDim.opacity(0.3))
                     .foregroundStyle(.white)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
@@ -2383,7 +2396,7 @@ struct IntegrationsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: installed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(installed ? .green : .orange)
+                    .foregroundStyle(installed ? Theme.Colors.green : Theme.Colors.amber)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(installed ? "genmedia CLI installed" : "genmedia CLI not installed")
                         .font(Theme.Typography.caption)
@@ -2408,10 +2421,10 @@ struct IntegrationsView: View {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: hasKey ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(hasKey ? .green : .orange)
+                    .foregroundStyle(hasKey ? Theme.Colors.green : Theme.Colors.amber)
                 Text(hasKey ? "fal API key set" : "No fal key — set in Settings → Voice Mode")
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(hasKey ? Theme.Colors.text : .orange)
+                    .foregroundStyle(hasKey ? Theme.Colors.text : Theme.Colors.amber)
                 Spacer()
             }
 
@@ -2438,7 +2451,7 @@ struct IntegrationsView: View {
                     if let msg = genmediaTestMessage {
                         Text(msg)
                             .font(Theme.Typography.caption)
-                            .foregroundStyle(genmediaTestIsError ? .orange : .green)
+                            .foregroundStyle(genmediaTestIsError ? Theme.Colors.amber : Theme.Colors.green)
                             .lineLimit(2)
                     }
                     Spacer()
@@ -2552,7 +2565,7 @@ struct IntegrationsView: View {
                           ? "checkmark.circle.fill"
                           : "exclamationmark.triangle.fill")
                         .font(.system(size: 14))
-                        .foregroundStyle(GenMediaService.shared.isInstalled() ? .green : .orange)
+                        .foregroundStyle(GenMediaService.shared.isInstalled() ? Theme.Colors.green : Theme.Colors.amber)
                     Text(GenMediaService.shared.binaryPath()
                          ?? "Binary not detected yet — install above, then click Verify.")
                         .font(Theme.Typography.caption)

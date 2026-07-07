@@ -29,6 +29,11 @@ final class AppState {
     var lastAutoSyncResult: String?
     private var syncTimer: Timer?
 
+    /// When the on-launch "sync every connected integration" pass last ran.
+    /// In-memory only (nil at process start → always syncs on launch); used to
+    /// throttle redundant passes when the main window is closed and reopened.
+    @ObservationIgnored private var lastIntegrationsSyncAttempt: Date?
+
     // Gmail Integration State
     var emails: [Email] = []
     var isLoadingGmail: Bool = false
@@ -64,6 +69,9 @@ final class AppState {
     var isXConnected: Bool = false
     var isLoadingX: Bool = false
     var xSyncError: String?
+    /// DM-specific sync note (e.g. "partially synced — saved N new back to <date>")
+    /// surfaced separately from tier errors so a rate-limited DM pull isn't silent.
+    var xDMSyncStatus: String?
     var lastXSync: Date?
 
     // LinkedIn Connections State
@@ -71,6 +79,19 @@ final class AppState {
     var isLoadingConnections: Bool = false
     var connectionImportError: String?
     var selectedConnection: Connection?
+
+    // Network Hub State
+    var networkEntries: [NetworkEntry] = []
+    /// User-defined CRM columns. Stable across renames (UUID-keyed in Connection.customFields).
+    var connectionCustomFields: [CustomFieldDefinition] = []
+
+    // Companies, Events & Communities (manual CRM — drive the location map)
+    var companies: [Company] = []
+    var events: [Event] = []
+    var communities: [Community] = []
+    /// Cached city → coordinate map, hydrated from CityGeocoder so map pins
+    /// render instantly and re-render as new cities resolve.
+    var cityCoordinates: [String: CityCoordinate] = [:]
 
     // Ask History State
     var askHistory: [AskHistoryItem] = []
@@ -92,6 +113,11 @@ final class AppState {
     /// Set by the dock input bar when the user sends a message. OttoChatView
     /// picks it up on appear, sends it, and clears the field.
     var pendingChatPrompt: String?
+
+    /// One-shot request from the top bar's search pill: MainView switches to
+    /// Home, and HomeView flips into search mode when it sees this go true,
+    /// then resets it.
+    var homeSearchRequested: Bool = false
 
     // Voice mode — lifted from OttoChatView so the wake-word path can present
     // the overlay programmatically and hand it a greeting to speak on open.
@@ -130,6 +156,11 @@ final class AppState {
     // Services
     private let persistence = PersistenceService.shared
     let claude = AgentService.shared
+    /// Live chat runs — one controller per conversation, owned here (not by
+    /// the chat view) so in-flight queries keep streaming and persisting when
+    /// the chat sheet closes or the user switches sessions/tabs mid-run.
+    /// Multiple conversations can run concurrently.
+    let chatRuns = ChatRunRegistry()
     let voice = VoiceSessionManager()
     let wakeWord = WakeWordService()
     let meetingPrep = MeetingPrepService()
@@ -248,6 +279,12 @@ final class AppState {
             emails = store.emails
             calendarEvents = store.calendarEvents
             connections = store.connections
+            networkEntries = store.networkEntries
+            connectionCustomFields = store.connectionCustomFields.sorted { $0.sortIndex < $1.sortIndex }
+            pruneOrphanedCustomFieldValues()
+            companies = store.companies
+            events = store.events
+            communities = store.communities
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -266,6 +303,44 @@ final class AppState {
 
         // Backfill OG metadata for bookmarks that don't have it yet
         fetchMissingBookmarkMetadata()
+
+        // One-shot last-contact backfill on launch — picks up activity that
+        // arrived in emails/calendar/X while the indexer logic was new.
+        await recomputeConnectionActivity()
+    }
+
+    // MARK: - Launch / Foreground Auto-Sync
+
+    /// Refresh recent data from every connected integration. Called on app
+    /// launch (and when the main window re-opens) so the cached data loaded
+    /// from disk gets brought up to date without the user pressing each
+    /// integration's manual sync button.
+    ///
+    /// Each integration syncs in its own `Task` so a slow or failing one never
+    /// blocks the others; this method returns immediately and the results
+    /// stream in as each finishes (flipping its `isLoading*` spinner). Every
+    /// `sync*` call already guards on its own connection flag and is a no-op
+    /// when disconnected, but we check here too to avoid spawning needless work.
+    ///
+    /// Fireflies is intentionally excluded: it has its own interval timer
+    /// (`startAutoSyncTimerIfNeeded`) that already runs a launch check with
+    /// user-configured frequency.
+    ///
+    /// Throttled to once per `minInterval` so rapidly closing/reopening the
+    /// window doesn't re-hammer the APIs. Pass `force: true` to bypass.
+    func syncConnectedIntegrations(force: Bool = false) {
+        let minInterval: TimeInterval = 120
+        if !force, let last = lastIntegrationsSyncAttempt,
+           Date().timeIntervalSince(last) < minInterval {
+            return
+        }
+        lastIntegrationsSyncAttempt = Date()
+
+        if isGmailConnected    { Task { await syncGmailEmails() } }
+        if isCalendarConnected { Task { await syncCalendarEvents() } }
+        if isTodoistConnected  { Task { await syncTodoistTasks() } }
+        if isNotionConnected   { Task { await syncNotionPages() } }
+        if isXConnected        { Task { await syncX() } }
     }
 
     // MARK: - Universal Input Processing
@@ -351,11 +426,29 @@ final class AppState {
             // Connections are imported from LinkedIn CSV, not created manually via input
             break
 
+        case .company:
+            let company = Company(name: input)
+            companies.insert(company, at: 0)
+            try? await persistence.updateCompanies(companies)
+            selectedTab = .company
+
+        case .event:
+            let event = Event(name: input)
+            events.insert(event, at: 0)
+            try? await persistence.updateEvents(events)
+            selectedTab = .event
+
+        case .community:
+            let community = Community(name: input)
+            communities.insert(community, at: 0)
+            try? await persistence.updateCommunities(communities)
+            selectedTab = .community
+
         case .file:
             // Files are imported via file picker, not created manually via input
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // X content is imported via Integrations, not created manually via input
             break
 
@@ -624,6 +717,26 @@ final class AppState {
     }
 
     @MainActor
+    func updateReminder(_ reminder: Reminder) async {
+        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
+        var updated = reminder
+        // Re-arm the notification: drop any pending one, then schedule fresh
+        // if the (possibly moved) fire time is still ahead and the reminder
+        // is still open.
+        if let notificationId = reminders[index].notificationId {
+            await notifications.cancelReminder(notificationId: notificationId)
+            updated.notificationId = nil
+        }
+        if !updated.isCompleted, updated.reminderDate > Date() {
+            if let notificationId = try? await notifications.scheduleReminder(updated) {
+                updated.notificationId = notificationId
+            }
+        }
+        reminders[index] = updated
+        try? await persistence.updateReminders(reminders)
+    }
+
+    @MainActor
     func toggleReminder(_ reminder: Reminder) async {
         guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
 
@@ -761,6 +874,33 @@ final class AppState {
         }
     }
 
+    // MARK: - Network Hub Operations
+
+    @MainActor
+    func addNetworkEntry(_ entry: NetworkEntry) async {
+        networkEntries.insert(entry, at: 0)
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
+    @MainActor
+    func updateNetworkEntry(_ entry: NetworkEntry) async {
+        guard let index = networkEntries.firstIndex(where: { $0.id == entry.id }) else { return }
+        var updated = entry
+        updated.updatedAt = Date()
+        networkEntries[index] = updated
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
+    @MainActor
+    func deleteNetworkEntry(_ entry: NetworkEntry) async {
+        let captured = entry
+        undoService.pushUndo(label: "Network entry deleted") { [self] in
+            await self.addNetworkEntry(captured)
+        }
+        networkEntries.removeAll { $0.id == entry.id }
+        try? await persistence.updateNetworkEntries(networkEntries)
+    }
+
     // MARK: - Connection Operations
 
     @MainActor
@@ -795,6 +935,114 @@ final class AppState {
         try? await persistence.updateConnections(connections)
     }
 
+    // MARK: - Company Operations
+
+    @MainActor
+    func addCompany(_ company: Company) async {
+        companies.insert(company, at: 0)
+        try? await persistence.updateCompanies(companies)
+    }
+
+    @MainActor
+    func updateCompany(_ company: Company) async {
+        guard let index = companies.firstIndex(where: { $0.id == company.id }) else { return }
+        var updated = company
+        updated.updatedAt = Date()
+        companies[index] = updated
+        try? await persistence.updateCompanies(companies)
+    }
+
+    @MainActor
+    func deleteCompany(_ company: Company) async {
+        let captured = company
+        undoService.pushUndo(label: "Company deleted") { [self] in
+            await self.addCompany(captured)
+        }
+        companies.removeAll { $0.id == company.id }
+        try? await persistence.updateCompanies(companies)
+    }
+
+    // MARK: - Event Operations
+
+    @MainActor
+    func addEvent(_ event: Event) async {
+        events.insert(event, at: 0)
+        try? await persistence.updateEvents(events)
+    }
+
+    @MainActor
+    func updateEvent(_ event: Event) async {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        var updated = event
+        updated.updatedAt = Date()
+        events[index] = updated
+        try? await persistence.updateEvents(events)
+    }
+
+    @MainActor
+    func deleteEvent(_ event: Event) async {
+        let captured = event
+        undoService.pushUndo(label: "Event deleted") { [self] in
+            await self.addEvent(captured)
+        }
+        events.removeAll { $0.id == event.id }
+        try? await persistence.updateEvents(events)
+    }
+
+    // MARK: - Community Operations
+
+    @MainActor
+    func addCommunity(_ community: Community) async {
+        communities.insert(community, at: 0)
+        try? await persistence.updateCommunities(communities)
+    }
+
+    @MainActor
+    func updateCommunity(_ community: Community) async {
+        guard let index = communities.firstIndex(where: { $0.id == community.id }) else { return }
+        var updated = community
+        updated.updatedAt = Date()
+        communities[index] = updated
+        try? await persistence.updateCommunities(communities)
+    }
+
+    @MainActor
+    func deleteCommunity(_ community: Community) async {
+        let captured = community
+        undoService.pushUndo(label: "Community deleted") { [self] in
+            await self.addCommunity(captured)
+        }
+        communities.removeAll { $0.id == community.id }
+        try? await persistence.updateCommunities(communities)
+    }
+
+    // MARK: - City Geocoding
+
+    /// Resolve coordinates for every city referenced by connections, companies
+    /// and events. Seed/cache hits land instantly; the long tail geocodes in
+    /// the background and trickles into `cityCoordinates` (each mutation on the
+    /// main actor re-renders the map). Only cities we don't already have are
+    /// looked up.
+    @MainActor
+    func refreshCityCoordinates() {
+        let cities = CityIndex.uniqueCities(
+            connections: connections,
+            companies: companies,
+            events: events,
+            networkEntries: networkEntries,
+            communities: communities
+        )
+        let missing = cities.filter { cityCoordinates[$0.key] == nil }
+        guard !missing.isEmpty else { return }
+        Task { @MainActor in
+            for (key, display) in missing {
+                if let coord = await CityGeocoder.shared.coordinate(key: key, display: display) {
+                    cityCoordinates[key] = coord
+                }
+            }
+        }
+    }
+
     @MainActor
     func importConnectionsFromCSV(url: URL) async throws {
         isLoadingConnections = true
@@ -819,10 +1067,146 @@ final class AppState {
             connections.sort { $0.fullName.lowercased() < $1.fullName.lowercased() }
 
             try? await persistence.updateConnections(connections)
+            // Backfill last-contact for the freshly imported rows.
+            await recomputeConnectionActivity()
 
         } catch {
             connectionImportError = error.localizedDescription
             throw error
+        }
+    }
+
+    // MARK: - Connection Custom Fields
+
+    @MainActor
+    func addCustomField(name: String, kind: CustomFieldKind, options: [CustomFieldOption] = []) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty else { return }
+        let definition = CustomFieldDefinition(
+            name: trimmedName,
+            kind: kind,
+            options: kind.usesOptions ? options : [],
+            sortIndex: (connectionCustomFields.map { $0.sortIndex }.max() ?? -1) + 1
+        )
+        connectionCustomFields.append(definition)
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    @MainActor
+    func updateCustomField(_ definition: CustomFieldDefinition) async {
+        guard let index = connectionCustomFields.firstIndex(where: { $0.id == definition.id }) else { return }
+        connectionCustomFields[index] = definition
+        // If options were removed for a select field, scrub any vanished
+        // option ids out of every connection's value for this field.
+        if definition.kind.usesOptions {
+            let validOptionIds = Set(definition.options.map { $0.id })
+            var didMutateConnections = false
+            for cIndex in connections.indices {
+                guard let value = connections[cIndex].customFields[definition.id],
+                      case .optionIds(let ids) = value else { continue }
+                let filtered = ids.filter { validOptionIds.contains($0) }
+                if filtered.count != ids.count {
+                    if filtered.isEmpty {
+                        connections[cIndex].customFields.removeValue(forKey: definition.id)
+                    } else {
+                        connections[cIndex].customFields[definition.id] = .optionIds(filtered)
+                    }
+                    didMutateConnections = true
+                }
+            }
+            if didMutateConnections {
+                try? await persistence.updateConnections(connections)
+            }
+        }
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    @MainActor
+    func deleteCustomField(id: UUID) async {
+        connectionCustomFields.removeAll { $0.id == id }
+        // Strip the now-orphan key from every connection's customFields dict.
+        var didMutateConnections = false
+        for cIndex in connections.indices where connections[cIndex].customFields[id] != nil {
+            connections[cIndex].customFields.removeValue(forKey: id)
+            didMutateConnections = true
+        }
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+        if didMutateConnections {
+            try? await persistence.updateConnections(connections)
+        }
+    }
+
+    @MainActor
+    func reorderCustomFields(_ orderedIds: [UUID]) async {
+        let byId = Dictionary(uniqueKeysWithValues: connectionCustomFields.map { ($0.id, $0) })
+        var reordered: [CustomFieldDefinition] = []
+        for (i, id) in orderedIds.enumerated() {
+            guard var def = byId[id] else { continue }
+            def.sortIndex = i
+            reordered.append(def)
+        }
+        // Append anything not present in the input (defensive).
+        for def in connectionCustomFields where !orderedIds.contains(def.id) {
+            var d = def
+            d.sortIndex = reordered.count
+            reordered.append(d)
+        }
+        connectionCustomFields = reordered
+        try? await persistence.updateConnectionCustomFields(connectionCustomFields)
+    }
+
+    /// Set or clear a custom field value on a connection. Passing nil (or an
+    /// `isEmpty` value) removes the entry — keeps the per-connection dict sparse.
+    @MainActor
+    func setCustomFieldValue(on connectionId: UUID, fieldId: UUID, value: CustomFieldValue?) async {
+        guard let index = connections.firstIndex(where: { $0.id == connectionId }) else { return }
+        var updated = connections[index]
+        if let value = value, !value.isEmpty {
+            updated.customFields[fieldId] = value
+        } else {
+            updated.customFields.removeValue(forKey: fieldId)
+        }
+        updated.updatedAt = Date()
+        connections[index] = updated
+        try? await persistence.updateConnections(connections)
+    }
+
+    /// Drop any per-connection custom-field keys whose definition no longer
+    /// exists. Cheap; runs once on load and after deleteCustomField.
+    @MainActor
+    private func pruneOrphanedCustomFieldValues() {
+        let validIds = Set(connectionCustomFields.map { $0.id })
+        var didMutate = false
+        for cIndex in connections.indices {
+            let orphans = connections[cIndex].customFields.keys.filter { !validIds.contains($0) }
+            if !orphans.isEmpty {
+                for key in orphans { connections[cIndex].customFields.removeValue(forKey: key) }
+                didMutate = true
+            }
+        }
+        if didMutate {
+            Task { try? await persistence.updateConnections(connections) }
+        }
+    }
+
+    /// Recompute `Connection.lastContactedAt` for every connection by scanning
+    /// emails, calendar events, and X DMs. Called from sync boundaries — NOT
+    /// from view renders.
+    @MainActor
+    func recomputeConnectionActivity() async {
+        guard !connections.isEmpty else { return }
+        let updated = ContactActivityIndexer.recompute(
+            connections: connections,
+            emails: emails,
+            calendarEvents: calendarEvents,
+            xDMs: xDirectMessages,
+            xFollowers: xFollowers
+        )
+        // Only persist if anything actually changed (saves a JSON write per sync).
+        let anyChanged = zip(connections, updated).contains { $0.lastContactedAt != $1.lastContactedAt }
+        connections = updated
+        if anyChanged {
+            try? await persistence.updateConnections(connections)
         }
     }
 
@@ -989,6 +1373,9 @@ final class AppState {
 
     @MainActor
     func deleteChatSession(_ id: UUID) async {
+        // Deleting the session a live run belongs to also cancels the run —
+        // otherwise its next checkpoint would resurrect the deleted chat.
+        chatRuns.abandon(sessionId: id)
         chatSessions.removeAll { $0.id == id }
         if activeChatSessionId == id { activeChatSessionId = nil }
         try? await persistence.updateChatSessions(chatSessions)
@@ -996,6 +1383,7 @@ final class AppState {
 
     @MainActor
     func clearChatSessions() async {
+        chatRuns.abandonAll()
         chatSessions.removeAll()
         activeChatSessionId = nil
         try? await persistence.updateChatSessions(chatSessions)
@@ -1092,6 +1480,8 @@ final class AppState {
             lastGmailSync = Date()
             try? await persistence.updateLastGmailSync(lastGmailSync)
 
+            await recomputeConnectionActivity()
+
         } catch {
             if isAuthError(error) {
                 handleAuthError()
@@ -1154,6 +1544,8 @@ final class AppState {
             // Update last sync time
             lastGmailSync = Date()
             try? await persistence.updateLastGmailSync(lastGmailSync)
+
+            await recomputeConnectionActivity()
 
         } catch {
             if isAuthError(error) {
@@ -1250,7 +1642,7 @@ final class AppState {
             try? await persistence.updateReminders(reminders)
             selectedTab = .reminder
 
-        case .bookmark, .meeting, .email, .connection, .file, .xPost, .xFollower, .xDm, .habit:
+        case .bookmark, .meeting, .email, .connection, .company, .event, .community, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
             // Not applicable for email conversion
             break
         }
@@ -1489,6 +1881,8 @@ final class AppState {
             lastCalendarSync = Date()
             try? await persistence.updateLastCalendarSync(lastCalendarSync)
 
+            await recomputeConnectionActivity()
+
         } catch {
             if isAuthError(error) {
                 handleAuthError()
@@ -1714,11 +2108,11 @@ final class AppState {
             let pages = try await notion.searchPages()
             print("[Notion] Found \(pages.count) pages")
 
-            // Fetch blocks for each page (skip failures gracefully)
+            // Fetch blocks for each page, including nested children (skip failures gracefully)
             var blocksMap: [String: [NotionBlock]] = [:]
             for page in pages {
                 do {
-                    let blocks = try await notion.fetchPageBlocks(pageId: page.id)
+                    let blocks = try await notion.fetchBlockTree(parentId: page.id)
                     blocksMap[page.id] = blocks
                 } catch {
                     print("[Notion] Failed to fetch blocks for page \(page.id): \(error)")
@@ -2329,8 +2723,12 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2413,8 +2811,12 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2504,8 +2906,12 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2586,8 +2992,12 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2667,8 +3077,12 @@ final class AppState {
             // Cannot convert to file - files are imported via file picker
             break
 
-        case .xPost, .xFollower, .xDm:
+        case .xPost, .xFollower, .xDm, .networkHub:
             // Cannot convert to X content types - imported via Integrations
+            break
+
+        case .company, .event, .community:
+            // Companies, Events and Communities live in their own tabs, not produced by conversion
             break
 
         case .habit:
@@ -2946,16 +3360,33 @@ final class AppState {
         }
 
         do {
-            // Fetch DMs
-            let newDMs = try await XService.shared.fetchDMs()
+            // Fetch DMs. The result keeps whatever pages were pulled even if a
+            // later page rate-limited, so recent DMs aren't thrown away.
+            let result = try await XService.shared.fetchDMs()
             let existingDMIds = Set(xDirectMessages.map { $0.xMessageId })
-            let uniqueNewDMs = newDMs.filter { !existingDMIds.contains($0.xMessageId) }
+            let uniqueNewDMs = result.messages.filter { !existingDMIds.contains($0.xMessageId) }
             xDirectMessages.insert(contentsOf: uniqueNewDMs, at: 0)
             xDirectMessages.sort { $0.createdAt > $1.createdAt }
             try? await persistence.updateXDirectMessages(xDirectMessages)
+
+            if result.isComplete {
+                xDMSyncStatus = nil
+            } else {
+                // Pagination stopped early (X rate-limited a later page). Report
+                // how far back we reached so it's clear newer DMs are saved and
+                // re-syncing will fetch older ones.
+                let oldestReached = result.messages.map(\.createdAt).min()
+                let df = DateFormatter(); df.dateStyle = .medium
+                let backTo = oldestReached.map { " back to \(df.string(from: $0))" } ?? ""
+                xDMSyncStatus = "DMs partially synced (X rate limit): saved \(uniqueNewDMs.count) new\(backTo). Sync again to fetch older messages."
+            }
         } catch let error as XServiceError where error.isAccessDenied {
             tierWarnings.append("DMs (needs X API Pro tier)")
+            xDMSyncStatus = nil
             print("[X] DMs: access denied - needs Pro API tier")
+        } catch XServiceError.rateLimited {
+            xDMSyncStatus = "DMs hit X's rate limit before any could sync — try again in a few minutes."
+            print("[X] DMs: rate limited before first page")
         } catch {
             print("[X] Failed to sync DMs: \(error)")
         }
@@ -2969,6 +3400,7 @@ final class AppState {
         lastXSync = Date()
         try? await persistence.updateLastXSync(lastXSync)
 
+        await recomputeConnectionActivity()
     }
 
     /// Link an X follower to a LinkedIn connection

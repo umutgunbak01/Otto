@@ -98,6 +98,7 @@ struct MeetingDetailView: View {
                         Image(systemName: "calendar")
                             .font(.system(size: 11))
                         Text(meeting.formattedMeetingDate)
+                            .font(Theme.Typography.monoCaption)
                     }
 
                     if meeting.duration > 0 {
@@ -105,6 +106,7 @@ struct MeetingDetailView: View {
                             Image(systemName: "clock")
                                 .font(.system(size: 11))
                             Text(meeting.formattedDuration)
+                                .font(Theme.Typography.monoCaption)
                         }
                     }
 
@@ -113,6 +115,7 @@ struct MeetingDetailView: View {
                             Image(systemName: "person.circle")
                                 .font(.system(size: 11))
                             Text(meeting.organizer)
+                                .font(Theme.Typography.monoCaption)
                         }
                     }
 
@@ -121,6 +124,7 @@ struct MeetingDetailView: View {
                             Image(systemName: "person.2")
                                 .font(.system(size: 11))
                             Text("\(meeting.participants.count) participants")
+                                .font(Theme.Typography.monoCaption)
                         }
                     }
 
@@ -158,7 +162,7 @@ struct MeetingDetailView: View {
             leftPanel
                 .frame(minWidth: 300, maxWidth: .infinity)
 
-            OttoDivider()
+            OttoVerticalDivider()
 
             rightPanel
                 .frame(minWidth: 280, idealWidth: 400, maxWidth: .infinity)

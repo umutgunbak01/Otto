@@ -87,19 +87,12 @@ struct MeetingListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⌬ MEETINGS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Meetings")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filteredMeetings.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredMeetings.count)
 
                 Spacer()
             }
@@ -113,7 +106,7 @@ struct MeetingListView: View {
 
                     TextField("Search meetings...", text: $searchText)
                         .textFieldStyle(.plain)
-                        .font(Theme.Typography.body)
+                        .font(Theme.Typography.callout)
 
                     if !searchText.isEmpty {
                         Button {
@@ -128,8 +121,14 @@ struct MeetingListView: View {
                 }
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(Theme.Colors.borderSubtle.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.bgInput)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
 
                 // Search scope picker (visible when searching)
                 if !searchText.isEmpty {
@@ -145,16 +144,14 @@ struct MeetingListView: View {
                                 }
                             } label: {
                                 Text(scope.rawValue)
-                                    .font(Theme.Typography.caption)
-                                    .foregroundStyle(searchScope == scope ? Theme.Colors.bg0 : Theme.Colors.secondaryText)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(searchScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim)
                                     .padding(.horizontal, Theme.Spacing.md)
                                     .padding(.vertical, Theme.Spacing.xs)
                                     .background(
-                                        searchScope == scope
-                                            ? Theme.Colors.accent
-                                            : Theme.Colors.borderSubtle
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(searchScope == scope ? Theme.Colors.selectTint : Color.clear)
                                     )
-                                    .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
                         }
@@ -173,7 +170,7 @@ struct MeetingListView: View {
 
     private var meetingList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 6) {
                 ForEach(filteredMeetings) { meeting in
                     MeetingRowView(meeting: meeting)
                         .contentShape(Rectangle())
@@ -183,6 +180,7 @@ struct MeetingListView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
         }
     }
 

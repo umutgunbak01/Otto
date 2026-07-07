@@ -148,7 +148,7 @@ struct FileDetailView: View {
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 14))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Theme.Colors.red)
                     }
                     .buttonStyle(.plain)
                     #if os(macOS)
@@ -208,17 +208,7 @@ struct FileDetailView: View {
         }
     }
 
-    private var iconColor: Color {
-        switch file.fileType {
-        case .csv: return .green
-        case .excel: return Color(red: 0.13, green: 0.55, blue: 0.13)
-        case .image: return .blue
-        case .pdf: return .red
-        case .text: return .secondary
-        case .video: return .purple
-        case .audio: return .orange
-        }
-    }
+    private var iconColor: Color { file.fileType.color }
 
     // MARK: - Preview Section
 
@@ -321,7 +311,7 @@ struct FileDetailView: View {
         VStack(spacing: Theme.Spacing.lg) {
             Image(systemName: "tablecells.fill")
                 .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Color(red: 0.13, green: 0.55, blue: 0.13))
+                .foregroundStyle(Theme.Colors.green)
 
             VStack(spacing: Theme.Spacing.sm) {
                 Text("Excel Spreadsheet")
@@ -343,8 +333,8 @@ struct FileDetailView: View {
                 .font(Theme.Typography.body)
                 .padding(.horizontal, Theme.Spacing.lg)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(Color(red: 0.13, green: 0.55, blue: 0.13))
-                .foregroundStyle(.white)
+                .background(Theme.Colors.green)
+                .foregroundStyle(Theme.Colors.bg0)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
             .buttonStyle(.plain)
@@ -358,7 +348,7 @@ struct FileDetailView: View {
         VStack(spacing: Theme.Spacing.lg) {
             Image(systemName: file.fileType == .video ? "film" : "waveform")
                 .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(file.fileType == .video ? Color.purple : Color.orange)
+                .foregroundStyle(file.fileType.color)
 
             VStack(spacing: Theme.Spacing.sm) {
                 Text(file.fileType.displayName)

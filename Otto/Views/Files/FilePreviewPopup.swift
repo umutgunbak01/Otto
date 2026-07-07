@@ -99,7 +99,7 @@ struct FilePreviewPopup: View {
                 } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 12))
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Theme.Colors.red)
                 }
                 .buttonStyle(.plain)
                 #if os(macOS)
@@ -155,17 +155,7 @@ struct FilePreviewPopup: View {
         }
     }
 
-    private var iconColor: Color {
-        switch file.fileType {
-        case .csv: return Theme.Colors.green
-        case .excel: return Color(red: 0.13, green: 0.55, blue: 0.13)
-        case .image: return Theme.Colors.cyan
-        case .pdf: return Theme.Colors.red
-        case .text: return Theme.Colors.secondaryText
-        case .video: return .purple
-        case .audio: return .orange
-        }
-    }
+    private var iconColor: Color { file.fileType.color }
 
     // MARK: - Preview Content
 
@@ -189,7 +179,7 @@ struct FilePreviewPopup: View {
                 VStack(spacing: Theme.Spacing.md) {
                     Image(systemName: file.fileType == .video ? "film" : "waveform")
                         .font(.system(size: 32, weight: .thin))
-                        .foregroundStyle(file.fileType == .video ? Color.purple : Color.orange)
+                        .foregroundStyle(file.fileType.color)
                     Text("Use Quick Look or open the file from the Files tab.")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.secondaryText)
@@ -268,7 +258,7 @@ struct FilePreviewPopup: View {
 
             Image(systemName: "tablecells.fill")
                 .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Color(red: 0.13, green: 0.55, blue: 0.13))
+                .foregroundStyle(Theme.Colors.green)
 
             VStack(spacing: Theme.Spacing.sm) {
                 Text("Excel Spreadsheet")
@@ -290,7 +280,7 @@ struct FilePreviewPopup: View {
                 .font(Theme.Typography.body)
                 .padding(.horizontal, Theme.Spacing.lg)
                 .padding(.vertical, Theme.Spacing.sm)
-                .background(Color(red: 0.13, green: 0.55, blue: 0.13))
+                .background(Theme.Colors.green)
                 .foregroundStyle(Theme.Colors.bg0)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }

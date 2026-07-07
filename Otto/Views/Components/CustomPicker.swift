@@ -61,12 +61,12 @@ struct DropdownPicker<T: Hashable & CustomStringConvertible>: View {
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(isHovered ? Theme.Colors.borderSubtle : Theme.Colors.borderSubtle.opacity(0.5))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.bgInput)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
             )
         }
         #if os(macOS)
@@ -93,11 +93,11 @@ struct TodoFilterPicker: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                .fill(Theme.Colors.bgInput)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
         )
     }
 
@@ -111,13 +111,15 @@ struct TodoFilterPicker: View {
             Text(option.rawValue)
                 .font(Theme.Typography.caption)
                 .fontWeight(isSelected ? .medium : .regular)
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(isSelected ? accentColor.opacity(0.15) : Color.clear)
+                        .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
                 )
-                .foregroundStyle(isSelected ? accentColor : Theme.Colors.secondaryText)
+                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.secondaryText)
         }
         .buttonStyle(.plain)
     }
@@ -153,6 +155,8 @@ struct IdeaStatusPicker: View {
 
                 Text(status.rawValue)
                     .font(Theme.Typography.caption)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.xs)
@@ -162,7 +166,7 @@ struct IdeaStatusPicker: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.full)
-                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.hoverTint, lineWidth: 1)
+                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
             )
             .foregroundStyle(isSelected ? color : Theme.Colors.secondaryText)
         }
@@ -208,6 +212,8 @@ struct CategorySelector: View {
 
                 Text(category.rawValue)
                     .font(Theme.Typography.caption)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
@@ -217,7 +223,7 @@ struct CategorySelector: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.borderSubtle, lineWidth: 1)
+                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
             )
             .foregroundStyle(isSelected ? color : Theme.Colors.secondaryText)
         }
@@ -248,11 +254,11 @@ struct BookmarkFilterPicker: View {
         .padding(3)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                .fill(Theme.Colors.bgInput)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
         )
     }
 
@@ -266,13 +272,15 @@ struct BookmarkFilterPicker: View {
             Text(option.rawValue)
                 .font(Theme.Typography.caption)
                 .fontWeight(isSelected ? .medium : .regular)
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(isSelected ? accentColor.opacity(0.15) : Color.clear)
+                        .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
                 )
-                .foregroundStyle(isSelected ? accentColor : Theme.Colors.secondaryText)
+                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.secondaryText)
         }
         .buttonStyle(.plain)
     }
@@ -306,6 +314,8 @@ struct BookmarkMediaTypePicker: View {
 
                 Text(mediaType.rawValue)
                     .font(Theme.Typography.caption)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
@@ -315,7 +325,7 @@ struct BookmarkMediaTypePicker: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.borderSubtle, lineWidth: 1)
+                    .strokeBorder(isSelected ? color.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
             )
             .foregroundStyle(isSelected ? color : Theme.Colors.secondaryText)
         }
@@ -360,6 +370,8 @@ struct PrioritySelector: View {
 
                 Text(priority.displayName)
                     .font(Theme.Typography.caption)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
@@ -369,7 +381,7 @@ struct PrioritySelector: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(isSelected ? color.opacity(0.4) : Theme.Colors.borderSubtle, lineWidth: 1)
+                    .strokeBorder(isSelected ? color.opacity(0.4) : Theme.Colors.border, lineWidth: 1)
             )
             .foregroundStyle(isSelected ? color : Theme.Colors.secondaryText)
         }

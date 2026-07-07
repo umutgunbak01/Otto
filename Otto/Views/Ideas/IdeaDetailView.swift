@@ -89,19 +89,19 @@ struct IdeaDetailView: View {
             // Breadcrumb
             HStack(spacing: 6) {
                 Image(systemName: "lightbulb")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.Colors.hobby)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                 Text("Ideas")
-                    .font(.system(size: 12))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 if !title.isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9))
+                    Text("/")
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
                     Text(title)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .lineLimit(1)
                 }
             }
@@ -159,7 +159,8 @@ struct IdeaDetailView: View {
     private var titleArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Untitled", text: $title, axis: .vertical)
-                .font(.system(size: 36, weight: .bold))
+                .font(Theme.Typography.largeTitle)
+                .kerning(-0.4)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.Colors.text)
                 .focused($isTitleFocused)
@@ -214,15 +215,15 @@ struct IdeaDetailView: View {
                     // Created
                     ideaPropertyRow(icon: "calendar", label: "Created") {
                         Text(formatDate(idea.createdAt))
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(Theme.Typography.monoCaption)
+                            .foregroundStyle(Theme.Colors.textDim)
                     }
 
                     // Last edited
                     ideaPropertyRow(icon: "clock", label: "Last edited") {
                         Text(timeAgo(idea.updatedAt))
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(Theme.Typography.monoCaption)
+                            .foregroundStyle(Theme.Colors.textDim)
                     }
                 }
                 .padding(.top, 4)
@@ -269,9 +270,9 @@ struct IdeaDetailView: View {
     private var statusColor: Color {
         switch status {
         case .raw: return Theme.Colors.tertiaryText
-        case .researched: return Theme.Colors.work
-        case .validated: return Theme.Colors.personal
-        case .archived: return Theme.Colors.priorityHigh
+        case .researched: return Theme.Colors.amber
+        case .validated: return Theme.Colors.green
+        case .archived: return Theme.Colors.tertiaryText
         }
     }
 

@@ -26,3 +26,37 @@ enum MenuBarSettings {
     /// menu-bar location alongside other app icons.
     static let defaultEnabled: Bool = true
 }
+
+// MARK: - Connections column layout
+//
+// Per-device preference for which CRM columns are visible, their order, and
+// their widths. Kept in UserDefaults (not in otto_data.json) so it stays
+// local to this Mac — moving the data file doesn't drag your column setup.
+// The `_v1` key suffix gives us room to migrate if `ColumnLayout`'s schema
+// ever changes.
+
+enum ConnectionColumnLayoutStore {
+    // v2: expanded default visible columns to cover every "More Info" field
+    // (phone, email, birthday, education). The version bump forces existing
+    // saved layouts to fall back to the new default — users can still hide
+    // anything they don't want via the Columns menu.
+    static let key = "connections_column_layout_v2"
+
+    static func load() -> ColumnLayout {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode(ColumnLayout.self, from: data)
+        else {
+            return .default
+        }
+        return decoded
+    }
+
+    static func save(_ layout: ColumnLayout) {
+        guard let data = try? JSONEncoder().encode(layout) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    static func reset() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+}

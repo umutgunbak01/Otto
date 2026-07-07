@@ -22,16 +22,16 @@ struct BookmarkRowView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 // Title
                 Text(bookmark.title)
-                    .font(Theme.Typography.headline)
-                    .strikethrough(bookmark.isRead, color: Theme.Colors.secondaryText)
-                    .foregroundStyle(bookmark.isRead ? Theme.Colors.secondaryText : Theme.Colors.text)
+                    .font(.system(size: 13.5, weight: bookmark.isRead ? .regular : .medium))
+                    .strikethrough(bookmark.isRead, color: Theme.Colors.textDim)
+                    .foregroundStyle(bookmark.isRead ? Theme.Colors.textDim : Theme.Colors.text)
                     .lineLimit(1)
 
                 // Description from OG or user-entered
                 if let desc = displayDescription, !desc.isEmpty {
                     Text(desc)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .lineLimit(2)
                 }
 
@@ -61,28 +61,40 @@ struct BookmarkRowView: View {
                         }
 
                         Text(bookmark.siteName ?? urlHost ?? "")
-                            .font(.system(size: 11))
+                            .font(Theme.Typography.monoSmall)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
 
-                    // Media type badge
+                    // Media type badge — fixedSize so a tight row truncates
+                    // the domain text instead of letter-wrapping the chips.
                     Text(bookmark.mediaType.rawValue)
-                        .font(.system(size: 9, weight: .medium))
+                        .font(Theme.Typography.monoSmall)
                         .foregroundStyle(mediaTypeColor)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(mediaTypeColor.opacity(0.1))
-                        .clipShape(Capsule())
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(mediaTypeTint)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
 
                     // Category
                     Text(bookmark.primaryCategory.rawValue)
-                        .font(.system(size: 10))
+                        .font(Theme.Typography.monoSmall)
                         .foregroundStyle(categoryColor)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
 
             Spacer()
+
+            // Relative date (hidden while hover actions are shown)
+            if !isHovered {
+                Text(relativeDate(bookmark.createdAt))
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
 
             // Actions (visible on hover)
             if isHovered {
@@ -126,15 +138,18 @@ struct BookmarkRowView: View {
                 }
             }
         }
-        .padding(.horizontal, Theme.Spacing.sm)
+        .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.sm)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear))
+                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                .strokeBorder(
+                    isSelected || isHovered ? Theme.Colors.borderStrong : Theme.Colors.border,
+                    lineWidth: 1
+                )
         )
         #if os(macOS)
         .onHover { hovering in
@@ -157,6 +172,10 @@ struct BookmarkRowView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 72, height: 52)
                             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                            )
                     case .failure:
                         fallbackIcon
                     default:
@@ -178,18 +197,22 @@ struct BookmarkRowView: View {
     private var fallbackIcon: some View {
         ZStack {
             RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(mediaTypeColor.opacity(0.08))
+                .fill(Theme.Colors.hoverTint)
                 .frame(width: 72, height: 52)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
 
             VStack(spacing: 2) {
                 Image(systemName: bookmark.mediaType.iconName)
-                    .font(.system(size: 18))
-                    .foregroundStyle(mediaTypeColor)
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
 
                 if let host = urlHost {
                     Text(host.prefix(12))
-                        .font(.system(size: 8))
-                        .foregroundStyle(mediaTypeColor.opacity(0.7))
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
                 }
             }
@@ -217,17 +240,38 @@ struct BookmarkRowView: View {
 
     private var mediaTypeColor: Color {
         switch bookmark.mediaType {
-        case .readLater: return Theme.Colors.work
-        case .listenLater: return Theme.Colors.hobby
-        case .watchLater: return Theme.Colors.priorityHigh
+        case .readLater: return Theme.Colors.accentText
+        case .listenLater: return Theme.Colors.violet
+        case .watchLater: return Theme.Colors.amber
+        }
+    }
+
+    private var mediaTypeTint: Color {
+        switch bookmark.mediaType {
+        case .readLater: return Theme.Colors.selectTint
+        case .listenLater: return Theme.Colors.tintViolet
+        case .watchLater: return Theme.Colors.tintAmber
         }
     }
 
     private var categoryColor: Color {
         switch bookmark.primaryCategory {
-        case .work: return Theme.Colors.work
-        case .personal: return Theme.Colors.personal
-        case .hobby: return Theme.Colors.hobby
+        case .work: return Theme.Colors.accentText
+        case .personal: return Theme.Colors.green
+        case .hobby: return Theme.Colors.violet
+        }
+    }
+
+    private func relativeDate(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 60 { return "now" }
+        else if interval < 3600 { return "\(Int(interval / 60))m" }
+        else if interval < 86400 { return "\(Int(interval / 3600))h" }
+        else if interval < 604800 { return "\(Int(interval / 86400))d" }
+        else {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d"
+            return formatter.string(from: date)
         }
     }
 }
