@@ -1,8 +1,9 @@
 # Otto
 
 A local-first macOS AI assistant. SwiftUI app that keeps your todos, notes,
-ideas, bookmarks, habits, meetings, emails, and files in one place, with a
-chat interface that can read and write across all of them — powered by
+ideas, bookmarks, habits, meetings, emails, files, and your network of
+people, companies, communities, and events in one place, with a chat
+interface that can read and write across all of them — powered by
 Claude Code, Codex, or Hermes (your choice in Settings).
 
 All data lives on your machine in `~/Library/Application Support/Otto/otto_data.json`.
@@ -12,7 +13,26 @@ Nothing leaves your device unless you explicitly connect an integration.
 
 - **Chat with Claude, Codex, or Hermes** over all your data — search, create, update,
   complete, delete across todos, notes, ideas, reminders, bookmarks, habits,
-  meetings, emails, and calendar events
+  meetings, emails, calendar events, people, companies, communities, and
+  events. Redesigned chat surface with selectable message text and
+  collapsible tool-call blocks.
+- **Network Hub CRM** — track the people you meet: custom fields,
+  configurable columns with inline table editing, and two-way links between
+  people and companies
+- **Companies, Communities & Events tabs** — with dedicated editors, all
+  exposed to the chat agent's tools
+- **Location map** — locations standardized to canonical cities across your
+  network, companies, and events, plotted on a map with an inline-editable
+  city table
+- **Daily briefing** — an agent-written summary of your day (events, todos,
+  follow-ups) in the Home right rail, regenerated once a day or on demand
+- **Agent workspace snapshots** — each chat turn exports your tabs as
+  grep-able CSV/JSONL files into the agent's per-turn sandbox, so bulk
+  questions ("which funds am I connected to?") are a single `grep` instead
+  of dozens of tool round trips
+- **Block-based note editor** — slash-style blocks with drag handles,
+  collapsible toggles, real clickable todo checkboxes, and smart list
+  continuation
 - **File import the agent can read** — drop in PDFs, CSVs, Excel sheets,
   images (PNG/JPG/HEIC, OCR'd at import via the Vision framework), and
   plain-text formats (txt/md/json/yaml/log). The chat agent can `search_items`
