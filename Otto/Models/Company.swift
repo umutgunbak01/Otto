@@ -46,15 +46,15 @@ enum CompanyType: String, CaseIterable, Codable, Identifiable {
 
     var color: Color {
         switch self {
-        case .unknown: return .gray
+        case .unknown: return Theme.Colors.tertiaryText
         case .startup: return Theme.Colors.cyan
         case .scaleup: return Theme.Colors.green
-        case .enterprise: return .purple
+        case .enterprise: return Theme.Colors.cyanDim
         case .vc: return Theme.Colors.green
         case .agency: return Theme.Colors.amber
-        case .research: return .teal
-        case .media: return .pink
-        case .other: return .indigo
+        case .research: return Theme.Colors.cyanDim
+        case .media: return Theme.Colors.red
+        case .other: return Theme.Colors.textDim
         }
     }
 }

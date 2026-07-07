@@ -107,17 +107,21 @@ struct DaySection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Text(formattedHeader)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
                     .foregroundStyle(headerColor)
 
                 if isToday {
                     Text("Today")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Colors.personal)
-                        .padding(.horizontal, 6)
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.green)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Theme.Colors.personal.opacity(0.12))
-                        .clipShape(Capsule())
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Colors.tintGreen)
+                        )
                 }
 
                 Spacer()
@@ -126,7 +130,7 @@ struct DaySection: View {
                 let totalItems = todos.count + events.count
                 if totalItems > 0 {
                     Text("\(totalItems)")
-                        .font(.system(size: 11))
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
@@ -141,7 +145,8 @@ struct DaySection: View {
         }
         .buttonStyle(.plain)
         .background(
-            isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(isHovered ? Theme.Colors.hoverTint : Color.clear)
         )
         .onHover { hovering in
             isHovered = hovering
@@ -185,11 +190,11 @@ struct DaySection: View {
 
     private var headerColor: Color {
         if isToday {
-            return Theme.Colors.personal
+            return Theme.Colors.textDim
         } else if isTomorrow {
-            return Theme.Colors.priorityHigh
+            return Theme.Colors.tertiaryText
         }
-        return Theme.Colors.text
+        return Theme.Colors.tertiaryText
     }
 
     private var formattedHeader: String {
@@ -269,17 +274,19 @@ struct OverdueSection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.Colors.priorityUrgent)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.red)
 
                 Text("Overdue")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.priorityUrgent)
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.red)
 
                 Spacer()
 
                 Text("\(overdueTodos.count)")
-                    .font(.system(size: 11))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Image(systemName: isOverdueCollapsed ? "chevron.right" : "chevron.down")
@@ -301,17 +308,19 @@ struct OverdueSection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: "tray")
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Text("No Date")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Spacer()
 
                 Text("\(noDateTodos.count)")
-                    .font(.system(size: 11))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Image(systemName: isNoDateCollapsed ? "chevron.right" : "chevron.down")

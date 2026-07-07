@@ -123,6 +123,7 @@ actor AgentService {
     /// no-op delta callback so both code paths share the same backend
     /// dispatch.
     func chatWithTools(
+        sessionKey: UUID,
         turns: [ChatTurn],
         systemPrompt: String,
         tools: [[String: Any]],
@@ -130,6 +131,7 @@ actor AgentService {
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> [ChatTurn] {
         return try await streamChatWithTools(
+            sessionKey: sessionKey,
             turns: turns,
             systemPrompt: systemPrompt,
             tools: tools,
@@ -153,7 +155,11 @@ actor AgentService {
     ///   one chunk per completed message (see `CodexCLIService`).
     /// - `onEvent` mirrors tool_use / tool_result events for the chat UI's
     ///   "🔧 Calling tool X…" chips.
+    /// `sessionKey` identifies the conversation this turn belongs to.
+    /// Conversations run concurrently: each CLI run tracks its subprocess
+    /// under this key, and Hermes maintains one ACP session per key.
     func streamChatWithTools(
+        sessionKey: UUID,
         turns: [ChatTurn],
         systemPrompt: String,
         tools: [[String: Any]],
@@ -164,6 +170,7 @@ actor AgentService {
         switch AgentBackend.current {
         case .claude:
             return try await ClaudeCLIService.shared.streamChatWithTools(
+                sessionKey: sessionKey,
                 turns: turns,
                 systemPrompt: systemPrompt,
                 tools: tools,
@@ -173,6 +180,7 @@ actor AgentService {
             )
         case .codex:
             return try await CodexCLIService.shared.streamChatWithTools(
+                sessionKey: sessionKey,
                 turns: turns,
                 systemPrompt: systemPrompt,
                 tools: tools,
@@ -182,6 +190,7 @@ actor AgentService {
             )
         case .hermes:
             return try await HermesAgentService.shared.streamChatWithTools(
+                sessionKey: sessionKey,
                 turns: turns,
                 systemPrompt: systemPrompt,
                 tools: tools,
@@ -192,18 +201,20 @@ actor AgentService {
         }
     }
 
-    /// Stop the in-flight run for the active backend so the user can issue a
-    /// new prompt. The CLI backends terminate their subprocess; Hermes cancels
-    /// the current ACP turn while keeping its long-lived session alive.
+    /// Stop one conversation's in-flight run. The CLI backends terminate that
+    /// run's subprocess; Hermes cancels that session's ACP turn while keeping
+    /// the session alive. Other conversations' runs are untouched.
+    func cancelRun(sessionKey: UUID) async {
+        await ClaudeCLIService.shared.cancelRun(sessionKey: sessionKey)
+        await CodexCLIService.shared.cancelRun(sessionKey: sessionKey)
+        await HermesAgentService.shared.cancelTurn(sessionKey: sessionKey)
+    }
+
+    /// Stop every in-flight run across all backends.
     func cancelActiveRun() async {
-        switch AgentBackend.current {
-        case .claude:
-            await ClaudeCLIService.shared.cancelActiveRun()
-        case .codex:
-            await CodexCLIService.shared.cancelActiveRun()
-        case .hermes:
-            await HermesAgentService.shared.cancelActiveTurn()
-        }
+        await ClaudeCLIService.shared.cancelActiveRun()
+        await CodexCLIService.shared.cancelActiveRun()
+        await HermesAgentService.shared.cancelActiveTurn()
     }
 
     // MARK: - System prompt
@@ -249,7 +260,7 @@ actor AgentService {
         Current local time (ISO8601): \(localNowIso)
         Current UTC time (ISO8601):   \(utcNowIso)
 
-        You have tools to create / update / complete / delete / search the user's items (todos, notes, ideas, reminders, bookmarks, meetings, emails, connections, habits, **files** — user-imported PDFs / CSVs / images / text). Use tools whenever the user asks you to change state or find specific items. For open-ended questions, answer using the overview below plus `search_items` / `get_item` when you need detail.
+        You have tools to create / update / complete / delete / search the user's items (todos, notes, ideas, reminders, bookmarks, meetings, habits, **files** — user-imported PDFs / CSVs / images / text — plus the CRM: network entries, companies, events, communities). Emails, LinkedIn connections, and X data are synced from external sources and read-only. Use tools whenever the user asks you to change state or find specific items. For open-ended questions, answer using the overview below plus `search_items` / `get_item` when you need detail.
 
         ### Files
         The user can import PDFs, CSVs, Excel sheets, images (PNG/JPG/HEIC — OCR'd at import), and plain-text formats (txt/md/json/yaml/log/html/xml/rtf) via the Files tab. To work with them: call `search_items` with `types=["file"]` (and optionally a `query`) to discover ids and names; call `read_file` with an id to get the extracted text plus an absolute path on disk. For images where OCR'd text isn't enough, or for PDFs with patchy extraction, ALSO call the built-in `Read` tool on the returned path — Claude Code's Read is multimodal and can see the image directly. When the user says "open the spreadsheet I uploaded", "what did the invoice say", "summarize that PDF", "find the file about X" — start with `search_items` (type=file), not WebSearch.
@@ -271,11 +282,23 @@ actor AgentService {
         - When the user refers to an item by name, use `search_items` first to find its id, then act on it.
         - `search_items` works without a text query — omit `query` and use `sort`/`since`/`until`/`include_completed`/`types` to answer things like "most recent emails", "overdue todos", "meetings this week". Default sort is newest-first. The response returns each item's primary date so you can reason about recency.
         - For relational / cross-source questions — "who did I talk to about X", "what's pending on topic Y", "what do I know about person Z" — call `search_items` ONCE with `types` spanning multiple sources (typical combo: `["email", "meeting", "note", "connection"]`) and a `query` string. Then synthesize a single-paragraph answer that ties the results together (who said what where, most recent signal, one actionable takeaway) — don't dump a numbered list of hits.
-        - Whenever your answer references a specific existing item (todo, note, idea, reminder, bookmark, meeting, email, or connection), call `attach_item_preview` with its id and type so the user gets a clickable card instead of a plain-text name. One card per item; call the tool multiple times for multiple items. Do NOT also repeat the item title in prose — the card shows it.
+        - Whenever your prose mentions a specific existing item, write its name as an INLINE item link: `[<item title>](otto://<type>/<id>)` — e.g. "Talk to [Arın Özkula](otto://connection/8A6F1D22-…) first, then loop in the [E2vc webinar](otto://meeting/608AAECD-…) notes." These render as clickable highlighted chips inside your sentence that open the item's detail popup. Types: todo, note, idea, reminder, bookmark, meeting, email, connection, network, company, event, community, habit, file, x_post, x_follower, x_dm. Ids come from `search_items` / `get_item` / create-tool results — never invent one. Weave the links into flowing sentences or short bullets; do NOT dump a long plain-text table of names when inline links can carry the same information.
+        - `attach_item_preview` adds a LARGE standalone card below your text — reserve it for the 1-3 headline items of your answer (e.g. the single best contact to reach out to). Don't attach a card for an item you already inline-linked, and never repeat a card's title in prose.
         - When the best answer to a request is a live webpage (music to play, a news article, a booking page, a reference URL), call `open_url` with an https URL to open it in the user's default browser. Construct a sensible search URL (youtube.com/results?search_query=…, google.com/search?q=…) if you don't have a specific canonical link. Only call this when the user is clearly asking for something actionable on the web — don't volunteer URLs for every question.
         - For "world status" / news-briefing phrases — "what's going on in the world", "world monitor", "monitor the situation", "brief me", "morning briefing", "catch me up on the news" — this is a MUST-USE-WEB-TOOLS situation. Immediately call WebSearch (e.g. "top world news today") to get current headlines. Pick the 1–2 most important stories. Call `open_url` with the URL of the single most important article so it opens in the user's browser. Then deliver a crisp 2–3 sentence spoken summary covering just those 1–2 stories. Never decline by saying you can't access news — you can.
         - Only create items the user clearly asks for — don't volunteer extras.
         """)
+
+        // Data workspace — the CLI backends run in a local working directory
+        // that ClaudeCLIService / CodexCLIService populate with per-tab
+        // snapshot files (see AgentWorkspaceExporter). Hermes runs remotely
+        // over SSH and never sees those files, so it reaches the same tables
+        // through the `grep_data` MCP tool instead.
+        let workspaceAccess: AgentWorkspaceExporter.Access =
+            AgentBackend.current == .hermes ? .mcpGrep : .localFiles
+        if let workspace = AgentWorkspaceExporter.promptSection(from: appState, access: workspaceAccess) {
+            parts.append("\n" + workspace)
+        }
 
         // Compact overview: counts + 10 most-recent per type.
         let activeTodos = appState.todos.filter { !$0.isCompleted }

@@ -22,7 +22,7 @@ struct HabitRowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(habit.title)
-                        .font(Theme.Typography.headline)
+                        .font(.system(size: 13.5, weight: .medium))
                         .foregroundStyle(Theme.Colors.text)
                     targetBadge
                 }
@@ -58,15 +58,17 @@ struct HabitRowView: View {
 
     private var iconBlock: some View {
         ZStack {
-            Rectangle()
-                .stroke(color.opacity(isMet ? 0.9 : 0.35), lineWidth: 1)
-                .background(Rectangle().fill(color.opacity(0.08)))
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(color.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .strokeBorder(color.opacity(isMet ? 0.5 : 0.2), lineWidth: 1)
+                )
                 .frame(width: 36, height: 36)
             Image(systemName: habit.iconName)
                 .font(.system(size: 14))
                 .foregroundStyle(isMet ? color : color.opacity(0.7))
         }
-        .shadow(color: isMet ? color.opacity(0.4) : .clear, radius: 6)
     }
 
     @ViewBuilder
@@ -74,19 +76,21 @@ struct HabitRowView: View {
         let label: String = {
             switch habit.kind {
             case .binary:
-                return habit.frequency.displayName.uppercased()
+                return habit.frequency.displayName
             case .quantity, .duration, .count:
                 let unit = habit.unit ?? ""
-                return "\(format(target))\(unit.isEmpty ? "" : " \(unit)") · \(habit.frequency.displayName)".uppercased()
+                return "\(format(target))\(unit.isEmpty ? "" : " \(unit)") · \(habit.frequency.displayName)"
             }
         }()
         Text(label)
-            .font(Theme.Typography.label)
-            .tracking(Theme.Tracking.tight)
+            .font(Theme.Typography.monoSmall)
             .foregroundStyle(Theme.Colors.textDim)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Theme.Colors.hoverTint)
+            )
     }
 
     private var progressLine: some View {
@@ -99,8 +103,8 @@ struct HabitRowView: View {
                 } else {
                     let unit = habit.unit ?? ""
                     Text("\(format(progress)) / \(format(target))\(unit.isEmpty ? "" : " \(unit)")")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(isMet ? color : Theme.Colors.text)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(isMet ? color : Theme.Colors.textDim)
                 }
                 Spacer()
             }
@@ -115,12 +119,15 @@ struct HabitRowView: View {
             Image(systemName: "flame.fill")
                 .font(.system(size: 9))
             Text("\(streak)")
-                .font(Theme.Typography.caption)
+                .font(Theme.Typography.monoCaption)
         }
         .foregroundStyle(streak > 0 ? Theme.Colors.amber : Theme.Colors.textDim)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(streak > 0 ? Theme.Colors.tintAmber : Theme.Colors.hoverTint)
+        )
     }
 
     @ViewBuilder
@@ -151,8 +158,9 @@ struct HabitRowView: View {
 
     private var quickLogPopover: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("LOG \(habit.title.uppercased())")
-                .hudLabel(tracking: Theme.Tracking.wide, color: color)
+            Text("Log \(habit.title)")
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.text)
 
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(quickPresets, id: \.self) { preset in
@@ -163,10 +171,13 @@ struct HabitRowView: View {
                         }
                     } label: {
                         Text("+\(format(preset))\(habit.unit.map { " \($0)" } ?? "")")
-                            .font(Theme.Typography.caption)
+                            .font(Theme.Typography.monoCaption)
                     }
                     .buttonStyle(GhostButtonStyle())
-                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                 }
             }
 
@@ -175,25 +186,37 @@ struct HabitRowView: View {
                     .textFieldStyle(.plain)
                     .font(Theme.Typography.body)
                     .padding(Theme.Spacing.sm)
-                    .background(Theme.Colors.bg2)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .fill(Theme.Colors.bgInput)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                     .frame(width: 100)
-                Button("LOG") {
+                Button {
                     if let n = Double(quickLogValue.replacingOccurrences(of: ",", with: ".")), n > 0 {
                         Task {
                             await appState.logHabitEntry(habitId: habit.id, value: n)
                             showQuickLog = false
                         }
                     }
+                } label: {
+                    Text("Log")
+                        .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(AccentButtonStyle())
                 .disabled(Double(quickLogValue.replacingOccurrences(of: ",", with: ".")) == nil)
 
-                Button("FILL DAY") {
+                Button {
                     Task {
                         await appState.completeHabitToday(habitId: habit.id)
                         showQuickLog = false
                     }
+                } label: {
+                    Text("Fill day")
+                        .font(.system(size: 12, weight: .medium))
                 }
                 .buttonStyle(GhostButtonStyle())
             }

@@ -27,12 +27,14 @@ enum ConnectionCloseness: String, CaseIterable, Codable {
         }
     }
 
+    // Mirrors NetworkCloseness: tie strength ramps through the cyan accent
+    // and fades to neutral, instead of a per-tier rainbow.
     var color: Color {
         switch self {
-        case .unknown: return .gray
-        case .acquaintance: return .blue
-        case .friendly: return .orange
-        case .close: return .pink
+        case .unknown: return Theme.Colors.tertiaryText
+        case .acquaintance: return Theme.Colors.textDim
+        case .friendly: return Theme.Colors.cyanDim
+        case .close: return Theme.Colors.cyan
         }
     }
 }
@@ -75,16 +77,11 @@ enum ConnectionCategory: String, CaseIterable, Codable {
         }
     }
 
+    // Category is taxonomy, not status — neutral like NetworkType/IndividualType.
     var color: Color {
         switch self {
-        case .unknown: return .gray
-        case .investor: return .green
-        case .founder: return .purple
-        case .engineer: return .blue
-        case .ecosystem: return .teal
-        case .friend: return .orange
-        case .family: return .pink
-        case .other: return .indigo
+        case .unknown, .other: return Theme.Colors.tertiaryText
+        default:               return Theme.Colors.textDim
         }
     }
 }

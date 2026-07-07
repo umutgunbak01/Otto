@@ -13,7 +13,7 @@ extension View {
     /// Thin vertical rule on a cell's trailing edge (keeps columns aligned).
     func cellTrailingDivider() -> some View {
         overlay(alignment: .trailing) {
-            Rectangle().fill(Theme.Colors.border.opacity(0.4)).frame(width: 1)
+            Rectangle().fill(Theme.Colors.border).frame(width: 1)
         }
     }
 }
@@ -25,8 +25,8 @@ struct TableHeaderCell: View {
     let width: CGFloat
     var body: some View {
         Text(title)
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .tracking(1.2)
+            .font(Theme.Typography.label)
+            .tracking(Theme.Tracking.xwide)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 7)
             .frame(width: width, height: TableMetrics.headerHeight, alignment: .leading)
@@ -61,7 +61,7 @@ struct InlineTextCell: View {
     let width: CGFloat
     var placeholder: String = "—"
     var bold: Bool = false
-    var tint: Color = Theme.Colors.text
+    var tint: Color = Theme.Colors.textDim
     let onCommit: (String) -> Void
 
     @State private var draft: String = ""
@@ -70,8 +70,8 @@ struct InlineTextCell: View {
     var body: some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: bold ? .medium : .regular))
-            .foregroundStyle(tint)
+            .font(.system(size: 12.5, weight: bold ? .medium : .regular))
+            .foregroundStyle(bold ? Theme.Colors.text : tint)
             .focused($focused)
             .onAppear { draft = text }
             .onChange(of: text) { _, nv in if !focused { draft = nv } }
@@ -81,7 +81,7 @@ struct InlineTextCell: View {
             .onSubmit { if draft != text { onCommit(draft) } }
             .padding(.horizontal, 7)
             .frame(width: width, height: TableMetrics.rowHeight, alignment: .leading)
-            .background(focused ? Theme.Colors.selectTint : Color.clear)
+            .background(focused ? Theme.Colors.bgInput : Color.clear)
             .cellTrailingDivider()
     }
 }
@@ -110,8 +110,16 @@ struct InlineEnumCell<T: Hashable>: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: icon(value)).font(.system(size: 10))
-                Text(title(value)).font(.system(size: 11)).lineLimit(1)
+                HStack(spacing: 3) {
+                    Text(title(value)).font(Theme.Typography.monoSmall).lineLimit(1)
+                    Text("▾").font(.system(size: 8)).opacity(0.7)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(color(value).opacity(0.12))
+                )
                 Spacer(minLength: 2)
             }
             .foregroundStyle(color(value))
@@ -192,7 +200,7 @@ struct InlineMoneyCell: View {
             }
             .padding(.horizontal, 7)
             .frame(width: width, height: TableMetrics.rowHeight, alignment: .leading)
-            .background(focused ? Theme.Colors.selectTint : Color.clear)
+            .background(focused ? Theme.Colors.bgInput : Color.clear)
             .cellTrailingDivider()
     }
 }

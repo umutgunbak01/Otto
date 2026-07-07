@@ -97,7 +97,7 @@ struct EventEditorSheet: View {
                         }
                     }
                     .padding(Theme.Spacing.sm)
-                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.sm).strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1))
 
                     FormField(label: "BUDGET ($, optional)") {
                         FormText(text: $budgetText, placeholder: "e.g. 10000")

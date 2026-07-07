@@ -16,16 +16,3 @@ enum DefaultTags {
         DomainTag(name: "Design", isDefault: true),
     ]
 }
-
-enum AppColors {
-    static let primary = Color.blue
-    static let secondary = Color.gray
-    static let success = Color.green
-    static let warning = Color.orange
-    static let danger = Color.red
-
-    static let todoBackground = Color.blue.opacity(0.1)
-    static let noteBackground = Color.green.opacity(0.1)
-    static let ideaBackground = Color.purple.opacity(0.1)
-    static let reminderBackground = Color.orange.opacity(0.1)
-}

@@ -18,10 +18,10 @@ struct OttoDock: View {
     var onMic: (() -> Void)?
 
     var suggestions: [String] = [
-        "▸ Brief me on tomorrow",
-        "▸ Draft reply to Sam",
-        "▸ Show high-priority todos",
-        "▸ Summarize last meeting"
+        "Brief me on tomorrow",
+        "Draft reply to Sam",
+        "Show high-priority todos",
+        "Summarize last meeting"
     ]
 
     var body: some View {
@@ -60,12 +60,6 @@ struct OttoDock: View {
 
     private var promptField: some View {
         HStack(spacing: 12) {
-            Text("OTTO >")
-                .font(.system(size: 12, weight: .heavy, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Theme.Colors.cyan)
-                .shadow(color: Theme.Colors.cyanGlow, radius: 4)
-
             ZStack(alignment: .leading) {
                 if text.isEmpty && !focused {
                     HStack(spacing: 4) {
@@ -75,8 +69,7 @@ struct OttoDock: View {
                 }
                 TextField("", text: $text)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
-                    .tracking(0.6)
+                    .font(.system(size: 13.5))
                     .foregroundStyle(Theme.Colors.text)
                     .focused($focused)
                     .onSubmit { send() }
@@ -86,12 +79,12 @@ struct OttoDock: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            AngledPanelShape(cut: .parallelogram(8))
-                .fill(Theme.Colors.bg1.opacity(0.5))
+            RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                .fill(Theme.Colors.bgInput)
         )
         .overlay(
-            AngledPanelShape(cut: .parallelogram(8))
-                .stroke(focused ? Theme.Colors.cyan : Theme.Colors.cyan.opacity(0.25), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                .strokeBorder(focused ? Theme.Colors.accent : Theme.Colors.borderStrong, lineWidth: 1)
         )
         .onAppear {
             // Rotate the idle phrase every 3.5s — driven by a timeline scoped
@@ -113,18 +106,13 @@ struct OttoDock: View {
             send()
         } label: {
             Image(systemName: "arrow.up")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Theme.Colors.cyan)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.Colors.onAccent)
                 .frame(width: 44, height: 44)
                 .background(
-                    AngledPanelShape(cut: .topRightBottomLeft(8))
-                        .fill(Theme.Colors.cyan.opacity(0.12))
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.accent)
                 )
-                .overlay(
-                    AngledPanelShape(cut: .topRightBottomLeft(8))
-                        .stroke(Theme.Colors.cyan, lineWidth: 1)
-                )
-                .shadow(color: Theme.Colors.cyanGlow, radius: 10)
         }
         .buttonStyle(.plain)
         .keyboardShortcut(.return, modifiers: .command)
@@ -151,28 +139,17 @@ private struct MicButton: View {
             ZStack {
                 // Static base.
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.Colors.cyan.opacity(0.2), .clear],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: 28
-                        )
-                    )
+                    .fill(Theme.Colors.bgInput)
                     .overlay(
-                        Circle().stroke(Theme.Colors.cyan, lineWidth: 1.5)
+                        Circle().strokeBorder(Theme.Colors.borderStrong, lineWidth: 1)
                     )
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 14)
                     .frame(width: 50, height: 50)
-
-                // Rotating dashed orbit — scoped TimelineView, 12fps.
-                OrbitRing()
 
                 // Either a static mic icon or a small equalizer when active.
                 if isIdle {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 18))
-                        .foregroundStyle(Theme.Colors.cyan)
+                        .foregroundStyle(Theme.Colors.textDim)
                 } else {
                     MicEqualizer()
                 }
@@ -184,22 +161,6 @@ private struct MicButton: View {
     private var isIdle: Bool {
         if case .idle = phase { return true }
         return false
-    }
-}
-
-private struct OrbitRing: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            let angle = (t.truncatingRemainder(dividingBy: 8) / 8) * 360
-            Circle()
-                .strokeBorder(
-                    Theme.Colors.cyan.opacity(0.4),
-                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                )
-                .frame(width: 62, height: 62)
-                .rotationEffect(.degrees(angle))
-        }
     }
 }
 
@@ -220,11 +181,10 @@ private struct MicEqualizer: View {
                     let x = startX + CGFloat(i) * (barW + spacing)
                     let rect = CGRect(x: x, y: baseY - h, width: barW, height: h)
                     let path = Path(roundedRect: rect, cornerRadius: 1)
-                    canvas.fill(path, with: .color(Theme.Colors.cyan))
+                    canvas.fill(path, with: .color(Theme.Colors.accent))
                 }
             }
             .frame(height: 16)
-            .shadow(color: Theme.Colors.cyanGlow, radius: 2)
         }
     }
 }
@@ -247,9 +207,8 @@ private struct IdlePhraseText: View {
             let bucket = Int(ctx.date.timeIntervalSinceReferenceDate / 3.5)
             let i = (bucket + index) % Self.phrases.count
             Text(Self.phrases[abs(i)])
-                .font(.system(size: 12, weight: .regular, design: .monospaced))
-                .tracking(1.0)
-                .foregroundStyle(Theme.Colors.textDim)
+                .font(.system(size: 13.5))
+                .foregroundStyle(Theme.Colors.tertiaryText)
         }
     }
 }
@@ -261,9 +220,9 @@ private struct BlinkingCursor: View {
         // 1Hz cadence — a 500ms cursor blink looks the same as 250ms.
         TimelineView(.periodic(from: .now, by: 1.0)) { ctx in
             let on = Int(ctx.date.timeIntervalSinceReferenceDate) % 2 == 0
-            Rectangle()
-                .fill(Theme.Colors.cyan)
-                .frame(width: 8, height: 14)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Theme.Colors.accent)
+                .frame(width: 2, height: 14)
                 .opacity(on ? 1 : 0)
         }
     }

@@ -8,46 +8,45 @@ struct EmailRowView: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            // Email icon with read status
-            ZStack {
-                Circle()
-                    .fill(email.isRead ? Theme.Colors.borderSubtle : Theme.Colors.accent.opacity(0.12))
-                    .frame(width: 32, height: 32)
+        HStack(spacing: 11) {
+            // Unread indicator (mockup .unread-dot / .read-pad)
+            Circle()
+                .fill(email.isRead ? Color.clear : Theme.Colors.accent)
+                .frame(width: 7, height: 7)
 
-                Image(systemName: email.isRead ? "envelope.open" : "envelope.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(email.isRead ? Theme.Colors.tertiaryText : Theme.Colors.accent)
-            }
+            // Tinted initials avatar (mockup .fava)
+            senderAvatar
 
             // Content
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                // Sender
-                HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                // Sender line
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                     Text(email.displaySender)
-                        .font(Theme.Typography.headline)
-                        .foregroundStyle(email.isRead ? Theme.Colors.secondaryText : Theme.Colors.text)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(email.isRead ? Theme.Colors.textDim : Theme.Colors.text)
                         .lineLimit(1)
 
                     Spacer()
 
-                    // Date
+                    // Date (data → mono)
                     Text(email.formattedDate)
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
                 // Subject
                 Text(email.subject)
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(email.isRead ? Theme.Colors.secondaryText : Theme.Colors.text)
+                    .font(email.isRead
+                          ? Font.system(size: 13, weight: .regular)
+                          : Font.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(email.isRead ? Theme.Colors.textDim : Theme.Colors.text)
                     .lineLimit(1)
 
                 // Preview
                 Text(email.preview)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .lineLimit(2)
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineLimit(1)
             }
 
             // Actions (visible on hover)
@@ -69,15 +68,19 @@ struct EmailRowView: View {
                 }
             }
         }
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.sm)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear))
+                .fill(
+                    isSelected
+                        ? Theme.Colors.selectTint
+                        : (email.isRead ? Color.clear : Theme.Colors.panel)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
         #if os(macOS)
         .onHover { hovering in
@@ -85,10 +88,50 @@ struct EmailRowView: View {
         }
         #endif
     }
+
+    // MARK: - Avatar
+
+    private var senderAvatar: some View {
+        let initials = avatarInitials
+        let tint = avatarTint(for: email.sender)
+
+        return Circle()
+            .fill(tint.background)
+            .frame(width: 26, height: 26)
+            .overlay {
+                Text(initials)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tint.foreground)
+            }
+    }
+
+    private var avatarInitials: String {
+        let name = email.senderName ?? email.sender
+        let parts = name.split(separator: " ").prefix(2)
+        if parts.count >= 2 {
+            return parts.map { String($0.prefix(1)) }.joined().uppercased()
+        }
+        return String(name.prefix(2)).uppercased()
+    }
+
+    private func avatarTint(for sender: String) -> (background: Color, foreground: Color) {
+        let tints: [(Color, Color)] = [
+            (Theme.Colors.tintViolet, Theme.Colors.violet),
+            (Theme.Colors.tintGreen, Theme.Colors.green),
+            (Theme.Colors.selectTint, Theme.Colors.accentText),
+            (Theme.Colors.tintAmber, Theme.Colors.amber),
+            (Theme.Colors.tintRed, Theme.Colors.red)
+        ]
+        var hash = 0
+        for scalar in sender.unicodeScalars {
+            hash = (hash &* 31 &+ Int(scalar.value)) & 0xFFFF
+        }
+        return tints[hash % tints.count]
+    }
 }
 
 #Preview {
-    VStack(spacing: 2) {
+    VStack(spacing: 6) {
         EmailRowView(
             email: Email(
                 gmailId: "1",

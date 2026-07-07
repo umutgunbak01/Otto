@@ -154,6 +154,26 @@ actor NotionService {
         return allBlocks
     }
 
+    /// Fetch a page's blocks including nested children (toggle bodies, sub-items).
+    /// The /blocks/{id}/children endpoint accepts block IDs as well as page IDs.
+    /// Depth is capped so a pathological page can't fan out into endless requests;
+    /// child pages/databases are separate documents and are not inlined.
+    func fetchBlockTree(parentId: String, depth: Int = 0) async throws -> [NotionBlock] {
+        var blocks = try await fetchPageBlocks(pageId: parentId)
+        guard depth < 2 else { return blocks }
+
+        for index in blocks.indices {
+            let block = blocks[index]
+            guard block.hasChildren,
+                  block.type != "child_page",
+                  block.type != "child_database" else { continue }
+            // A failed child fetch shouldn't sink the whole page.
+            blocks[index].children = (try? await fetchBlockTree(parentId: block.id, depth: depth + 1)) ?? []
+        }
+
+        return blocks
+    }
+
     // MARK: - Validate Token
 
     /// Validate the API token with a lightweight single-page search
@@ -172,64 +192,100 @@ actor NotionService {
     /// Convert Notion blocks to the app's markdown-like content format
     func convertBlocksToMarkdown(_ blocks: [NotionBlock]) -> String {
         var lines: [String] = []
+        appendBlockLines(blocks, level: 0, to: &lines)
+        return lines.joined(separator: "\n")
+    }
+
+    private func appendBlockLines(_ blocks: [NotionBlock], level: Int, to lines: inout [String]) {
+        // Children of toggles must be indented for the editor's collapse
+        // behavior; other nesting keeps the same indent for readability.
+        let indent = String(repeating: "  ", count: level)
+        var listNumber = 0
 
         for block in blocks {
+            // Numbered items count up within a consecutive run and restart
+            // after any other block, like Notion renders them.
+            if block.type == "numbered_list_item" {
+                listNumber += 1
+            } else {
+                listNumber = 0
+            }
+
             switch block.type {
             case "paragraph":
                 let text = extractPlainText(block.paragraph?.richText)
-                lines.append(text)
+                lines.append(indent + text)
 
             case "heading_1":
                 let text = extractPlainText(block.heading1?.richText)
-                lines.append("# \(text)")
+                lines.append(indent + "# \(text)")
 
             case "heading_2":
                 let text = extractPlainText(block.heading2?.richText)
-                lines.append("## \(text)")
+                lines.append(indent + "## \(text)")
 
             case "heading_3":
                 let text = extractPlainText(block.heading3?.richText)
-                lines.append("### \(text)")
+                lines.append(indent + "### \(text)")
 
             case "bulleted_list_item":
                 let text = extractPlainText(block.bulletedListItem?.richText)
-                lines.append("- \(text)")
+                lines.append(indent + "- \(text)")
 
             case "numbered_list_item":
                 let text = extractPlainText(block.numberedListItem?.richText)
-                lines.append("1. \(text)")
+                lines.append(indent + "\(listNumber). \(text)")
 
             case "to_do":
                 if let todo = block.toDo {
                     let text = extractPlainText(todo.richText)
                     let checkbox = todo.checked ? "- [x]" : "- [ ]"
-                    lines.append("\(checkbox) \(text)")
+                    lines.append(indent + "\(checkbox) \(text)")
                 }
+
+            case "toggle":
+                let text = extractPlainText(block.toggle?.richText)
+                lines.append(indent + "▾ \(text)")
 
             case "quote":
                 let text = extractPlainText(block.quote?.richText)
-                lines.append("> \(text)")
+                lines.append(indent + "> \(text)")
+
+            case "callout":
+                let text = extractPlainText(block.callout?.richText)
+                lines.append(indent + "> \(text)")
 
             case "divider":
-                lines.append("---")
+                lines.append(indent + "---")
 
             case "code":
                 let text = extractPlainText(block.code?.richText)
-                lines.append(text)
+                lines.append(indent + text)
 
             default:
-                // Unsupported block types — skip
+                // Unsupported block types — skip (children still rendered below)
                 break
             }
-        }
 
-        return lines.joined(separator: "\n")
+            if !block.children.isEmpty {
+                appendBlockLines(block.children, level: level + 1, to: &lines)
+            }
+        }
     }
 
-    /// Extract plain text from a rich text array
+    /// Extract plain text from a rich text array.
+    ///
+    /// Line separators are normalized to "\n": the note editor splits lines
+    /// with components(separatedBy: "\n") while AppKit's layout splits on \r,
+    /// \u{2028}, etc. — any exotic separator from Notion would shift every
+    /// gutter handle below it onto the wrong row.
     private func extractPlainText(_ richText: [NotionRichText]?) -> String {
         guard let richText = richText else { return "" }
         return richText.map { $0.plainText }.joined()
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
     }
 
     // MARK: - Convert to Notes
@@ -260,7 +316,15 @@ actor NotionService {
         // Find the property with type "title"
         for (_, property) in page.properties {
             if property.type == "title", let titleParts = property.title {
-                return titleParts.map { $0.plainText }.joined()
+                // Titles are single-line in the app; flatten any embedded breaks.
+                let title = titleParts.map { $0.plainText }.joined()
+                    .replacingOccurrences(of: "\r\n", with: " ")
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .replacingOccurrences(of: "\r", with: " ")
+                    .replacingOccurrences(of: "\u{2028}", with: " ")
+                    .replacingOccurrences(of: "\u{2029}", with: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                return title.isEmpty ? "Untitled" : title
             }
         }
         return "Untitled"
@@ -392,6 +456,7 @@ struct NotionBlocksResponse: Codable {
 struct NotionBlock: Codable {
     let id: String
     let type: String
+    let hasChildren: Bool
     let paragraph: NotionBlockContent?
     let heading1: NotionBlockContent?
     let heading2: NotionBlockContent?
@@ -399,12 +464,17 @@ struct NotionBlock: Codable {
     let bulletedListItem: NotionBlockContent?
     let numberedListItem: NotionBlockContent?
     let toDo: NotionToDoContent?
+    let toggle: NotionBlockContent?
     let quote: NotionBlockContent?
+    let callout: NotionBlockContent?
     let code: NotionCodeContent?
     let divider: NotionEmptyContent?
+    /// Nested blocks, populated by fetchBlockTree (not part of the JSON payload).
+    var children: [NotionBlock] = []
 
     enum CodingKeys: String, CodingKey {
-        case id, type, paragraph, quote, code, divider
+        case id, type, paragraph, toggle, quote, callout, code, divider
+        case hasChildren = "has_children"
         case heading1 = "heading_1"
         case heading2 = "heading_2"
         case heading3 = "heading_3"
@@ -417,6 +487,7 @@ struct NotionBlock: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         type = try container.decode(String.self, forKey: .type)
+        hasChildren = (try? container.decode(Bool.self, forKey: .hasChildren)) ?? false
         paragraph = try? container.decode(NotionBlockContent.self, forKey: .paragraph)
         heading1 = try? container.decode(NotionBlockContent.self, forKey: .heading1)
         heading2 = try? container.decode(NotionBlockContent.self, forKey: .heading2)
@@ -424,7 +495,9 @@ struct NotionBlock: Codable {
         bulletedListItem = try? container.decode(NotionBlockContent.self, forKey: .bulletedListItem)
         numberedListItem = try? container.decode(NotionBlockContent.self, forKey: .numberedListItem)
         toDo = try? container.decode(NotionToDoContent.self, forKey: .toDo)
+        toggle = try? container.decode(NotionBlockContent.self, forKey: .toggle)
         quote = try? container.decode(NotionBlockContent.self, forKey: .quote)
+        callout = try? container.decode(NotionBlockContent.self, forKey: .callout)
         code = try? container.decode(NotionCodeContent.self, forKey: .code)
         divider = try? container.decode(NotionEmptyContent.self, forKey: .divider)
     }

@@ -58,14 +58,15 @@ struct EventListView: View {
                 noResultsState
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 6) {
                         ForEach(filtered) { event in
                             EventRow(event: event) {
                                 editing = EditingTarget(id: event.id, event: event)
                             }
-                            OttoDivider()
                         }
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.vertical, Theme.Spacing.lg)
                 }
             }
         }
@@ -79,19 +80,12 @@ struct EventListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("◈ EVENTS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Events")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filtered.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filtered.count)
 
                 Spacer()
 
@@ -99,16 +93,11 @@ struct EventListView: View {
                     editing = EditingTarget(id: UUID(), event: nil)
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 11))
-                        Text("New").font(.system(size: 12))
+                        Image(systemName: "plus").font(.system(size: 11, weight: .medium))
+                        Text("New").font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -120,10 +109,16 @@ struct EventListView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.bgInput)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
                 .frame(maxWidth: 260)
 
                 // Status filter
@@ -193,15 +188,21 @@ struct EventListView: View {
     }
 
     private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 11))
+            Text(text).font(.system(size: 12, weight: .medium))
         }
-        .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(isActive ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Empty states
@@ -252,12 +253,11 @@ private struct EventRow: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: Theme.Spacing.md) {
+            HStack(spacing: 11) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(neon.opacity(isHovered ? 0.22 : 0.12))
-                        .frame(width: 32, height: 32)
-                        .shadow(color: neon.opacity(isHovered ? 0.7 : 0), radius: isHovered ? 8 : 0)
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(neon.opacity(0.12))
+                        .frame(width: 30, height: 30)
                     Image(systemName: event.type.icon)
                         .font(.system(size: 13))
                         .foregroundStyle(neon)
@@ -265,61 +265,79 @@ private struct EventRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(event.name.isEmpty ? "Untitled" : event.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isHovered ? neon : Theme.Colors.text)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(Theme.Colors.text)
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(event.type.label)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.textDim)
                         if !event.location.isEmpty {
-                            Image(systemName: "mappin.circle").font(.system(size: 9))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                            Text(event.location).foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
-                        }
-                        if !event.dateRangeText.isEmpty {
-                            Image(systemName: "calendar").font(.system(size: 9))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                            Text(event.dateRangeText).foregroundStyle(Theme.Colors.tertiaryText)
+                            Image(systemName: "mappin.circle").font(.system(size: 10))
+                                .foregroundStyle(Theme.Colors.textDim)
+                            Text(event.location)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.textDim)
+                                .lineLimit(1)
                         }
                     }
-                    .font(.system(size: 11))
                 }
 
                 Spacer(minLength: 0)
 
                 statusBadge
 
+                if !event.dateRangeText.isEmpty {
+                    Text(event.dateRangeText)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+
                 if let budget = event.formattedBudget {
                     Text(budget)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.Colors.amber)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(Theme.Colors.green)
                 }
             }
-            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(neon.opacity(isHovered ? 0.08 : 0))
-                .padding(.horizontal, Theme.Spacing.md)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
     }
 
-    private var statusBadge: some View {
-        HStack(spacing: 4) {
-            Image(systemName: event.status.icon).font(.system(size: 9))
-            Text(event.status.label).font(.system(size: 10))
+    /// Mockup chip colors: hosting/attending → accent "Scheduled" look,
+    /// considering → amber "Planning" look, declined → dim "Completed" look.
+    private var statusChipColors: (fg: Color, bg: Color) {
+        switch event.status {
+        case .hosting:     return (Theme.Colors.accentText, Theme.Colors.selectTint)
+        case .attending:   return (Theme.Colors.green, Theme.Colors.tintGreen)
+        case .considering: return (Theme.Colors.amber, Theme.Colors.tintAmber)
+        case .declined:    return (Theme.Colors.tertiaryText, Theme.Colors.hoverTint)
         }
-        .foregroundStyle(event.status.color)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(event.status.color.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    private var statusBadge: some View {
+        Text(event.status.label)
+            .font(Theme.Typography.monoSmall)
+            .foregroundStyle(statusChipColors.fg)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(statusChipColors.bg)
+            )
     }
 }
 

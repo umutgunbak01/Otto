@@ -40,11 +40,11 @@ struct CompanyEditorSheet: View {
             header
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                    FormField(label: "NAME") {
+                    FormField(label: "Name") {
                         FormText(text: $name, placeholder: "e.g. Acme AI")
                     }
 
-                    FormField(label: "TYPE") {
+                    FormField(label: "Type") {
                         Picker("", selection: $type) {
                             ForEach(CompanyType.allCases) { Text($0.label).tag($0) }
                         }
@@ -52,7 +52,7 @@ struct CompanyEditorSheet: View {
                         .tint(Theme.Colors.cyan)
                     }
 
-                    FormField(label: "CITY") {
+                    FormField(label: "City") {
                         FormText(text: $location, placeholder: "e.g. San Francisco")
                     }
 
@@ -64,19 +64,19 @@ struct CompanyEditorSheet: View {
                     .toggleStyle(.switch)
                     .tint(Theme.Colors.green)
 
-                    FormField(label: isCustomer ? "COMMITMENT ($)" : "POTENTIAL ($)") {
+                    FormField(label: isCustomer ? "Commitment ($)" : "Potential ($)") {
                         FormText(text: $commitmentText, placeholder: "e.g. 50000")
                     }
 
-                    FormField(label: "WEBSITE (optional)") {
+                    FormField(label: "Website (optional)") {
                         FormText(text: $website, placeholder: "acme.ai")
                     }
 
-                    FormField(label: "NOTES") {
+                    FormField(label: "Notes") {
                         FormTextEditor(text: $notes, placeholder: "Context, deal status, who to talk to…")
                     }
 
-                    FormField(label: "PEOPLE (NETWORK HUB)") {
+                    FormField(label: "People (Network Hub)") {
                         CompanyPeopleLinker(
                             linkedIds: $linkedNetworkIds,
                             companyName: name,
@@ -103,8 +103,9 @@ struct CompanyEditorSheet: View {
 
     private var header: some View {
         HStack {
-            Text(isEditing ? "EDIT COMPANY" : "NEW COMPANY")
-                .hudLabel(tracking: Theme.Tracking.xxwide, color: Theme.Colors.cyan)
+            Text(isEditing ? "Edit Company" : "New Company")
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.text)
             Spacer()
             Button { dismiss() } label: {
                 Image(systemName: "xmark").foregroundStyle(Theme.Colors.textDim)
@@ -118,16 +119,16 @@ struct CompanyEditorSheet: View {
     private var footer: some View {
         HStack {
             if isEditing {
-                Button("DELETE", role: .destructive) {
+                Button("Delete", role: .destructive) {
                     if let company { Task { await appState.deleteCompany(company); dismiss() } }
                 }
                 .buttonStyle(GhostButtonStyle())
                 .foregroundStyle(Theme.Colors.red)
             }
             Spacer()
-            Button("CANCEL") { dismiss() }
+            Button("Cancel") { dismiss() }
                 .buttonStyle(GhostButtonStyle())
-            Button(isEditing ? "SAVE" : "CREATE") { Task { await save() } }
+            Button(isEditing ? "Save" : "Create") { Task { await save() } }
                 .buttonStyle(AccentButtonStyle())
                 .disabled(!canSave)
                 .opacity(canSave ? 1 : 0.5)
@@ -215,8 +216,14 @@ private struct CompanyPeopleLinker: View {
             } else {
                 ForEach(linked) { e in
                     linkedRow(e)
-                        .background(Theme.Colors.bg2)
-                        .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                                .fill(Theme.Colors.bg2)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                 }
             }
 
@@ -238,7 +245,7 @@ private struct CompanyPeopleLinker: View {
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 } else {
                     if q.isEmpty && !candidates.isEmpty {
-                        Text("SUGGESTED · \(companyName.uppercased())").hudLabel(tracking: Theme.Tracking.wide)
+                        Text("Suggested · \(companyName)").hudLabel()
                     }
                     VStack(spacing: 0) {
                         if !q.isEmpty {
@@ -251,7 +258,11 @@ private struct CompanyPeopleLinker: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                 }
             }
         }

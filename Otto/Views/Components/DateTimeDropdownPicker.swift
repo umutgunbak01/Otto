@@ -86,7 +86,7 @@ struct DateDropdownPicker: View {
         } label: {
             HStack(spacing: Theme.Spacing.xs) {
                 Text(label(selection.wrappedValue))
-                    .font(Theme.Typography.body)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.text)
 
                 Image(systemName: "chevron.down")
@@ -97,12 +97,12 @@ struct DateDropdownPicker: View {
             .padding(.vertical, Theme.Spacing.sm)
             .frame(width: width)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.bgInput)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
             )
         }
         #if os(macOS)
@@ -168,16 +168,16 @@ struct TimeDropdownPicker: View {
                     Text(hasTime ? "Time set" : "Add time")
                         .font(Theme.Typography.caption)
                 }
-                .foregroundStyle(hasTime ? Theme.Colors.accent : Theme.Colors.secondaryText)
+                .foregroundStyle(hasTime ? Theme.Colors.accentText : Theme.Colors.secondaryText)
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
                 .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(hasTime ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle.opacity(0.5))
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(hasTime ? Theme.Colors.selectTint : Theme.Colors.bgInput)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(hasTime ? Theme.Colors.accent.opacity(0.2) : Theme.Colors.hoverTint, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(hasTime ? Theme.Colors.accent.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -234,7 +234,7 @@ struct TimeDropdownPicker: View {
         } label: {
             HStack(spacing: Theme.Spacing.xs) {
                 Text(label(selection.wrappedValue))
-                    .font(Theme.Typography.body)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.text)
 
                 Image(systemName: "chevron.down")
@@ -245,12 +245,12 @@ struct TimeDropdownPicker: View {
             .padding(.vertical, Theme.Spacing.sm)
             .frame(width: width)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.bgInput)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(Theme.Colors.hoverTint, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
             )
         }
         #if os(macOS)
@@ -364,16 +364,16 @@ struct QuickDateButtons: View {
                 Text(label)
                     .font(Theme.Typography.caption)
             }
-            .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.secondaryText)
+            .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.secondaryText)
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, Theme.Spacing.sm)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(isSelected ? Theme.Colors.accent.opacity(0.1) : Color.clear)
+                    .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Theme.Colors.borderSubtle, lineWidth: 1)
+                    .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)

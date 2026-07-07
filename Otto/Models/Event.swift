@@ -46,15 +46,15 @@ enum EventType: String, CaseIterable, Codable, Identifiable {
 
     var color: Color {
         switch self {
-        case .unknown: return .gray
+        case .unknown: return Theme.Colors.tertiaryText
         case .conference: return Theme.Colors.cyan
-        case .summit: return .purple
+        case .summit: return Theme.Colors.cyanDim
         case .meetup: return Theme.Colors.green
         case .hackathon: return Theme.Colors.aiAccent
         case .dinner: return Theme.Colors.amber
-        case .workshop: return .teal
+        case .workshop: return Theme.Colors.cyanDim
         case .party: return Theme.Colors.red
-        case .other: return .indigo
+        case .other: return Theme.Colors.textDim
         }
     }
 }

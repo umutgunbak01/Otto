@@ -3,28 +3,60 @@ import UniformTypeIdentifiers
 
 /// Unified chat interface. Claude can answer questions AND take actions via tools —
 /// create / update / complete / delete / search across all Otto item types.
+///
+/// Live conversations (turn logs, streaming entries, in-flight runs) are
+/// OWNED by `appState.chatRuns` — one controller per conversation, several of
+/// which can run concurrently — not by this view. A working query keeps
+/// running and keeps persisting even if this view is torn down (chat sheet
+/// closed, session switched). This view only holds input state plus a local
+/// render cache for browsing saved (never-run) sessions.
 struct OttoChatView: View {
     @Environment(AppState.self) private var appState
 
-    @State private var turns: [ChatTurn] = []
     @State private var inputText: String = ""
-    @State private var isLoading: Bool = false
-    /// Handle to the in-flight turn so the Stop button can cancel it.
-    @State private var runTask: Task<Void, Never>?
-    @State private var error: String?
     @FocusState private var inputFocused: Bool
+    @State private var composerHovered: Bool = false
 
-    // UI-level event log — each entry is rendered as a bubble or a tool chip in order.
-    @State private var uiEntries: [UIEntry] = []
-
-    // Chat session this view is currently displaying. nil = a fresh
-    // conversation that hasn't been written yet (created on first send).
-    @State private var sessionId: UUID? = nil
+    // Local render cache for SAVED sessions. Conversations with a run
+    // controller render straight from `appState.chatRuns` and need no cache.
+    @State private var loadedEntries: [ChatUIEntry] = []
+    @State private var loadedSessionId: UUID? = nil
 
     // Attachments staged for the next user message.
     @State private var pendingAttachments: [ChatAttachment] = []
     @State private var showFileImporter: Bool = false
     @State private var attachmentError: String?
+
+    /// Detail popup opened by clicking an item-preview card. Held here (not
+    /// inside `ItemPreviewCard`) because a `.sheet` attached to a row of the
+    /// message list's LazyVStack fails to present — every other popup in the
+    /// app hangs its sheet on the list/container view for the same reason.
+    @State private var previewDetail: PreviewDetail?
+
+    /// Tool-call groups the user has expanded via "See tool calls", keyed by
+    /// the group's leading entry id. Default (absent) = collapsed.
+    @State private var expandedToolGroups: Set<UUID> = []
+
+    /// Run controller for the session on screen, when it has (or recently
+    /// had) a live run this app-run. nil = a saved session rendered from the
+    /// local cache, or a fresh blank chat.
+    private var viewedController: ChatRunController? {
+        appState.chatRuns.controller(for: appState.activeChatSessionId)
+    }
+
+    /// A run is actively streaming into the session currently on screen.
+    private var isRunLiveHere: Bool {
+        viewedController?.isRunning ?? false
+    }
+
+    /// A run is streaming into some OTHER session right now.
+    private var otherRunningSessionId: UUID? {
+        appState.chatRuns.runningSessionIds.first { $0 != appState.activeChatSessionId }
+    }
+
+    private var displayedEntries: [ChatUIEntry] {
+        viewedController?.entries ?? loadedEntries
+    }
 
     /// File types accepted by the chat's file picker. Covers the requested
     /// csv/xlsx/pdf/png/jpeg plus a few common text/data formats.
@@ -48,7 +80,7 @@ struct OttoChatView: View {
     var body: some View {
         @Bindable var appState = appState
         return VStack(spacing: 0) {
-            if uiEntries.isEmpty {
+            if displayedEntries.isEmpty {
                 emptyState
             } else {
                 messageList
@@ -56,7 +88,7 @@ struct OttoChatView: View {
 
             OttoDivider()
 
-            if let error {
+            if let controller = viewedController, let error = controller.error {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 12))
@@ -66,7 +98,7 @@ struct OttoChatView: View {
                         .foregroundStyle(Theme.Colors.secondaryText)
                     Spacer()
                     Button {
-                        self.error = nil
+                        controller.error = nil
                     } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 11))
@@ -88,14 +120,16 @@ struct OttoChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.18), value: appState.showVoiceOverlay)
+        .sheet(item: $previewDetail) { detail in
+            previewDetailSheet(detail)
+        }
         .onAppear {
             loadActiveSession()
             consumePendingPromptIfNeeded()
         }
         .onChange(of: appState.activeChatSessionId) { _, _ in
-            // Don't tear down a chat that is still streaming a tool-using
-            // assistant turn — wait for it to finish, then load.
-            guard !isLoading else { return }
+            // Always safe to switch — live runs stream into their own
+            // controllers in appState.chatRuns regardless of what's on screen.
             loadActiveSession()
         }
         .onChange(of: appState.pendingChatPrompt) { _, _ in
@@ -105,108 +139,27 @@ struct OttoChatView: View {
 
     // MARK: - Session loading
 
-    /// Sync local `turns` + `uiEntries` to the session AppState says is active.
-    /// nil = a fresh blank chat.
+    /// Refresh the local render cache for the session AppState says is
+    /// active. Sessions with a run controller need no load — they render
+    /// straight from `appState.chatRuns`. nil = a fresh blank chat.
     private func loadActiveSession() {
         let target = appState.activeChatSessionId
-        if target == sessionId, !turns.isEmpty || target == nil { return }
-        sessionId = target
+        if viewedController != nil {
+            // Live content comes from the controller; drop the stale cache so
+            // it doesn't linger when the user later switches to a saved chat.
+            loadedSessionId = target
+            loadedEntries = []
+            return
+        }
+        if target == loadedSessionId, !loadedEntries.isEmpty || target == nil { return }
+        loadedSessionId = target
         if let id = target, let session = appState.chatSession(id) {
-            turns = session.turns
-            uiEntries = Self.rebuildUIEntries(from: session.turns, appState: appState)
+            loadedEntries = ChatRunController.rebuildEntries(from: session.turns, appState: appState)
         } else {
-            turns = []
-            uiEntries = []
+            loadedEntries = []
         }
         inputText = ""
         pendingAttachments = []
-        error = nil
-    }
-
-    /// Reconstruct the UI event log from a saved session's turns. Tool-result
-    /// blocks are merged into their preceding tool-use step with the same id
-    /// so the UI shows the call line + result line, just like the live stream.
-    @MainActor
-    private static func rebuildUIEntries(from turns: [ChatTurn], appState: AppState) -> [UIEntry] {
-        var out: [UIEntry] = []
-        // Map tool_use id → index in `out` so we can rewrite the step in place
-        // when its result comes through.
-        var toolIndex: [String: Int] = [:]
-
-        for turn in turns {
-            switch turn.role {
-            case "user":
-                let text = turn.blocks.compactMap { block -> String? in
-                    if case let .text(s) = block { return s } else { return nil }
-                }.joined(separator: "\n")
-                out.append(UIEntry(kind: .userText(text: text, attachments: turn.attachments)))
-            case "assistant":
-                for block in turn.blocks {
-                    switch block {
-                    case .text(let s):
-                        let trimmed = s.trimmingCharacters(in: .whitespaces)
-                        if !trimmed.isEmpty {
-                            out.append(UIEntry(kind: .assistantText(s)))
-                        }
-                    case .toolUse(let id, let name, let input):
-                        if name == OttoTools.Name.attach_item_preview.rawValue,
-                           let preview = previewFromInput(input) {
-                            out.append(UIEntry(kind: .itemPreview(type: preview.type, itemId: preview.id)))
-                        } else {
-                            let label = OttoToolLabels.describe(name: name, input: input, appState: appState)
-                            let callLabel: String
-                            if let arg = label.arg, !arg.isEmpty {
-                                callLabel = "\(label.verb) \(arg)"
-                            } else {
-                                callLabel = label.verb
-                            }
-                            let entry = UIEntry(
-                                toolUseId: id,
-                                kind: .toolStep(
-                                    callIcon: "wrench.and.screwdriver",
-                                    callLabel: callLabel,
-                                    resultLabel: nil,
-                                    isError: false,
-                                    isInFlight: false  // saved sessions never animate
-                                )
-                            )
-                            toolIndex[id] = out.count
-                            out.append(entry)
-                        }
-                    case .toolResult(let toolUseId, let content, let isError):
-                        if let idx = toolIndex[toolUseId],
-                           idx < out.count,
-                           case .toolStep(_, let callLabel, _, _, _) = out[idx].kind {
-                            let icon = isError ? "exclamationmark.triangle" : "checkmark.circle"
-                            let resultText = formatResultLine(content)
-                            out[idx] = UIEntry(
-                                toolUseId: toolUseId,
-                                kind: .toolStep(
-                                    callIcon: icon,
-                                    callLabel: callLabel,
-                                    resultLabel: resultText,
-                                    isError: isError,
-                                    isInFlight: false
-                                )
-                            )
-                        }
-                    }
-                }
-            default:
-                break
-            }
-        }
-        return out
-    }
-
-    private static func previewFromInput(_ input: JSONValue) -> (type: ContentType, id: UUID)? {
-        guard case let .object(dict) = input,
-              case let .string(typeStr) = dict["type"] ?? .null,
-              let type = ContentType(rawValue: typeStr),
-              case let .string(idStr) = dict["id"] ?? .null,
-              let id = UUID(uuidString: idStr)
-        else { return nil }
-        return (type, id)
     }
 
     // MARK: - Empty State
@@ -224,18 +177,16 @@ struct OttoChatView: View {
         VStack(spacing: Theme.Spacing.lg) {
             Spacer()
 
-            Image(systemName: "brain")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.accent.opacity(0.6))
+            BrandMark(size: 28)
 
             VStack(spacing: Theme.Spacing.sm) {
                 Text("Ask or create")
-                    .font(Theme.Typography.headline)
+                    .font(.system(size: 21, weight: .semibold))
                     .foregroundStyle(Theme.Colors.text)
 
                 Text("Claude or Codex can answer, create, edit, and search across your Otto.")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textDim)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 320)
             }
@@ -244,11 +195,11 @@ struct OttoChatView: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Colors.amber)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No agent backend signed in")
                             .font(Theme.Typography.caption)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.Colors.amber)
                         Text("Run `claude` (Claude Code) or `codex login` in Terminal, then pick a backend in Settings → Agent.")
                             .font(Theme.Typography.small)
                             .foregroundStyle(Theme.Colors.tertiaryText)
@@ -259,29 +210,20 @@ struct OttoChatView: View {
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.vertical, Theme.Spacing.sm)
                 .frame(maxWidth: 380)
-                .background(Color.orange.opacity(0.08))
+                .background(Theme.Colors.tintAmber)
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+                        .strokeBorder(Theme.Colors.amber.opacity(0.4), lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             }
 
             VStack(spacing: Theme.Spacing.sm) {
                 ForEach(suggestions, id: \.self) { suggestion in
-                    Button {
-                        inputText = suggestion
+                    OttoChip(text: suggestion.label) {
+                        inputText = suggestion.prompt
                         sendMessage()
-                    } label: {
-                        Text(suggestion)
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .padding(.horizontal, Theme.Spacing.md)
-                            .padding(.vertical, Theme.Spacing.sm)
-                            .background(Theme.Colors.secondaryBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                     }
-                    .buttonStyle(.plain)
                 }
             }
 
@@ -290,8 +232,20 @@ struct OttoChatView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var suggestions: [String] {
-        var out: [String] = []
+    /// One empty-state suggestion chip: a short pill label, and the (possibly
+    /// longer, more instructive) prompt that's actually sent when clicked.
+    private struct Suggestion: Hashable {
+        let label: String
+        let prompt: String
+
+        init(_ label: String, prompt: String? = nil) {
+            self.label = label
+            self.prompt = prompt ?? label
+        }
+    }
+
+    private var suggestions: [Suggestion] {
+        var out: [Suggestion] = []
 
         let nextTodo = appState.todos
             .filter { !$0.isCompleted }
@@ -299,23 +253,30 @@ struct OttoChatView: View {
             .sorted { $0.1 < $1.1 }
             .first?.0
         if let todo = nextTodo {
-            out.append("What's the status of '\(Self.truncate(todo.title))'?")
+            out.append(Suggestion("What's the status of '\(Self.truncate(todo.title))'?"))
         } else if let urgent = appState.todos.first(where: { !$0.isCompleted && $0.priority == .urgent }) {
-            out.append("Summarize my urgent todo '\(Self.truncate(urgent.title))'")
+            out.append(Suggestion("Summarize my urgent todo '\(Self.truncate(urgent.title))'"))
         }
 
         if let lastMeeting = appState.meetings.sorted(by: { $0.meetingDate > $1.meetingDate }).first {
-            out.append("Summarize my last meeting: \(Self.truncate(lastMeeting.title))")
+            out.append(Suggestion("Summarize my last meeting: \(Self.truncate(lastMeeting.title))"))
         }
 
         if let recentNote = appState.notes.sorted(by: { $0.updatedAt > $1.updatedAt }).first {
-            out.append("What's in my note '\(Self.truncate(recentNote.title))'?")
+            out.append(Suggestion("What's in my note '\(Self.truncate(recentNote.title))'?"))
         }
 
-        out.append("What's on my plate today?")
-        out.append("What are my high priority todos?")
+        if !appState.networkEntries.isEmpty || !appState.companies.isEmpty {
+            out.append(Suggestion(
+                "Update network & companies from the last 7 days",
+                prompt: "Review my meetings, emails, and notes from the last 7 days and update my Network Hub entries, companies, events, and communities with any new information you find — people I met, role or company changes, deal amounts, event plans. List what you changed."
+            ))
+        }
 
-        return Array(out.prefix(4))
+        out.append(Suggestion("What's on my plate today?"))
+        out.append(Suggestion("What are my high priority todos?"))
+
+        return Array(out.prefix(5))
     }
 
     private static func truncate(_ s: String, max: Int = 40) -> String {
@@ -331,19 +292,57 @@ struct OttoChatView: View {
     /// pulsing on its own AND no streaming text/thinking bubble actively
     /// growing. Two activity signals at once would just be noise.
     private var idleIndicatorVisible: Bool {
-        guard isLoading else { return false }
-        guard let lastKind = uiEntries.last?.kind else { return true }
+        guard isRunLiveHere else { return false }
+        guard let lastKind = displayedEntries.last?.kind else { return true }
         if lastKind.isInFlightToolStep { return false }
         if lastKind.isStreaming { return false }
         return true
+    }
+
+    /// One renderable row of the transcript: either a standalone entry, or a
+    /// run of consecutive tool-step chips folded into a collapsible group so
+    /// the transcript isn't wallpapered with raw tool calls.
+    private enum DisplayItem: Identifiable {
+        case single(ChatUIEntry)
+        case toolGroup([ChatUIEntry])
+
+        var id: UUID {
+            switch self {
+            case .single(let entry):     return entry.id
+            case .toolGroup(let group):  return group.first?.id ?? UUID()
+            }
+        }
+    }
+
+    /// Fold consecutive `.toolStep` entries into `.toolGroup` items. Text
+    /// bubbles, preview cards, and approval prompts stay standalone and
+    /// naturally split groups between tool rounds.
+    private var displayItems: [DisplayItem] {
+        var out: [DisplayItem] = []
+        var group: [ChatUIEntry] = []
+        func flush() {
+            guard !group.isEmpty else { return }
+            out.append(.toolGroup(group))
+            group = []
+        }
+        for entry in displayedEntries {
+            if entry.kind.isToolStep {
+                group.append(entry)
+            } else {
+                flush()
+                out.append(.single(entry))
+            }
+        }
+        flush()
+        return out
     }
 
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: Theme.Spacing.md) {
-                    ForEach(uiEntries) { entry in
-                        entryView(entry).id(entry.id)
+                    ForEach(displayItems) { item in
+                        displayItemView(item).id(item.id)
                     }
 
                     if idleIndicatorVisible {
@@ -353,8 +352,8 @@ struct OttoChatView: View {
                 }
                 .padding(.vertical, Theme.Spacing.md)
             }
-            .onChange(of: uiEntries.count) { _, _ in
-                if let last = uiEntries.last?.id {
+            .onChange(of: displayedEntries.count) { _, _ in
+                if let last = displayItems.last?.id {
                     withAnimation { proxy.scrollTo(last, anchor: .bottom) }
                 }
             }
@@ -367,12 +366,36 @@ struct OttoChatView: View {
     }
 
     @ViewBuilder
-    private func entryView(_ entry: UIEntry) -> some View {
+    private func displayItemView(_ item: DisplayItem) -> some View {
+        switch item {
+        case .single(let entry):
+            entryView(entry)
+        case .toolGroup(let group):
+            ToolCallGroup(
+                entries: group,
+                isExpanded: Binding(
+                    get: { expandedToolGroups.contains(item.id) },
+                    set: { expanded in
+                        if expanded {
+                            expandedToolGroups.insert(item.id)
+                        } else {
+                            expandedToolGroups.remove(item.id)
+                        }
+                    }
+                )
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func entryView(_ entry: ChatUIEntry) -> some View {
         switch entry.kind {
         case .userText(let text, let attachments):
             MessageBubble(text: text, isUser: true, attachments: attachments)
         case .assistantText(let text):
-            MessageBubble(text: text, isUser: false, attachments: [])
+            MessageBubble(text: text, isUser: false, attachments: [], onOttoLink: { url in
+                openOttoItem(url)
+            })
         case .assistantTextStreaming(let text):
             // Same bubble layout as `.assistantText`, plus a trailing
             // caret that pulses while deltas are landing.
@@ -388,43 +411,63 @@ struct OttoChatView: View {
                 isInFlight: isInFlight
             )
         case .itemPreview(let type, let itemId):
-            ItemPreviewCard(type: type, itemId: itemId)
+            ItemPreviewCard(type: type, itemId: itemId) { detail in
+                previewDetail = detail
+            }
         case .approvalRequest(let approvalId, let toolName, let argsSummary, let resolved):
             ApprovalPromptView(
                 toolName: toolName,
                 argsSummary: argsSummary,
                 resolved: resolved
             ) { decision, isAllow in
-                resolveApproval(approvalId: approvalId, toolName: toolName, decision: decision, isAllow: isAllow)
+                viewedController?.resolveApproval(
+                    approvalId: approvalId,
+                    toolName: toolName,
+                    decision: decision,
+                    isAllow: isAllow
+                )
             }
         }
     }
 
-    /// Routes the user's button click back into `HermesAgentService` and
-    /// flips the corresponding UIEntry to `resolved: true` so the card stops
-    /// accepting further clicks. Also writes "always" decisions to
-    /// `ToolApprovalPolicy` so future runs auto-resolve.
-    private func resolveApproval(approvalId: String, toolName: String, decision: ApprovalDecision, isAllow: Bool) {
-        if decision == .alwaysAllow || decision == .alwaysDeny {
-            ToolApprovalPolicy.shared.setDecision(decision, for: toolName)
-        }
-        // ACP's option ids aren't fixed strings — they're whatever the agent
-        // sent us. HermesAgentService knows which optionId to send back
-        // given an allow/deny choice and uses the option `kind` field to
-        // pick (see PendingApproval.options). We forward a synthetic id
-        // that HermesAgentService maps internally.
-        let optionId = isAllow ? "__otto_allow" : "__otto_reject"
-        Task {
-            await HermesAgentService.shared.resolveApproval(approvalId: approvalId, selectedOptionId: optionId)
-        }
-        // Flip the entry to resolved.
-        if let idx = uiEntries.lastIndex(where: { entry in
-            if case .approvalRequest(let aid, _, _, _) = entry.kind { return aid == approvalId }
-            return false
-        }) {
-            if case .approvalRequest(let aid, let tn, let s, _) = uiEntries[idx].kind {
-                uiEntries[idx].kind = .approvalRequest(approvalId: aid, toolName: tn, argsSummary: s, resolved: true)
-            }
+    /// Open the detail popup for an inline `otto://<type>/<id>` chip clicked
+    /// inside assistant text. Unknown/deleted items are a silent no-op.
+    private func openOttoItem(_ url: URL) {
+        guard let parsed = OttoTools.parseItemURL(url),
+              let detail = PreviewDetail.resolve(type: parsed.type, itemId: parsed.id, appState: appState)
+        else { return }
+        previewDetail = detail
+    }
+
+    /// Detail/edit popup for a clicked preview card. Types the shared
+    /// search-result popup can render go through it; the rest open their
+    /// dedicated editor sheet.
+    @ViewBuilder
+    private func previewDetailSheet(_ detail: PreviewDetail) -> some View {
+        switch detail {
+        case .result(let result):
+            SearchResultDetailPopup(result: result, onClose: {
+                previewDetail = nil
+            })
+            .environment(appState)
+        case .network(let entry):
+            NetworkEntryEditor(entry: entry, onClose: { previewDetail = nil })
+                .environment(appState)
+        case .company(let company):
+            CompanyEditorSheet(company: company)
+                .environment(appState)
+        case .event(let event):
+            EventEditorSheet(event: event)
+                .environment(appState)
+        case .community(let community):
+            CommunityEditorSheet(community: community)
+                .environment(appState)
+        case .habit(let habit):
+            // HabitDetailView is a self-contained card built for the habits
+            // tab's overlay; give it a concrete frame when hosted in a sheet.
+            HabitDetailView(habit: habit, onClose: { previewDetail = nil })
+                .frame(width: 680, height: 620)
+                .environment(appState)
         }
     }
 
@@ -436,84 +479,92 @@ struct OttoChatView: View {
                 attachmentStrip
             }
 
-            HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
-                if !uiEntries.isEmpty {
-                    Button {
-                        newConversation()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.Colors.secondaryBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                    }
-                    .buttonStyle(.plain)
-                    .help("New conversation")
-                }
-
-                HStack(alignment: .bottom, spacing: Theme.Spacing.sm) {
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Image(systemName: "paperclip")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Attach files (csv, xlsx, pdf, png, jpeg…)")
-
-                    TextField("Ask or create — todos, notes, ideas, reminders…", text: $inputText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Typography.body)
-                        .lineLimit(1...6)
-                        .focused($inputFocused)
-                        .onKeyPress(.return, phases: .down) { press in
-                            // Shift+Return inserts a newline (let the vertical
-                            // TextField handle it); plain Return submits.
-                            if press.modifiers.contains(.shift) {
-                                return .ignored
-                            }
-                            if canSend { sendMessage() }
-                            return .handled
-                        }
-
-                    Button {
-                        appState.showVoiceOverlay = true
-                    } label: {
-                        Image(systemName: "mic.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(Theme.Colors.aiAccent)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Voice mode — talk to Otto")
-
-                    Button {
-                        if isLoading { stopRun() } else { sendMessage() }
-                    } label: {
-                        Image(systemName: isLoading ? "stop.circle.fill" : "arrow.up.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(isLoading || canSend ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                    }
-                    .buttonStyle(.plain)
-                    // Enabled while loading (to act as Stop) or when there's
-                    // something to send.
-                    .disabled(!isLoading && !canSend)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help(isLoading ? "Stop" : "Send")
-                }
-                .padding(.horizontal, Theme.Spacing.sm)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Theme.Colors.secondaryBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .strokeBorder(Theme.Colors.border.opacity(0.4), lineWidth: 0.5)
-                        )
-                )
+            // A run is streaming into a session that's NOT on screen — say
+            // so and offer a jump. Sending here is still allowed: runs are
+            // per-conversation now.
+            if let backgroundId = otherRunningSessionId {
+                backgroundRunHint(sessionId: backgroundId)
             }
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                TextField("Ask or create — todos, notes, ideas, reminders…", text: $inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.Colors.text)
+                    .lineLimit(1...6)
+                    .focused($inputFocused)
+                    .onKeyPress(.return, phases: .down) { press in
+                        // Shift+Return inserts a newline (let the vertical
+                        // TextField handle it); plain Return submits.
+                        if press.modifiers.contains(.shift) {
+                            return .ignored
+                        }
+                        if canSend { sendMessage() }
+                        return .handled
+                    }
+                    .padding(.horizontal, 2)
+
+                HStack(spacing: 10) {
+                    ComposerGhostButton(icon: "plus", help: "Attach files (csv, xlsx, pdf, png, jpeg…)") {
+                        showFileImporter = true
+                    }
+
+                    ComposerGhostButton(icon: "mic", help: "Voice mode — talk to Otto") {
+                        appState.showVoiceOverlay = true
+                    }
+
+                    if !displayedEntries.isEmpty {
+                        ComposerGhostButton(icon: "square.and.pencil", help: "New conversation") {
+                            newConversation()
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        if isRunLiveHere {
+                            viewedController?.stop(appState: appState)
+                        } else {
+                            sendMessage()
+                        }
+                    } label: {
+                        Image(systemName: isRunLiveHere ? "stop.fill" : "arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.onAccent)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .fill(
+                                        isRunLiveHere || canSend
+                                            ? Theme.Colors.accent
+                                            : Theme.Colors.accent.opacity(0.35)
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    // Enabled while the on-screen session is running (to act
+                    // as Stop) or when there's something to send.
+                    .disabled(!isRunLiveHere && !canSend)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help(isRunLiveHere ? "Stop" : "Send")
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                    .fill(Theme.Colors.bgInput)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                    .strokeBorder(
+                        (composerHovered || inputFocused) ? Theme.Colors.accent : Theme.Colors.borderStrong,
+                        lineWidth: 1
+                    )
+            )
+            .animation(.easeInOut(duration: 0.15), value: composerHovered || inputFocused)
+            .onHover { composerHovered = $0 }
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
@@ -547,10 +598,42 @@ struct OttoChatView: View {
         }
     }
 
+    /// Runs are per-conversation, so sending is only blocked while THIS
+    /// session is streaming — other sessions can work in parallel.
     private var canSend: Bool {
-        guard !isLoading else { return false }
+        guard !isRunLiveHere else { return false }
         if !pendingAttachments.isEmpty { return true }
         return !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Compact banner shown when a run is streaming into another session.
+    private func backgroundRunHint(sessionId: UUID) -> some View {
+        let count = appState.chatRuns.runningSessionIds.filter { $0 != appState.activeChatSessionId }.count
+        let title = appState.chatSession(sessionId)?.title ?? "another chat"
+        let label = count > 1
+            ? "Otto is working in \(count) other chats"
+            : "Otto is still working in “\(title)”"
+        return HStack(spacing: Theme.Spacing.sm) {
+            ProgressView()
+                .controlSize(.small)
+            Text(label)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.secondaryText)
+                .lineLimit(1)
+            Spacer()
+            Button {
+                appState.activeChatSessionId = sessionId
+            } label: {
+                Text("View")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.accent)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(Theme.Colors.secondaryBackground.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
     // MARK: - File Import
@@ -591,375 +674,37 @@ struct OttoChatView: View {
     private func consumePendingPromptIfNeeded() {
         guard let prompt = appState.pendingChatPrompt, !prompt.isEmpty else { return }
         appState.pendingChatPrompt = nil
-        guard !isLoading else { return }
+        guard !isRunLiveHere else { return }
         inputText = prompt
         sendMessage()
     }
 
+    /// Hand the prompt to this conversation's run controller (created on
+    /// first send) — it owns the turn log, streams events, and persists the
+    /// session from the very first turn, so the query survives this view
+    /// being torn down mid-run. Other conversations' runs are unaffected.
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = pendingAttachments
-        guard (!text.isEmpty || !attachments.isEmpty), !isLoading else { return }
-
-        // If the user only attached files without typing, send a default prompt
-        // so Claude has something to respond to.
-        let baseText = text.isEmpty ? "(see attached files)" : text
-
-        // Show the user's bubble immediately. The turn that Claude actually
-        // sees may be augmented with a context note (intent routing) inside
-        // the Task below — we reconcile that before calling Claude.
-        turns.append(ChatTurn(role: "user", blocks: [.text(baseText)], attachments: attachments))
-        uiEntries.append(UIEntry(kind: .userText(text: text, attachments: attachments)))
+        guard !text.isEmpty || !attachments.isEmpty else { return }
+        let controller = appState.chatRuns.openController(
+            for: appState.activeChatSessionId,
+            appState: appState
+        )
+        guard !controller.isRunning else { return }
 
         inputText = ""
         pendingAttachments = []
-        isLoading = true
-        error = nil
-
-        let state = appState
-        let detectedIntent = IntentRouter.detect(userInput: text)
-        let capturedTurns = turns
-
-        runTask = Task {
-            // Deterministic intent side-effect (may be async, e.g. screen capture).
-            // Runs before Claude so the URL is open / screenshot is saved by the
-            // time the model reads its context note.
-            var turnsForClaude = capturedTurns
-            if let intent = detectedIntent {
-                await IntentRouter.apply(intent, appState: state)
-                if var lastTurn = turnsForClaude.popLast() {
-                    let annotated = baseText + "\n" + IntentRouter.contextNote(for: intent)
-                    lastTurn = ChatTurn(
-                        role: lastTurn.role,
-                        blocks: [.text(annotated)],
-                        attachments: lastTurn.attachments,
-                        timestamp: lastTurn.timestamp
-                    )
-                    turnsForClaude.append(lastTurn)
-                }
-            }
-
-            let executor = await MainActor.run { OttoToolExecutor(appState: state) }
-            let systemPrompt = state.claude.buildSystemPrompt(from: state)
-
-            do {
-                let updated = try await state.claude.chatWithTools(
-                    turns: turnsForClaude,
-                    systemPrompt: systemPrompt,
-                    tools: OttoTools.all,
-                    executor: executor,
-                    onEvent: { event in
-                        handleEvent(event)
-                    }
-                )
-                // User hit Stop mid-run: stopRun() already reset the UI, so
-                // drop this turn's result instead of appending a late reply.
-                if Task.isCancelled { return }
-                await MainActor.run {
-                    self.turns = updated
-                    self.isLoading = false
-                }
-                // Persist the rich session (turns + tool calls) and the
-                // legacy flattened askHistory in parallel so old code paths
-                // that read askHistory continue to work.
-                await persistSession(turns: updated)
-                let flattened = flattenForHistory(updated)
-                await state.addToAskHistory(messages: flattened)
-            } catch {
-                // A user-initiated Stop surfaces as a cancellation / killed
-                // subprocess — that's expected, not an error to flag.
-                if Task.isCancelled {
-                    await MainActor.run { self.isLoading = false }
-                } else {
-                    await MainActor.run {
-                        self.error = error.localizedDescription
-                        self.isLoading = false
-                        Sounds.play(.error)
-                    }
-                }
-            }
-        }
+        controller.send(text: text, attachments: attachments, appState: appState)
     }
 
-    /// Stop the in-flight agent run and free the input for a new prompt.
-    /// Cancels the Swift task driving the turn (so its late result is dropped)
-    /// and tells the active backend to abort: Hermes cancels the current ACP
-    /// turn (session preserved), the CLI backends terminate their subprocess.
-    private func stopRun() {
-        guard isLoading else { return }
-        runTask?.cancel()
-        runTask = nil
-        let state = appState
-        Task { await state.claude.cancelActiveRun() }
-        isLoading = false
-    }
-
-    @MainActor
-    private func handleEvent(_ event: ChatEvent) {
-        switch event {
-        case .partialText(let chunk):
-            guard !chunk.isEmpty else { return }
-            // Mutate `kind` on the existing entry in place — assigning a
-            // freshly-constructed UIEntry would change its `id`, which
-            // SwiftUI's ForEach treats as a delete+insert, re-mounting
-            // the row on every delta and effectively making the streaming
-            // bubble invisible (you only ever see the finalized state).
-            if let lastIdx = uiEntries.indices.last,
-               case .assistantTextStreaming(let existing) = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx].kind = .assistantTextStreaming(existing + chunk)
-            } else {
-                uiEntries.append(UIEntry(kind: .assistantTextStreaming(chunk)))
-            }
-        case .thinkingDelta(let chunk):
-            guard !chunk.isEmpty else { return }
-            // Thinking and final text can interleave; merge into the most
-            // recent thinking entry if it's the last thing we added, else
-            // start a new one. Mutate `kind` in place for the same
-            // identity-stability reason as `.partialText` above.
-            if let lastIdx = uiEntries.indices.last,
-               case .thinkingStream(let existing) = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx].kind = .thinkingStream(existing + chunk)
-            } else {
-                uiEntries.append(UIEntry(kind: .thinkingStream(chunk)))
-            }
-        case .text(let text):
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-            // Promote the streaming bubble to its finalized form by
-            // mutating `kind` — same identity-stability reasoning.
-            if let lastIdx = uiEntries.indices.last,
-               case .assistantTextStreaming = uiEntries[lastIdx].kind {
-                uiEntries[lastIdx].kind = .assistantText(text)
-            } else {
-                uiEntries.append(UIEntry(kind: .assistantText(text)))
-            }
-        case .toolCall(let id, let name, let input):
-            // attach_item_preview renders as a card directly — no chip.
-            if name == OttoTools.Name.attach_item_preview.rawValue,
-               let preview = parseItemPreview(from: input) {
-                uiEntries.append(UIEntry(kind: .itemPreview(type: preview.type, itemId: preview.id)))
-                return
-            }
-            let label = OttoToolLabels.describe(name: name, input: input, appState: appState)
-            uiEntries.append(UIEntry(
-                toolUseId: id,
-                kind: .toolStep(
-                    callIcon: "wrench.and.screwdriver",
-                    callLabel: composedCallLabel(label),
-                    resultLabel: nil,
-                    isError: false,
-                    isInFlight: true
-                )
-            ))
-        case .toolResult(let id, let name, let summary, let isError):
-            // attach_item_preview already rendered a card on the toolCall event; the
-            // result event is a no-op so we don't show a redundant checkmark chip.
-            if name == OttoTools.Name.attach_item_preview.rawValue { return }
-
-            // Settle the matching in-flight step in place: keep the call line,
-            // swap the icon, fill in the result line, drop the pulse.
-            let idx = uiEntries.lastIndex(where: { entry in
-                guard let uid = entry.toolUseId, entry.kind.isInFlightToolStep else { return false }
-                return uid == id
-            }) ?? uiEntries.lastIndex(where: { $0.kind.isInFlightToolStep })
-
-            let icon = isError ? "exclamationmark.triangle" : "checkmark.circle"
-            let resultText = Self.formatResultLine(summary)
-
-            if let idx,
-               case .toolStep(_, let callLabel, _, _, _) = uiEntries[idx].kind {
-                uiEntries[idx] = UIEntry(
-                    toolUseId: uiEntries[idx].toolUseId,
-                    kind: .toolStep(
-                        callIcon: icon,
-                        callLabel: callLabel,
-                        resultLabel: resultText,
-                        isError: isError,
-                        isInFlight: false
-                    )
-                )
-            } else {
-                // Fallback: result arrived without a matching call (shouldn't
-                // happen, but keep something visible rather than dropping it).
-                uiEntries.append(UIEntry(
-                    toolUseId: id,
-                    kind: .toolStep(
-                        callIcon: icon,
-                        callLabel: prettyToolName(name),
-                        resultLabel: resultText,
-                        isError: isError,
-                        isInFlight: false
-                    )
-                ))
-            }
-        case .approvalRequest(let approvalId, let toolName, let argsSummary):
-            uiEntries.append(UIEntry(
-                kind: .approvalRequest(
-                    approvalId: approvalId,
-                    toolName: toolName,
-                    argsSummary: argsSummary,
-                    resolved: false
-                )
-            ))
-        }
-    }
-
-    private func composedCallLabel(_ label: OttoToolLabels.Label) -> String {
-        if let arg = label.arg, !arg.isEmpty {
-            return "\(label.verb) \(arg)"
-        }
-        return "\(label.verb)…"
-    }
-
-    private static func formatResultLine(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count <= 100 { return trimmed }
-        return String(trimmed.prefix(99)) + "…"
-    }
-
-    private func parseItemPreview(from input: [String: Any]) -> (type: ContentType, id: UUID)? {
-        guard let typeStr = input["type"] as? String,
-              let type = ContentType(rawValue: typeStr),
-              let idStr = input["id"] as? String,
-              let id = UUID(uuidString: idStr)
-        else { return nil }
-        return (type, id)
-    }
-
+    /// Navigation only — a run that's still streaming keeps going in its own
+    /// session (reachable via the history sidebar) and stays persisted.
     private func newConversation() {
-        turns = []
-        uiEntries = []
-        inputText = ""
-        error = nil
-        sessionId = nil
         appState.activeChatSessionId = nil
-    }
-
-    /// Upsert the active chat session in AppState. Creates a session id on
-    /// the first save so subsequent turns update in place.
-    @MainActor
-    private func persistSession(turns: [ChatTurn]) async {
-        guard !turns.isEmpty else { return }
-        let id = sessionId ?? UUID()
-        let existing = appState.chatSession(id)
-        let session = ChatSession(
-            id: id,
-            title: existing?.title,
-            turns: turns,
-            createdAt: existing?.createdAt ?? Date(),
-            updatedAt: Date()
-        )
-        sessionId = id
-        appState.activeChatSessionId = id
-        await appState.upsertChatSession(session)
-    }
-
-    // MARK: - Helpers
-
-    private func prettyToolName(_ raw: String) -> String {
-        switch raw {
-        case "create_todo": return "Creating todo"
-        case "create_note": return "Creating note"
-        case "create_idea": return "Creating idea"
-        case "create_reminder": return "Creating reminder"
-        case "create_bookmark": return "Saving bookmark"
-        case "update_todo": return "Updating todo"
-        case "update_note": return "Updating note"
-        case "update_idea": return "Updating idea"
-        case "complete_todo": return "Completing todo"
-        case "uncomplete_todo": return "Reopening todo"
-        case "complete_reminder": return "Completing reminder"
-        case "delete_item": return "Deleting item"
-        case "search_items": return "Searching"
-        case "get_item": return "Fetching details"
-        case "attach_item_preview": return "Attaching preview"
-        case "open_url": return "Opening website"
-        case "create_habit": return "Creating habit"
-        case "log_habit_entry": return "Logging habit entry"
-        case "complete_habit": return "Completing habit"
-        case "list_habits": return "Listing habits"
-        default: return raw.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
-    /// Convert a full tool-calling turn log into plain [ChatMessage] for askHistory persistence.
-    private func flattenForHistory(_ turns: [ChatTurn]) -> [ChatMessage] {
-        var out: [ChatMessage] = []
-        for turn in turns {
-            var pieces: [String] = []
-            if !turn.attachments.isEmpty {
-                let names = turn.attachments.map { "📎 \($0.filename)" }.joined(separator: ", ")
-                pieces.append(names)
-            }
-            for block in turn.blocks {
-                switch block {
-                case .text(let s):
-                    if !s.trimmingCharacters(in: .whitespaces).isEmpty { pieces.append(s) }
-                case .toolUse(_, let name, let input):
-                    let line = OttoToolLabels.oneLine(name: name, input: input, appState: appState)
-                    pieces.append("[\(line.lowercased())]")
-                case .toolResult:
-                    break  // results already implied by the assistant text that follows
-                }
-            }
-            let combined = pieces.joined(separator: "\n\n")
-            if !combined.isEmpty {
-                out.append(ChatMessage(role: turn.role, content: combined, timestamp: turn.timestamp))
-            }
-        }
-        return out
-    }
-}
-
-// MARK: - UI Entry Model
-
-private struct UIEntry: Identifiable {
-    let id = UUID()
-    /// Anthropic tool_use id, when this entry represents a tool step.
-    /// Used to match a `.toolResult` back to its originating call.
-    var toolUseId: String?
-    var kind: Kind
-
-    enum Kind {
-        case userText(text: String, attachments: [ChatAttachment])
-        case assistantText(String)
-        /// Assistant text that's still being streamed in — visually
-        /// identical to `.assistantText` but flagged so `handleEvent` can
-        /// keep appending deltas to the same bubble. Replaced with the
-        /// finalized `.assistantText` when the canonical `.text(...)`
-        /// event lands at end-of-turn.
-        case assistantTextStreaming(String)
-        /// Streaming "chain of thought" from the model. Rendered dim and
-        /// italic above the eventual answer so the user can follow the
-        /// agent's reasoning. Stays visible after the turn ends.
-        case thinkingStream(String)
-        /// A single Claude tool step: the call line ("Searching for 'recipe'")
-        /// and an optional result line ("→ Found 3 results"). While the call
-        /// is in flight the icon pulses and `resultLabel` is nil.
-        case toolStep(callIcon: String, callLabel: String, resultLabel: String?, isError: Bool, isInFlight: Bool)
-        case itemPreview(type: ContentType, itemId: UUID)
-        /// Hermes (ACP) approval card. `approvalId` is the opaque key
-        /// `HermesAgentService` uses to match the user's decision back to
-        /// the in-flight `session/request_permission` request. `resolved`
-        /// flips to true once the user clicks a button so the buttons
-        /// fade out and stop accepting input.
-        case approvalRequest(approvalId: String, toolName: String, argsSummary: String, resolved: Bool)
-
-        var isUser: Bool { if case .userText = self { return true }; return false }
-        var isToolStep: Bool { if case .toolStep = self { return true }; return false }
-        var isInFlightToolStep: Bool {
-            if case .toolStep(_, _, _, _, let inFlight) = self { return inFlight }
-            return false
-        }
-        /// Any entry that's actively absorbing streamed content — used by
-        /// the idle-dots indicator to suppress itself the moment real
-        /// output starts flowing in.
-        var isStreaming: Bool {
-            switch self {
-            case .assistantTextStreaming, .thinkingStream: return true
-            default: return false
-            }
-        }
+        loadedSessionId = nil
+        loadedEntries = []
+        inputText = ""
     }
 }
 
@@ -969,10 +714,22 @@ private struct MessageBubble: View {
     let text: String
     let isUser: Bool
     let attachments: [ChatAttachment]
+    /// Click handler for inline `otto://` item chips in assistant text.
+    var onOttoLink: ((URL) -> Void)? = nil
+
+    @State private var isHovering = false
+    @State private var justCopied = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if isUser { Spacer(minLength: 60) }
+        HStack(alignment: .top, spacing: isUser ? 0 : Theme.Spacing.md) {
+            if isUser {
+                // Push the bubble right; the min length approximates the
+                // mockup's ~78% max width for the user message.
+                Spacer(minLength: 90)
+            } else {
+                BrandMark(size: 18)
+                    .padding(.top, 2)
+            }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: Theme.Spacing.xs) {
                 if !attachments.isEmpty {
@@ -984,30 +741,62 @@ private struct MessageBubble: View {
                 }
 
                 if !text.isEmpty {
-                    // User messages stay plain; assistant messages render Claude's markdown
-                    // (headers, bold, lists, etc.) via MarkdownContent so ### and ** don't
-                    // show as literal characters.
-                    Group {
-                        if isUser {
-                            Text(text)
-                                .font(Theme.Typography.body)
-                                .textSelection(.enabled)
-                        } else {
-                            MarkdownContent(text)
-                                .textSelection(.enabled)
-                        }
+                    // One NSTextView per bubble so the whole message is a single,
+                    // natively-selectable text region (SwiftUI's .textSelection made
+                    // every markdown block its own selection island and dropped
+                    // drags inside the scroll view). User messages stay plain;
+                    // assistant messages render Claude's markdown so ### and **
+                    // don't show as literal characters.
+                    if isUser {
+                        SelectableMessageText(attributed: ChatMessageRenderer.plain(text))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                                    .fill(Theme.Colors.userBubble)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                            )
+                    } else {
+                        // Assistant messages have no bubble — just the mark and text.
+                        SelectableMessageText(
+                            attributed: ChatMessageRenderer.markdown(text),
+                            onOttoLink: onOttoLink
+                        )
                     }
-                    .padding(.horizontal, Theme.Spacing.md)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(isUser ? Theme.Colors.accent.opacity(0.12) : Theme.Colors.secondaryBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+
+                    copyButton
                 }
             }
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
 
-            if !isUser { Spacer(minLength: 60) }
+            if !isUser { Spacer(minLength: 40) }
         }
         .padding(.horizontal, Theme.Spacing.lg)
+        .onHover { isHovering = $0 }
+    }
+
+    // Icon-only copy control under the bubble; kept in the layout at zero
+    // opacity when idle so revealing it on hover never shifts the transcript.
+    private var copyButton: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            justCopied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { justCopied = false }
+        } label: {
+            Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(justCopied ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy message")
+        .opacity(isHovering || justCopied ? 1 : 0)
+        .animation(.easeOut(duration: 0.15), value: isHovering)
     }
 }
 
@@ -1034,7 +823,7 @@ private struct AttachmentChip: View {
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
                 Text(attachment.formattedSize)
-                    .font(Theme.Typography.small)
+                    .font(Theme.Typography.monoSmall)
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
 
@@ -1052,10 +841,10 @@ private struct AttachmentChip: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(Theme.Colors.secondaryBackground)
+                .fill(Theme.Colors.panel)
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.Colors.border.opacity(0.4), lineWidth: 0.5)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
                 )
         )
     }
@@ -1074,6 +863,36 @@ private struct AttachmentChip: View {
     }
 }
 
+// MARK: - Composer Ghost Button
+//
+// 26pt icon-only button for the composer's bottom row (mockup .cbtn):
+// tertiary tint that brightens to full text color on hover, subtle
+// hover tint background, no border.
+
+private struct ComposerGhostButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(hover ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(hover ? Theme.Colors.hoverTint : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .help(help)
+    }
+}
+
 // MARK: - Idle Step Indicator
 //
 // Three small dots that bounce in sequence. Shown only between Claude's
@@ -1082,26 +901,56 @@ private struct AttachmentChip: View {
 
 private struct IdleStepIndicator: View {
     @State private var animating = false
+    @State private var word: String = IdleStepIndicator.words.randomElement() ?? "thinking"
+
+    /// Rotating status verbs shown while the agent works — picked at random
+    /// so long waits feel alive instead of stuck on three dots.
+    static let words: [String] = [
+        "thinking", "tinkering", "calculating", "pondering", "scheming",
+        "rummaging", "cross-referencing", "connecting dots", "digging",
+        "sifting", "brewing", "noodling", "mulling", "crunching",
+        "sleuthing", "wrangling", "assembling", "untangling",
+        "triangulating", "deliberating", "cogitating", "ruminating",
+        "synthesizing", "consulting the archives", "shuffling papers",
+        "warming up neurons", "herding tokens", "polishing the answer",
+        "double-checking", "plotting"
+    ]
+
+    private let cycle = Timer.publish(every: 1.4, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .fill(Theme.Colors.accent.opacity(0.8))
-                    .frame(width: 5, height: 5)
-                    .opacity(animating ? 1.0 : 0.25)
-                    .animation(
-                        .easeInOut(duration: 0.55)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(i) * 0.18),
-                        value: animating
-                    )
+        HStack(spacing: Theme.Spacing.sm) {
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(Theme.Colors.accent.opacity(0.8))
+                        .frame(width: 5, height: 5)
+                        .opacity(animating ? 1.0 : 0.25)
+                        .animation(
+                            .easeInOut(duration: 0.55)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(i) * 0.18),
+                            value: animating
+                        )
+                }
             }
+            Text("\(word)…")
+                .font(Theme.Typography.caption.italic())
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .id(word)  // remount per word so the transition animates
+                .transition(.opacity)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, 6)
         .onAppear { animating = true }
+        .onReceive(cycle) { _ in
+            var next = Self.words.randomElement() ?? word
+            while next == word && Self.words.count > 1 {
+                next = Self.words.randomElement() ?? word
+            }
+            withAnimation(.easeInOut(duration: 0.25)) { word = next }
+        }
     }
 }
 
@@ -1117,18 +966,17 @@ private struct StreamingAssistantBubble: View {
     @State private var caretOn = true
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                (Text(text)
-                    + Text(caretOn ? "▍" : "  ")
-                        .foregroundStyle(Theme.Colors.accent))
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.sm)
-            Spacer(minLength: 60)
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+            BrandMark(size: 18)
+                .padding(.top, 2)
+            (Text(text)
+                + Text(caretOn ? "▍" : "  ")
+                    .foregroundStyle(Theme.Colors.accent))
+                .font(.system(size: 13.5))
+                .lineSpacing(3)
+                .foregroundStyle(Theme.Colors.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 40)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .onAppear {
@@ -1149,6 +997,7 @@ private struct StreamingAssistantBubble: View {
 
 private struct ThinkingBubble: View {
     let text: String
+    @State private var pulse = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
@@ -1158,18 +1007,118 @@ private struct ThinkingBubble: View {
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Thinking")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .tracking(1)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .opacity(pulse ? 0.45 : 1.0)
+                    .animation(
+                        .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                        value: pulse
+                    )
                 Text(text)
-                    .font(Theme.Typography.caption.italic())
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(.system(size: 12).italic())
+                    .foregroundStyle(Theme.Colors.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.xs)
+        .onAppear { pulse = true }
+    }
+}
+
+// MARK: - Tool Call Group
+//
+// Consecutive tool-step chips fold into one collapsed disclosure row so the
+// transcript reads as a conversation, not a tool log. Collapsed, the row
+// shows "N tool calls" — or, while a call is running, its live label with a
+// pulsing icon so activity stays visible. "See tool calls" expands the full
+// ToolStepRow list.
+
+private struct ToolCallGroup: View {
+    let entries: [ChatUIEntry]
+    @Binding var isExpanded: Bool
+
+    @State private var pulse: Bool = false
+
+    /// Label of the most recent still-running call, if any.
+    private var inFlightLabel: String? {
+        for entry in entries.reversed() {
+            if case .toolStep(_, let call, _, _, true) = entry.kind { return call }
+        }
+        return nil
+    }
+
+    private var hasError: Bool {
+        entries.contains { entry in
+            if case .toolStep(_, _, _, true, _) = entry.kind { return true }
+            return false
+        }
+    }
+
+    private var headerLabel: String {
+        if !isExpanded, let live = inFlightLabel { return live }
+        let n = entries.count
+        return n == 1 ? "1 tool call" : "\(n) tool calls"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Image(systemName: hasError ? "exclamationmark.triangle" : "wrench.and.screwdriver")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(hasError ? Theme.Colors.amber : Theme.Colors.tertiaryText)
+                        .opacity(inFlightLabel != nil ? (pulse ? 0.35 : 1.0) : 1.0)
+                        .animation(
+                            inFlightLabel != nil
+                                ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                                : .default,
+                            value: pulse
+                        )
+                    Text(headerLabel)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .lineLimit(1)
+                    if !isExpanded && inFlightLabel == nil {
+                        Text("See tool calls")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Hide tool calls" : "See tool calls")
+            .padding(.horizontal, Theme.Spacing.lg)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    ForEach(entries) { entry in
+                        if case .toolStep(let icon, let call, let result, let isError, let inFlight) = entry.kind {
+                            ToolStepRow(
+                                callIcon: icon,
+                                callLabel: call,
+                                resultLabel: result,
+                                isError: isError,
+                                isInFlight: inFlight
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear { pulse = inFlightLabel != nil }
+        .onChange(of: inFlightLabel != nil) { _, running in
+            pulse = running
+        }
     }
 }
 
@@ -1192,54 +1141,58 @@ private struct ToolStepRow: View {
 
     @State private var pulse: Bool = false
 
-    private var tint: Color {
-        isError ? Theme.Colors.amber : Theme.Colors.accent
+    /// Icon tint: green checkmark once done, amber on error, dim while
+    /// the call is still in flight.
+    private var iconTint: Color {
+        if isError { return Theme.Colors.amber }
+        return isInFlight ? Theme.Colors.textDim : Theme.Colors.green
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: callIcon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(isError ? Theme.Colors.amber : tint.opacity(0.85))
-                    .opacity(isInFlight ? (pulse ? 0.35 : 1.0) : 1.0)
-                    .animation(
-                        isInFlight
-                            ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
-                            : .default,
-                        value: pulse
-                    )
-                Text(callLabel)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.text)
-                Spacer(minLength: 0)
-            }
-
-            if let resultLabel, !resultLabel.isEmpty {
-                HStack(spacing: 0) {
-                    // Indent so the arrow lines up roughly under the call text.
-                    Text("→ ")
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text(resultLabel)
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.secondaryText)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: callIcon)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(iconTint)
+                        .opacity(isInFlight ? (pulse ? 0.35 : 1.0) : 1.0)
+                        .animation(
+                            isInFlight
+                                ? .easeInOut(duration: 0.6).repeatForever(autoreverses: true)
+                                : .default,
+                            value: pulse
+                        )
+                    Text(callLabel)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.textDim)
                 }
-                .padding(.leading, 19)  // align under callLabel (icon width + spacing)
+
+                if let resultLabel, !resultLabel.isEmpty {
+                    HStack(spacing: 0) {
+                        // Indent so the arrow lines up roughly under the call text.
+                        Text("→ ")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                        Text(resultLabel)
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.tertiaryText)
+                            .lineLimit(2)
+                    }
+                    .padding(.leading, 17)  // align under callLabel (icon width + spacing)
+                }
             }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .strokeBorder(
+                        isError ? Theme.Colors.amber.opacity(0.4) : Theme.Colors.border,
+                        lineWidth: 1
+                    )
+            )
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(tint.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder((isError ? Theme.Colors.amber : Theme.Colors.border).opacity(0.3), lineWidth: 0.5)
-                )
-        )
         .padding(.horizontal, Theme.Spacing.lg)
         .onAppear {
             if isInFlight { pulse = true }
@@ -1253,14 +1206,63 @@ private struct ToolStepRow: View {
 // MARK: - Item Preview Card
 //
 // Clickable card embedded in the chat scroll when Claude calls `attach_item_preview`.
-// Tapping routes the user to the item's category tab and triggers the existing
-// `locateItemId` flow which selects + scrolls to the row in its list view.
+// Clicking reports a `PreviewDetail` up to `OttoChatView`, which presents the
+// matching detail/edit popup from its own `.sheet` — the card can't own the
+// sheet itself because sheets attached inside LazyVStack rows don't present.
+
+/// What a preview-card click opens: the shared search-result popup for most
+/// types, or a dedicated editor sheet for the ones it can't render.
+private enum PreviewDetail: Identifiable {
+    case result(UniversalSearchResult)
+    case network(NetworkEntry)
+    case company(Company)
+    case event(Event)
+    case community(Community)
+    case habit(Habit)
+
+    var id: UUID {
+        switch self {
+        case .result(let r):    return r.id
+        case .network(let n):   return n.id
+        case .company(let c):   return c.id
+        case .event(let e):     return e.id
+        case .community(let c): return c.id
+        case .habit(let h):     return h.id
+        }
+    }
+
+    /// Look up the referenced item in AppState and wrap it in the right
+    /// presentation. nil when the item no longer exists. Shared by the
+    /// standalone preview cards and inline `otto://` text chips.
+    @MainActor
+    static func resolve(type: ContentType, itemId: UUID, appState: AppState) -> PreviewDetail? {
+        switch type {
+        case .todo:       return appState.todos.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .note:       return appState.notes.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .idea:       return appState.ideas.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .reminder:   return appState.reminders.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .bookmark:   return appState.bookmarks.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .meeting:    return appState.meetings.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .email:      return appState.emails.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .connection: return appState.connections.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .file:       return appState.files.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .xPost:      return appState.xPosts.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .xFollower:  return appState.xFollowers.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .xDm:        return appState.xDirectMessages.first(where: { $0.id == itemId }).map { .result(.from($0)) }
+        case .networkHub: return appState.networkEntries.first(where: { $0.id == itemId }).map { .network($0) }
+        case .company:    return appState.companies.first(where: { $0.id == itemId }).map { .company($0) }
+        case .event:      return appState.events.first(where: { $0.id == itemId }).map { .event($0) }
+        case .community:  return appState.communities.first(where: { $0.id == itemId }).map { .community($0) }
+        case .habit:      return appState.habits.first(where: { $0.id == itemId }).map { .habit($0) }
+        }
+    }
+}
 
 private struct ItemPreviewCard: View {
     @Environment(AppState.self) private var appState
     let type: ContentType
     let itemId: UUID
-    @State private var presentedResult: UniversalSearchResult?
+    let onOpen: (PreviewDetail) -> Void
 
     var body: some View {
         Button(action: openDetail) {
@@ -1278,24 +1280,24 @@ private struct ItemPreviewCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     if let title = lookupTitle() {
                         Text(title)
-                            .font(Theme.Typography.body)
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Theme.Colors.text)
                             .lineLimit(1)
                     } else {
                         Text("Item not found")
-                            .font(Theme.Typography.body)
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                     HStack(spacing: Theme.Spacing.xs) {
-                        Text(type.displayName)
-                            .font(Theme.Typography.small)
-                            .foregroundStyle(type.color)
+                        Text(type.displayName.lowercased())
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                         if let snippet = lookupSnippet(), !snippet.isEmpty {
                             Text("·")
-                                .font(Theme.Typography.small)
+                                .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                             Text(snippet)
-                                .font(Theme.Typography.small)
+                                .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                                 .lineLimit(1)
                         }
@@ -1308,24 +1310,19 @@ private struct ItemPreviewCard: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
-            .padding(Theme.Spacing.sm)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                    .fill(Theme.Colors.secondaryBackground)
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.panel)
                     .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                            .strokeBorder(type.color.opacity(0.25), lineWidth: 0.5)
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
             )
         }
         .buttonStyle(.plain)
         .padding(.horizontal, Theme.Spacing.lg)
-        .sheet(item: $presentedResult) { result in
-            SearchResultDetailPopup(result: result, onClose: {
-                presentedResult = nil
-            })
-            .environment(appState)
-        }
     }
 
     private func lookupTitle() -> String? {
@@ -1338,10 +1335,15 @@ private struct ItemPreviewCard: View {
         case .meeting:    return appState.meetings.first(where: { $0.id == itemId })?.title
         case .email:      return appState.emails.first(where: { $0.id == itemId })?.subject
         case .connection: return appState.connections.first(where: { $0.id == itemId })?.fullName
+        case .networkHub: return appState.networkEntries.first(where: { $0.id == itemId }).map { $0.name.isEmpty ? $0.company : $0.name }
         case .company:    return appState.companies.first(where: { $0.id == itemId })?.name
         case .event:      return appState.events.first(where: { $0.id == itemId })?.name
+        case .community:  return appState.communities.first(where: { $0.id == itemId })?.name
+        case .file:       return appState.files.first(where: { $0.id == itemId })?.name
         case .habit:      return appState.habits.first(where: { $0.id == itemId })?.title
-        case .community, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
+        case .xPost:      return appState.xPosts.first(where: { $0.id == itemId }).map { "@\($0.authorUsername)" }
+        case .xFollower:  return appState.xFollowers.first(where: { $0.id == itemId })?.displayName
+        case .xDm:        return appState.xDirectMessages.first(where: { $0.id == itemId }).map { $0.senderDisplayName.isEmpty ? "@\($0.senderUsername)" : $0.senderDisplayName }
         }
     }
 
@@ -1355,10 +1357,22 @@ private struct ItemPreviewCard: View {
             case .meeting:    return appState.meetings.first(where: { $0.id == itemId })?.overview
             case .email:      return appState.emails.first(where: { $0.id == itemId })?.snippet
             case .connection: return appState.connections.first(where: { $0.id == itemId })?.headline
+            case .networkHub:
+                return appState.networkEntries.first(where: { $0.id == itemId }).map { entry in
+                    [entry.title, entry.company].filter { !$0.isEmpty }.joined(separator: " · ")
+                }
             case .company:    return appState.companies.first(where: { $0.id == itemId })?.location
             case .event:      return appState.events.first(where: { $0.id == itemId })?.location
+            case .community:  return appState.communities.first(where: { $0.id == itemId })?.location
+            case .file:
+                return appState.files.first(where: { $0.id == itemId }).map {
+                    "\($0.fileType.displayName) • \($0.formattedSize)"
+                }
             case .habit:      return appState.habits.first(where: { $0.id == itemId })?.notes
-            case .reminder, .community, .file, .xPost, .xFollower, .xDm, .networkHub: return nil
+            case .xPost:      return appState.xPosts.first(where: { $0.id == itemId })?.text
+            case .xFollower:  return appState.xFollowers.first(where: { $0.id == itemId }).map { "@\($0.username)" }
+            case .xDm:        return appState.xDirectMessages.first(where: { $0.id == itemId })?.text
+            case .reminder:   return nil
             }
         }()
         guard let raw else { return nil }
@@ -1369,48 +1383,12 @@ private struct ItemPreviewCard: View {
         return String(oneLine.prefix(80)) + "…"
     }
 
-    /// Build a UniversalSearchResult for the referenced item and present the shared
-    /// detail/edit popup as a sheet — stays on the Home tab.
+    /// Resolve the referenced item and hand the matching `PreviewDetail` up
+    /// to the chat view, which presents the detail/edit popup as a sheet —
+    /// stays on the Home tab for every type.
     private func openDetail() {
-        switch type {
-        case .todo:
-            if let t = appState.todos.first(where: { $0.id == itemId }) {
-                presentedResult = .from(t)
-            }
-        case .note:
-            if let n = appState.notes.first(where: { $0.id == itemId }) {
-                presentedResult = .from(n)
-            }
-        case .idea:
-            if let i = appState.ideas.first(where: { $0.id == itemId }) {
-                presentedResult = .from(i)
-            }
-        case .reminder:
-            if let r = appState.reminders.first(where: { $0.id == itemId }) {
-                presentedResult = .from(r)
-            }
-        case .bookmark:
-            if let b = appState.bookmarks.first(where: { $0.id == itemId }) {
-                presentedResult = .from(b)
-            }
-        case .meeting:
-            if let m = appState.meetings.first(where: { $0.id == itemId }) {
-                presentedResult = .from(m)
-            }
-        case .email:
-            if let e = appState.emails.first(where: { $0.id == itemId }) {
-                presentedResult = .from(e)
-            }
-        case .connection:
-            if let c = appState.connections.first(where: { $0.id == itemId }) {
-                presentedResult = .from(c)
-            }
-        case .habit:
-            // Habit chips currently jump straight to the Habits tab rather
-            // than opening the shared search-result popup.
-            appState.selectedTab = .habit
-        case .company, .event, .community, .file, .xPost, .xFollower, .xDm, .networkHub:
-            break  // not referenceable from chat; schema doesn't include these types
+        if let detail = PreviewDetail.resolve(type: type, itemId: itemId, appState: appState) {
+            onOpen(detail)
         }
     }
 }

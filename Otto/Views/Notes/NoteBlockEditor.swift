@@ -335,7 +335,7 @@ struct NoteBlockEditor: View {
                     case .todo:
                         Button { toggleTodo(block.lineIndex) } label: {
                             Image(systemName: block.isCompleted ? "checkmark.square.fill" : "square")
-                                .font(.system(size: 15))
+                                .font(.system(size: 14))
                                 .foregroundStyle(block.isCompleted ? Theme.Colors.accent : Theme.Colors.tertiaryText)
                                 .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
@@ -357,7 +357,7 @@ struct NoteBlockEditor: View {
                         .position(x: 44 + 8, y: rect.midY)
                     default:
                         Text("•")
-                            .font(.system(size: 17, weight: .bold))
+                            .font(.system(size: 15, weight: .bold))
                             .foregroundStyle(Theme.Colors.secondaryText)
                             .frame(width: 12, alignment: .center)
                             .position(x: 44 + 5, y: rect.midY)
@@ -484,19 +484,39 @@ struct NoteBlockEditor: View {
                     .frame(width: 44, alignment: .trailing)
                     .position(x: 22, y: rect.midY)
                     .animation(.easeInOut(duration: 0.08), value: showHandles)
-                    // Keep the handles alive while the pointer is over the gutter
-                    // (the stable Color.clear placeholder makes this region always
-                    // hoverable, so there's no gap between the text and the buttons).
-                    .onHover { hovering in
-                        if hovering {
-                            gutterHoveredLine = block.lineIndex
-                        } else if gutterHoveredLine == block.lineIndex {
-                            gutterHoveredLine = nil
-                        }
-                    }
                 }
             }
         }
+        .contentShape(Rectangle())
+        // One continuous hover region for the whole gutter column. Per-row
+        // onHover strips left dead zones (paragraph spacing, wrapped lines)
+        // where the handles vanished while traveling from the text to the
+        // buttons; here any pointer position in the gutter maps to a line.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                gutterHoveredLine = gutterLine(at: point.y)
+            case .ended:
+                gutterHoveredLine = nil
+            }
+        }
+    }
+
+    /// The line whose first visual row contains (or is nearest to) a y position
+    /// in the gutter. Collapsed-toggle children are hidden at ~0 height and are
+    /// skipped so they can't capture the hover.
+    private func gutterLine(at y: CGFloat) -> Int? {
+        var nearest: (index: Int, distance: CGFloat)? = nil
+        for (index, rect) in lineRects {
+            guard rect.height > 1 else { continue }
+            if y >= rect.minY && y <= rect.maxY { return index }
+            let distance = min(abs(y - rect.minY), abs(y - rect.maxY))
+            if nearest == nil || distance < nearest!.distance {
+                nearest = (index, distance)
+            }
+        }
+        guard let nearest, nearest.distance <= 16 else { return nil }
+        return nearest.index
     }
     #endif
 
@@ -642,7 +662,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 0, height: 0)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
-        textView.font = NSFont.systemFont(ofSize: 15)
+        textView.font = NSFont.systemFont(ofSize: 13.5)
         textView.insertionPointColor = NSColor(Theme.Colors.text)
 
         // Enable tracking for hover
@@ -798,12 +818,12 @@ struct RichNoteTextEditor: NSViewRepresentable {
             textView.undoManager?.disableUndoRegistration()
             storage.beginEditing()
 
-            // Default style
-            let defaultFont = NSFont.systemFont(ofSize: 15)
+            // Default style — mockup editor body: 13.5px, line-height ~1.7.
+            let defaultFont = NSFont.systemFont(ofSize: 13.5)
             let defaultColor = NSColor(Theme.Colors.text)
             let defaultParagraph = NSMutableParagraphStyle()
-            defaultParagraph.lineSpacing = 4
-            defaultParagraph.paragraphSpacing = 2
+            defaultParagraph.lineSpacing = 6
+            defaultParagraph.paragraphSpacing = 3
 
             storage.addAttributes([
                 .font: defaultFont,
@@ -842,7 +862,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
                 switch blockType {
                 case .heading1:
-                    let h1Font = NSFont.systemFont(ofSize: 28, weight: .bold)
+                    let h1Font = NSFont.systemFont(ofSize: 21, weight: .bold)
                     let h1Para = NSMutableParagraphStyle()
                     h1Para.lineSpacing = 6
                     h1Para.paragraphSpacingBefore = 10
@@ -853,7 +873,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .heading2:
-                    let h2Font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+                    let h2Font = NSFont.systemFont(ofSize: 16, weight: .semibold)
                     let h2Para = NSMutableParagraphStyle()
                     h2Para.lineSpacing = 5
                     h2Para.paragraphSpacingBefore = 8
@@ -864,7 +884,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .heading3:
-                    let h3Font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+                    let h3Font = NSFont.systemFont(ofSize: 14, weight: .semibold)
                     let h3Para = NSMutableParagraphStyle()
                     h3Para.lineSpacing = 4
                     h3Para.paragraphSpacingBefore = 6
@@ -918,7 +938,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     }
 
                 case .quote:
-                    let quoteFont = NSFont.systemFont(ofSize: 15).italic() ?? NSFont.systemFont(ofSize: 15)
+                    let quoteFont = NSFont.systemFont(ofSize: 13.5).italic() ?? NSFont.systemFont(ofSize: 13.5)
                     let quoteColor = NSColor(Theme.Colors.secondaryText)
                     let quotePara = NSMutableParagraphStyle()
                     quotePara.headIndent = 16
@@ -942,7 +962,7 @@ struct RichNoteTextEditor: NSViewRepresentable {
                     ], range: contentRange)
 
                 case .toggle:
-                    let toggleFont = NSFont.systemFont(ofSize: 15, weight: .medium)
+                    let toggleFont = NSFont.systemFont(ofSize: 13.5, weight: .medium)
                     storage.addAttribute(.font, value: toggleFont, range: contentRange)
                     // Hide the "▾ "/"▸ " marker — a clickable triangle is overlaid.
                     let tMarkerLen = min(2, contentRange.length)
@@ -965,9 +985,13 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
         // MARK: - Line Rects (for gutter positioning)
 
+        private var lastLineRects: [Int: CGRect] = [:]
+
         func updateLineRects(_ textView: NSTextView) {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else { return }
+
+            layoutManager.ensureLayout(for: textContainer)
 
             let text = textView.string
             let nsText = text as NSString
@@ -978,7 +1002,16 @@ struct RichNoteTextEditor: NSViewRepresentable {
             while lineStart < nsText.length {
                 let lineRange = nsText.lineRange(for: NSRange(location: lineStart, length: 0))
                 let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
-                let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                // A long line wraps into several fragments; anchor the gutter
+                // handles and overlaid markers to the FIRST fragment so they sit
+                // on the line's first visual row (like Notion) instead of being
+                // vertically centered over the whole wrapped block.
+                let rect: CGRect
+                if glyphRange.length > 0 {
+                    rect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+                } else {
+                    rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+                }
                 rects[lineIndex] = rect
 
                 lineIndex += 1
@@ -987,9 +1020,18 @@ struct RichNoteTextEditor: NSViewRepresentable {
 
             // Handle empty last line
             if text.hasSuffix("\n") || text.isEmpty {
-                let lastRect = rects[lineIndex - 1] ?? .zero
-                rects[lineIndex] = CGRect(x: 0, y: lastRect.maxY, width: lastRect.width, height: lastRect.height > 0 ? lastRect.height : 20)
+                var rect = layoutManager.extraLineFragmentRect
+                if rect.isEmpty {
+                    let lastRect = rects[lineIndex - 1] ?? .zero
+                    rect = CGRect(x: 0, y: lastRect.maxY, width: lastRect.width, height: lastRect.height > 0 ? lastRect.height : 20)
+                }
+                rects[lineIndex] = rect
             }
+
+            // layout() calls this on every pass — only push real changes so the
+            // SwiftUI overlay isn't invalidated in a loop.
+            guard rects != lastLineRects else { return }
+            lastLineRects = rects
 
             Task { @MainActor in
                 self.parent.lineRects = rects
@@ -1058,6 +1100,17 @@ extension RichNoteTextEditor.Coordinator: BlockTextViewHoverDelegate {
 
 class BlockNSTextView: NSTextView {
     weak var hoverDelegate: BlockTextViewHoverDelegate?
+
+    /// Line rects go stale whenever layout reflows the text — the first layout
+    /// pass happens before SwiftUI hands the view its real width, and resizes
+    /// change how long lines wrap. Recompute so the gutter overlays stay
+    /// aligned (updateLineRects itself dedupes unchanged results).
+    override func layout() {
+        super.layout()
+        if let coordinator = hoverDelegate as? RichNoteTextEditor.Coordinator {
+            coordinator.updateLineRects(self)
+        }
+    }
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
@@ -1860,7 +1913,8 @@ struct SlashCommandMenu: View {
                     // Basic blocks section
                     HStack {
                         Text("BASIC BLOCKS")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(Theme.Typography.label)
+                            .tracking(Theme.Tracking.xwide)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                         Spacer()
                     }

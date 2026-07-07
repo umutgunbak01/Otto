@@ -34,20 +34,10 @@ enum NetworkType: String, CaseIterable, Codable {
         }
     }
 
+    // Org type is taxonomy, not status — chips stay neutral so the table
+    // doesn't turn into a rainbow; the icon carries the differentiation.
     var color: Color {
-        switch self {
-        case .startup:     return .green
-        case .investor:    return .yellow
-        case .appStudio:   return .purple
-        case .enterprise:  return .blue
-        case .media:       return .pink
-        case .community:   return .orange
-        case .incubator:   return .teal
-        case .accelerator: return .mint
-        case .consulting:  return .brown
-        case .ecosystem:   return .indigo
-        case .other:       return .gray
-        }
+        self == .other ? Theme.Colors.tertiaryText : Theme.Colors.textDim
     }
 }
 
@@ -78,17 +68,9 @@ enum IndividualType: String, CaseIterable, Codable {
         }
     }
 
+    // Same neutral treatment as NetworkType — role is taxonomy, not status.
     var color: Color {
-        switch self {
-        case .founder:          return .purple
-        case .vc:               return .green
-        case .operatorRole:     return .blue
-        case .engineer:         return .cyan
-        case .communityBuilder: return .orange
-        case .angelInvestor:    return .yellow
-        case .creative:         return .pink
-        case .other:            return .gray
-        }
+        self == .other ? Theme.Colors.tertiaryText : Theme.Colors.textDim
     }
 }
 
@@ -127,14 +109,16 @@ enum NetworkCloseness: String, CaseIterable, Codable {
         }
     }
 
+    // Closeness is the one dimension that earns color: tie strength ramps
+    // through the single cyan accent and fades to neutral as ties weaken.
     var color: Color {
         switch self {
-        case .closeFriend:      return .pink
-        case .warmRelationship: return .orange
-        case .knownPersonally:  return .green
-        case .introPath:        return .blue
-        case .lightConnection:  return .gray
-        case .unknown:          return .gray
+        case .closeFriend:      return Theme.Colors.cyan
+        case .warmRelationship: return Theme.Colors.cyanDim
+        case .knownPersonally:  return Theme.Colors.textDim
+        case .introPath:        return Theme.Colors.textDim
+        case .lightConnection:  return Theme.Colors.tertiaryText
+        case .unknown:          return Theme.Colors.tertiaryText
         }
     }
 }

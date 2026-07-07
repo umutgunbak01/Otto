@@ -10,14 +10,15 @@ struct ConnectionRowView: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
             // Initials avatar
+            let avatar = ConnectionAvatarPalette.colors(for: connection)
             ZStack {
                 Circle()
-                    .fill(ContentType.connection.color.opacity(0.12))
-                    .frame(width: 36, height: 36)
+                    .fill(avatar.bg)
+                    .frame(width: 26, height: 26)
 
                 Text(connection.initials)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ContentType.connection.color)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(avatar.fg)
             }
 
             // Content
@@ -40,7 +41,7 @@ struct ConnectionRowView: View {
                     // Connection date if available
                     if let date = connection.connectionDate {
                         Text(formatDate(date))
-                            .font(Theme.Typography.caption)
+                            .font(Theme.Typography.monoCaption)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                 }
@@ -57,19 +58,15 @@ struct ConnectionRowView: View {
                 if !connection.tags.isEmpty {
                     HStack(spacing: Theme.Spacing.xs) {
                         ForEach(connection.tags.prefix(3), id: \.self) { tag in
-                            Text(tag)
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(ContentType.connection.color)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                                        .fill(ContentType.connection.color.opacity(0.1))
-                                )
+                            AngularChip {
+                                Text(tag)
+                                    .font(Theme.Typography.monoSmall)
+                                    .foregroundStyle(Theme.Colors.textDim)
+                            }
                         }
                         if connection.tags.count > 3 {
                             Text("+\(connection.tags.count - 3)")
-                                .font(Theme.Typography.caption)
+                                .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                         }
                     }
@@ -110,11 +107,11 @@ struct ConnectionRowView: View {
         .padding(.vertical, Theme.Spacing.sm)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear))
+                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
         #if os(macOS)
         .onHover { hovering in

@@ -42,7 +42,7 @@ struct TodoDetailView: View {
                     .frame(maxWidth: .infinity)
 
                 // Vertical divider
-                OttoDivider()
+                OttoVerticalDivider()
 
                 // Right: Properties sidebar
                 rightSidebar
@@ -188,17 +188,17 @@ struct TodoDetailView: View {
                     } label: {
                         ZStack {
                             Circle()
-                                .stroke(checkboxColor, lineWidth: 1.5)
-                                .frame(width: 22, height: 22)
+                                .stroke(Theme.Colors.borderStrong, lineWidth: 1.5)
+                                .frame(width: 20, height: 20)
 
                             if todo.isCompleted {
                                 Circle()
-                                    .fill(checkboxColor)
-                                    .frame(width: 22, height: 22)
+                                    .fill(Theme.Colors.accent)
+                                    .frame(width: 20, height: 20)
 
                                 Image(systemName: "checkmark")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundStyle(Theme.Colors.bg0)
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Theme.Colors.onAccent)
                             }
                         }
                     }
@@ -323,7 +323,7 @@ struct TodoDetailView: View {
             if isAddingSubTask {
                 HStack(spacing: 8) {
                     Circle()
-                        .stroke(Theme.Colors.tertiaryText.opacity(0.5), lineWidth: 1.5)
+                        .stroke(Theme.Colors.borderStrong, lineWidth: 1.5)
                         .frame(width: 16, height: 16)
 
                     TextField("Sub-task title", text: $newSubTaskTitle)
@@ -474,15 +474,17 @@ struct TodoDetailView: View {
                     propertyRow(
                         label: "Source",
                         icon: "arrow.down.circle",
-                        iconColor: Theme.Colors.red.opacity(0.7)
+                        iconColor: Theme.Colors.tertiaryText
                     ) {
                         Text("Todoist")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Theme.Colors.red.opacity(0.8))
-                            .padding(.horizontal, 6)
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.accentText)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 2)
-                            .background(Theme.Colors.red.opacity(0.08))
-                            .clipShape(Capsule())
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(Theme.Colors.selectTint)
+                            )
                     }
                 }
             }
@@ -789,11 +791,11 @@ struct TodoDetailView: View {
                 } label: {
                     Text("Set")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Colors.bg0)
+                        .foregroundStyle(Theme.Colors.onAccent)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(Theme.Colors.accent)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
             }
@@ -913,17 +915,17 @@ private struct SubTaskRowView: View {
             } label: {
                 ZStack {
                     Circle()
-                        .stroke(subTask.isCompleted ? Theme.Colors.secondaryText : Theme.Colors.tertiaryText, lineWidth: 1.5)
+                        .stroke(Theme.Colors.borderStrong, lineWidth: 1.5)
                         .frame(width: 16, height: 16)
 
                     if subTask.isCompleted {
                         Circle()
-                            .fill(Theme.Colors.secondaryText)
+                            .fill(Theme.Colors.accent)
                             .frame(width: 16, height: 16)
 
                         Image(systemName: "checkmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(Theme.Colors.bg0)
+                            .foregroundStyle(Theme.Colors.onAccent)
                     }
                 }
             }

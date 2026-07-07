@@ -11,24 +11,22 @@ struct TagChipView: View {
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
             Text(tag.name)
-                .font(isCompact ? Theme.Typography.small : Theme.Typography.caption)
+                .font(Theme.Typography.monoSmall)
 
             if isRemovable && isHovered {
                 Image(systemName: "xmark")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(tagColor.opacity(0.7))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                     .onTapGesture {
                         onRemove?()
                     }
             }
         }
-        .padding(.horizontal, isCompact ? Theme.Spacing.sm : Theme.Spacing.md)
-        .padding(.vertical, isCompact ? 2 : Theme.Spacing.xs)
-        .background(tagColor.opacity(0.1))
-        .foregroundStyle(tagColor)
-        .overlay(
-            Rectangle().stroke(tagColor.opacity(0.4), lineWidth: 1)
-        )
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Theme.Colors.hoverTint)
+        .foregroundStyle(Theme.Colors.textDim)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
@@ -36,36 +34,6 @@ struct TagChipView: View {
         #endif
     }
 
-    private var tagColor: Color {
-        // Map common domain tags to theme-consistent colors
-        let tagName = tag.name.lowercased()
-
-        switch tagName {
-        case "ai", "technical", "research":
-            return Theme.Colors.cyan
-        case "marketing", "communication", "design":
-            return Theme.Colors.aiAccent
-        case "creative", "learning", "hobby":
-            return Theme.Colors.amber
-        case "ops", "planning", "finance":
-            return Theme.Colors.cyanDim
-        case "health", "wellness":
-            return Theme.Colors.green
-        case "urgent", "important":
-            return Theme.Colors.red
-        default:
-            // Stable mapping into the Otto palette based on tag name hash.
-            let hash = abs(tag.name.hashValue)
-            let colors: [Color] = [
-                Theme.Colors.cyan,
-                Theme.Colors.cyanDim,
-                Theme.Colors.aiAccent,
-                Theme.Colors.amber,
-                Theme.Colors.green
-            ]
-            return colors[hash % colors.count]
-        }
-    }
 }
 
 // Category chip variant for primary categories
@@ -75,14 +43,12 @@ struct CategoryChipView: View {
 
     var body: some View {
         Text(category.rawValue)
-            .font(isCompact ? Theme.Typography.small : Theme.Typography.caption)
-            .padding(.horizontal, isCompact ? Theme.Spacing.sm : Theme.Spacing.md)
-            .padding(.vertical, isCompact ? 2 : Theme.Spacing.xs)
-            .background(categoryColor.opacity(0.1))
+            .font(Theme.Typography.monoSmall)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(categoryColor.opacity(0.12))
             .foregroundStyle(categoryColor)
-            .overlay(
-                Rectangle().stroke(categoryColor.opacity(0.4), lineWidth: 1)
-            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private var categoryColor: Color {

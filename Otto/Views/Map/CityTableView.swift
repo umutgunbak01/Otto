@@ -54,24 +54,38 @@ struct CityTableView: View {
             Button(action: onBack) {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
-                    Text("MAP").font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(2)
+                    Text("Map").font(.system(size: 12, weight: .medium))
                 }
                 .foregroundStyle(Theme.Colors.textDim)
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .overlay(Rectangle().stroke(Theme.Colors.cyan.opacity(0.18), lineWidth: 1))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.panel)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
 
             Image(systemName: "mappin.circle.fill").font(.system(size: 15)).foregroundStyle(Theme.Colors.cyan)
             Text(group.displayName)
-                .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                .font(Theme.Typography.title)
                 .foregroundStyle(Theme.Colors.text)
             Text("\(group.totalCount)")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Theme.Colors.borderSubtle)
-                .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                .font(Theme.Typography.monoSmall)
+                .foregroundStyle(Theme.Colors.textDim)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(Theme.Colors.panel)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             Spacer()
         }
         .padding(.horizontal, Theme.Spacing.xl)
@@ -85,20 +99,19 @@ struct CityTableView: View {
                 let active = tab == t
                 Button { tab = t } label: {
                     HStack(spacing: 5) {
-                        Text(t.rawValue.uppercased())
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(1.5)
+                        Text(t.rawValue)
+                            .font(.system(size: 12, weight: .medium))
                         Text("\(count(t))")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(active ? Theme.Colors.cyan : Theme.Colors.tertiaryText)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(active ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
                     }
-                    .foregroundStyle(active ? Theme.Colors.cyan : Theme.Colors.textDim)
+                    .foregroundStyle(active ? Theme.Colors.accentText : Theme.Colors.textDim)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(active ? Theme.Colors.cyan.opacity(0.12) : Color.clear)
-                    .overlay(alignment: .bottom) {
-                        Rectangle().fill(active ? Theme.Colors.cyan : .clear).frame(height: 2)
-                    }
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .fill(active ? Theme.Colors.selectTint : Color.clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }
@@ -120,7 +133,7 @@ private struct InlineTable<Header: View, Rows: View>: View {
         ScrollView([.horizontal, .vertical], showsIndicators: true) {
             VStack(spacing: 0) {
                 header()
-                    .background(Theme.Colors.borderSubtle.opacity(0.7))
+                    .background(Theme.Colors.bg1)
                     .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border).frame(height: 1) }
                 LazyVStack(spacing: 0) { rows() }
                 // Breathing room so the last row can scroll clear of the dock's
@@ -233,7 +246,7 @@ private struct CityNetworkTable: View {
                             InlineEnumCell(width: C.close, value: e.closeness, options: NetworkCloseness.allCases, title: { $0.label }, icon: { $0.icon }, color: { $0 == .unknown ? Theme.Colors.tertiaryText : $0.color }) { v in commit(e) { $0.closeness = v } }
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }
@@ -322,7 +335,7 @@ private struct CityConnectionsTable: View {
                             InlineEnumCell(width: C.cat, value: c.category, options: ConnectionCategory.allCases, title: { $0.label }, icon: { $0.icon }, color: { $0 == .unknown ? Theme.Colors.tertiaryText : $0.color }) { v in commit(c) { $0.category = v } }
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }
@@ -410,7 +423,7 @@ private struct CityCompaniesTable: View {
                             InlineTextCell(text: co.notes, width: C.notes) { v in commit(co) { $0.notes = v } }
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }
@@ -499,7 +512,7 @@ private struct CityEventsTable: View {
                             InlineTextCell(text: ev.notes, width: C.notes) { v in commit(ev) { $0.notes = v } }
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }
@@ -580,7 +593,7 @@ private struct CityCommunitiesTable: View {
                             InlineTextCell(text: cm.notes, width: C.notes) { v in commit(cm) { $0.notes = v } }
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }
@@ -652,7 +665,7 @@ private struct CityAllTable: View {
                             InlineBadgeCell(icon: item.tagIcon, text: item.tag, color: item.tagColor, width: C.tag)
                         }
                         .frame(height: TableMetrics.rowHeight)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1) }
+                        .overlay(alignment: .bottom) { Rectangle().fill(Theme.Colors.borderSubtle).frame(height: 1) }
                     }
                 }
             }

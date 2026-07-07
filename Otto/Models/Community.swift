@@ -38,11 +38,11 @@ enum CommunityType: String, CaseIterable, Codable, Identifiable {
     var color: Color {
         switch self {
         case .community: return Theme.Colors.green
-        case .society: return .purple
-        case .collective: return .teal
+        case .society: return Theme.Colors.cyanDim
+        case .collective: return Theme.Colors.cyan
         case .accelerator: return Theme.Colors.amber
-        case .dao: return .indigo
-        case .other: return .gray
+        case .dao: return Theme.Colors.cyanDim
+        case .other: return Theme.Colors.textDim
         }
     }
 }

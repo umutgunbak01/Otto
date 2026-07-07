@@ -12,16 +12,17 @@ struct ChatHistorySidebar: View {
         VStack(spacing: 0) {
             header
 
-            OttoDivider(kind: .dashed)
+            OttoDivider()
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(grouped, id: \.label) { group in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(group.label)
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .tracking(2.5)
-                                .foregroundStyle(Theme.Colors.textDim)
+                                .font(Theme.Typography.label)
+                                .tracking(Theme.Tracking.xwide)
+                                .textCase(.uppercase)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
                                 .padding(.horizontal, 12)
                                 .padding(.top, 8)
                             ForEach(group.sessions) { session in
@@ -37,15 +38,15 @@ struct ChatHistorySidebar: View {
             }
 
             if !appState.chatSessions.isEmpty {
-                OttoDivider(kind: .dashed)
+                OttoDivider()
                 clearAllButton
             }
         }
         .frame(width: 240)
-        .background(Theme.Colors.bg1.opacity(0.6))
+        .background(Theme.Colors.bg1)
         .overlay(alignment: .trailing) {
             Rectangle()
-                .fill(Theme.Colors.cyan.opacity(0.18))
+                .fill(Theme.Colors.border)
                 .frame(width: 1)
         }
         .alert("Delete chat?", isPresented: Binding(
@@ -68,29 +69,26 @@ struct ChatHistorySidebar: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text("⌬ HISTORY")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .tracking(3)
-                .foregroundStyle(Theme.Colors.cyan)
-                .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            Text("History")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.Colors.text)
             Spacer()
             Button {
                 appState.activeChatSessionId = nil
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                    Text("NEW")
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .tracking(2)
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("New")
+                        .font(.system(size: 11, weight: .medium))
                 }
-                .foregroundStyle(Theme.Colors.cyan)
+                .foregroundStyle(Theme.Colors.onAccent)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .overlay(
-                    Rectangle().stroke(Theme.Colors.cyan, lineWidth: 1)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        .fill(Theme.Colors.accent)
                 )
-                .shadow(color: Theme.Colors.cyanGlow.opacity(0.4), radius: 4)
             }
             .buttonStyle(.plain)
         }
@@ -108,21 +106,21 @@ struct ChatHistorySidebar: View {
             appState.activeChatSessionId = session.id
         } label: {
             HStack(spacing: 8) {
-                Rectangle()
-                    .fill(isActive ? Theme.Colors.cyan : .clear)
-                    .frame(width: 2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.title)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(isActive ? Theme.Colors.cyan : Theme.Colors.text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     Text(relativeTime(session.updatedAt))
-                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                        .tracking(0.6)
-                        .foregroundStyle(Theme.Colors.textDim)
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
                 }
                 Spacer(minLength: 0)
+                if appState.chatRuns.isRunning(session.id) {
+                    RunningDot()
+                        .help("Otto is working on this chat")
+                }
                 if isHovered {
                     Button {
                         deleteCandidate = session
@@ -137,12 +135,16 @@ struct ChatHistorySidebar: View {
                 }
             }
             .padding(.vertical, 8)
-            .padding(.trailing, 8)
+            .padding(.horizontal, 10)
             .background(
-                isActive
-                    ? Theme.Colors.cyan.opacity(0.10)
-                    : (isHovered ? Theme.Colors.hoverTint : Color.clear)
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(
+                        isActive
+                            ? Theme.Colors.selectTint
+                            : (isHovered ? Theme.Colors.hoverTint : Color.clear)
+                    )
             )
+            .padding(.horizontal, 6)
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
@@ -160,9 +162,8 @@ struct ChatHistorySidebar: View {
             HStack(spacing: 6) {
                 Image(systemName: "trash")
                     .font(.system(size: 10))
-                Text("CLEAR ALL")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .tracking(2)
+                Text("Clear all")
+                    .font(.system(size: 11, weight: .medium))
             }
             .foregroundStyle(Theme.Colors.textDim)
             .padding(.vertical, 10)
@@ -179,9 +180,8 @@ struct ChatHistorySidebar: View {
                 .font(.system(size: 20, weight: .thin))
                 .foregroundStyle(Theme.Colors.textDim)
                 .padding(.bottom, 4)
-            Text("NO HISTORY YET")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .tracking(2.5)
+            Text("No history yet")
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.Colors.textDim)
             Text("Start a conversation to see it appear here.")
                 .font(Theme.Typography.caption)
@@ -221,11 +221,32 @@ struct ChatHistorySidebar: View {
         }
 
         var out: [Group] = []
-        if !today.isEmpty     { out.append(Group(label: "// TODAY",     sessions: today)) }
-        if !yesterday.isEmpty { out.append(Group(label: "// YESTERDAY", sessions: yesterday)) }
-        if !thisWeek.isEmpty  { out.append(Group(label: "// THIS WEEK", sessions: thisWeek)) }
-        if !earlier.isEmpty   { out.append(Group(label: "// EARLIER",   sessions: earlier)) }
+        if !today.isEmpty     { out.append(Group(label: "Today",     sessions: today)) }
+        if !yesterday.isEmpty { out.append(Group(label: "Yesterday", sessions: yesterday)) }
+        if !thisWeek.isEmpty  { out.append(Group(label: "This week", sessions: thisWeek)) }
+        if !earlier.isEmpty   { out.append(Group(label: "Earlier",   sessions: earlier)) }
         return out
+    }
+
+    // MARK: - Running indicator
+
+    /// Pulsing dot marking the session with an in-flight agent run — the
+    /// chat keeps working (and keeps saving) even when it's not the one on
+    /// screen, and this is how the user finds their way back to it.
+    private struct RunningDot: View {
+        @State private var pulsing = false
+
+        var body: some View {
+            Circle()
+                .fill(Theme.Colors.accent)
+                .frame(width: 6, height: 6)
+                .opacity(pulsing ? 1 : 0.4)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                        pulsing = true
+                    }
+                }
+        }
     }
 
     private func relativeTime(_ d: Date) -> String {

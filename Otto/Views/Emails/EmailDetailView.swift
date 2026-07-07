@@ -218,26 +218,22 @@ struct EmailDetailView: View {
                 if !email.labels.isEmpty {
                     HStack(spacing: Theme.Spacing.xs) {
                         ForEach(email.labels.filter { !$0.hasPrefix("CATEGORY_") && $0 != "UNREAD" }.prefix(3), id: \.self) { label in
-                            Text(label.capitalized)
-                                .font(.system(size: 10, weight: .medium))
-                                .padding(.horizontal, Theme.Spacing.sm)
-                                .padding(.vertical, 2)
-                                .background(Theme.Colors.accent.opacity(0.1))
-                                .foregroundStyle(Theme.Colors.accent)
-                                .clipShape(Capsule())
+                            AngularChip(fill: Theme.Colors.selectTint) {
+                                Text(label.capitalized)
+                                    .font(Theme.Typography.monoSmall)
+                                    .foregroundStyle(Theme.Colors.accentText)
+                            }
                         }
                     }
                 }
 
                 // Thread count badge
                 if threadEmails.count > 1 {
-                    Text("\(threadEmails.count) messages")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                        .padding(.horizontal, Theme.Spacing.sm)
-                        .padding(.vertical, 2)
-                        .background(Theme.Colors.borderSubtle)
-                        .clipShape(Capsule())
+                    AngularChip {
+                        Text("\(threadEmails.count) messages")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.textDim)
+                    }
                 }
 
                 // More menu
@@ -295,8 +291,8 @@ struct EmailDetailView: View {
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                     Text(email.recipients.joined(separator: ", "))
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .font(Theme.Typography.monoCaption)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .lineLimit(2)
                 }
                 .padding(.leading, 52) // Align with text after avatar
@@ -324,7 +320,7 @@ struct EmailDetailView: View {
                     // Thread connector line
                     HStack {
                         Rectangle()
-                            .fill(Theme.Colors.accent.opacity(0.2))
+                            .fill(Theme.Colors.border)
                             .frame(width: 2, height: 16)
                             .padding(.leading, 19) // Center under avatar
                         Spacer()
@@ -347,15 +343,15 @@ struct EmailDetailView: View {
                     .font(Theme.Typography.headline)
 
                 Text(email.sender)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.textDim)
             }
 
             Spacer()
 
             // Date
             Text(fullFormattedDate(email.receivedDate))
-                .font(Theme.Typography.caption)
+                .font(Theme.Typography.monoCaption)
                 .foregroundStyle(Theme.Colors.tertiaryText)
         }
     }
@@ -364,15 +360,15 @@ struct EmailDetailView: View {
 
     private func senderAvatar(for email: Email) -> some View {
         let initial = String((email.senderName ?? email.sender).prefix(1)).uppercased()
-        let color = avatarColor(for: email.sender)
+        let tint = emailAvatarTint(for: email.sender)
 
         return Circle()
-            .fill(color.opacity(0.15))
+            .fill(tint.background)
             .frame(width: 40, height: 40)
             .overlay {
                 Text(initial)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(color)
+                    .foregroundStyle(tint.foreground)
             }
     }
 
@@ -384,14 +380,25 @@ struct EmailDetailView: View {
         formatter.timeStyle = .short
         return formatter.string(from: date)
     }
+}
 
-    private func avatarColor(for email: String) -> Color {
-        let hash = abs(email.hashValue)
-        let colors: [Color] = [
-            .blue, .purple, .green, .orange, .pink, .teal, .indigo, .mint
-        ]
-        return colors[hash % colors.count]
+// MARK: - Avatar tint
+
+/// Stable tinted avatar palette (mockup .fava.a1–.a5), keyed off the sender
+/// so the same address always gets the same tint across launches.
+private func emailAvatarTint(for sender: String) -> (background: Color, foreground: Color) {
+    let tints: [(Color, Color)] = [
+        (Theme.Colors.tintViolet, Theme.Colors.violet),
+        (Theme.Colors.tintGreen, Theme.Colors.green),
+        (Theme.Colors.selectTint, Theme.Colors.accentText),
+        (Theme.Colors.tintAmber, Theme.Colors.amber),
+        (Theme.Colors.tintRed, Theme.Colors.red)
+    ]
+    var hash = 0
+    for scalar in sender.unicodeScalars {
+        hash = (hash &* 31 &+ Int(scalar.value)) & 0xFFFF
     }
+    return tints[hash % tints.count]
 }
 
 // MARK: - Thread Email Card
@@ -429,13 +436,13 @@ private struct ThreadEmailCard: View {
 
                         if !localExpanded {
                             Text(email.snippet.isEmpty ? String(email.body.prefix(100)) : email.snippet)
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .font(Theme.Typography.callout)
+                                .foregroundStyle(Theme.Colors.textDim)
                                 .lineLimit(1)
                         } else {
                             Text(email.sender)
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .font(Theme.Typography.monoCaption)
+                                .foregroundStyle(Theme.Colors.textDim)
                         }
                     }
 
@@ -443,7 +450,7 @@ private struct ThreadEmailCard: View {
 
                     // Date
                     Text(compactDate(email.receivedDate))
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
 
                     // Expand/collapse indicator
@@ -465,8 +472,8 @@ private struct ThreadEmailCard: View {
                                 .font(Theme.Typography.caption)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                             Text(email.recipients.joined(separator: ", "))
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.secondaryText)
+                                .font(Theme.Typography.monoCaption)
+                                .foregroundStyle(Theme.Colors.textDim)
                                 .lineLimit(2)
                         }
                     }
@@ -481,26 +488,26 @@ private struct ThreadEmailCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(localExpanded ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(localExpanded ? Theme.Colors.panel : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .strokeBorder(localExpanded ? Theme.Colors.hoverTint : Theme.Colors.borderSubtle.opacity(0.5), lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(localExpanded ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
     }
 
     private var senderAvatar: some View {
         let initial = String((email.senderName ?? email.sender).prefix(1)).uppercased()
-        let color = avatarColor(for: email.sender)
+        let tint = emailAvatarTint(for: email.sender)
 
         return Circle()
-            .fill(color.opacity(0.15))
+            .fill(tint.background)
             .frame(width: 36, height: 36)
             .overlay {
                 Text(initial)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(color)
+                    .foregroundStyle(tint.foreground)
             }
     }
 
@@ -517,14 +524,6 @@ private struct ThreadEmailCard: View {
         }
 
         return formatter.string(from: date)
-    }
-
-    private func avatarColor(for email: String) -> Color {
-        let hash = abs(email.hashValue)
-        let colors: [Color] = [
-            .blue, .purple, .green, .orange, .pink, .teal, .indigo, .mint
-        ]
-        return colors[hash % colors.count]
     }
 }
 

@@ -24,8 +24,11 @@ enum ACPParser {
     /// One parsed JSON-RPC frame from the agent. `unknown` covers methods or
     /// shapes we don't model yet — we log and drop those rather than crashing.
     enum Message {
-        /// `session/update` notification — discriminated by the inner `sessionUpdate` field.
-        case sessionUpdate(SessionUpdate)
+        /// `session/update` notification — discriminated by the inner
+        /// `sessionUpdate` field. `sessionId` identifies which ACP session
+        /// the update belongs to, so concurrent sessions route correctly;
+        /// empty string when the agent omitted it.
+        case sessionUpdate(sessionId: String, SessionUpdate)
         /// `session/request_permission` request from the agent. We must respond
         /// with an `outcome` keyed by this request's `id`.
         case requestPermission(id: JSONRPCID, sessionId: String, toolCallId: String, options: [PermissionOption])
@@ -64,11 +67,14 @@ enum ACPParser {
         /// Streaming reasoning / "thinking". Same shape as message chunks.
         case agentThoughtChunk(text: String)
         /// Tool invocation announced (`status: "pending"` typically). We use
-        /// this to populate the chat "🔧 calling X" chip.
-        case toolCall(toolCallId: String, title: String, kind: String?)
+        /// this to populate the chat "🔧 calling X" chip. `rawInput` is the
+        /// tool's argument object when the agent includes it (optional per
+        /// the ACP spec) — the chat UI needs it to render item-preview cards.
+        case toolCall(toolCallId: String, title: String, kind: String?, rawInput: [String: Any]?)
         /// Tool finished — `status` is `completed` or `failed`. `contentSummary`
-        /// is a flattened one-liner from the inner content array.
-        case toolCallUpdate(toolCallId: String, status: String, contentSummary: String, isError: Bool)
+        /// is a flattened one-liner from the inner content array. Some agents
+        /// only attach `rawInput` on updates, so it's carried here too.
+        case toolCallUpdate(toolCallId: String, status: String, contentSummary: String, isError: Bool, rawInput: [String: Any]?)
         /// Anything else (`plan`, etc.) we don't render yet.
         case unknown
     }
@@ -120,7 +126,10 @@ enum ACPParser {
 
         switch method {
         case "session/update":
-            return .sessionUpdate(parseSessionUpdate(params))
+            return .sessionUpdate(
+                sessionId: (params["sessionId"] as? String) ?? "",
+                parseSessionUpdate(params)
+            )
 
         case "session/request_permission":
             guard let id = id,
@@ -167,14 +176,16 @@ enum ACPParser {
             guard let id = update["toolCallId"] as? String else { return .unknown }
             let title = update["title"] as? String ?? "tool"
             let kindStr = update["kind"] as? String
-            return .toolCall(toolCallId: id, title: title, kind: kindStr)
+            let rawInput = update["rawInput"] as? [String: Any]
+            return .toolCall(toolCallId: id, title: title, kind: kindStr, rawInput: rawInput)
 
         case "tool_call_update":
             guard let id = update["toolCallId"] as? String else { return .unknown }
             let status = update["status"] as? String ?? ""
             let isError = (status == "failed")
             let summary = extractToolResultSummary(update["content"])
-            return .toolCallUpdate(toolCallId: id, status: status, contentSummary: summary, isError: isError)
+            let rawInput = update["rawInput"] as? [String: Any]
+            return .toolCallUpdate(toolCallId: id, status: status, contentSummary: summary, isError: isError, rawInput: rawInput)
 
         default:
             return .unknown

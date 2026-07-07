@@ -112,6 +112,7 @@ final class MeetingPrepService: @unchecked Sendable {
         do {
             let userTurn = ChatTurn(role: "user", blocks: [.text(prompt)])
             let turns = try await claudeCLI.streamChatWithTools(
+                sessionKey: UUID(),   // one-shot background run, own key
                 turns: [userTurn],
                 systemPrompt: systemPrompt,
                 tools: OttoTools.all,

@@ -56,31 +56,21 @@ struct CommunityListView: View {
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
             HStack(alignment: .center) {
-                Text("❖ COMMUNITIES")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(ContentType.community.color)
-                    .shadow(color: ContentType.community.color.opacity(0.6), radius: 4)
+                Text("Communities")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filtered.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filtered.count)
 
                 Spacer()
 
                 Button { editing = EditingTarget(id: UUID(), community: nil) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "plus").font(.system(size: 11))
-                        Text("New").font(.system(size: 12))
+                        Text("New").font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -155,7 +145,6 @@ private struct CommunityRow: View {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(neon.opacity(isHovered ? 0.22 : 0.12))
                         .frame(width: 32, height: 32)
-                        .shadow(color: neon.opacity(isHovered ? 0.7 : 0), radius: isHovered ? 8 : 0)
                     Image(systemName: community.type.icon).font(.system(size: 13)).foregroundStyle(neon)
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -169,7 +158,10 @@ private struct CommunityRow: View {
                                 .font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1)
                                 .foregroundStyle(Theme.Colors.amber)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                .overlay(Rectangle().stroke(Theme.Colors.amber.opacity(0.5), lineWidth: 1))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .strokeBorder(Theme.Colors.amber, lineWidth: 1)
+                                )
                         }
                     }
                     HStack(spacing: 6) {

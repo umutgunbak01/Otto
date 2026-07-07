@@ -27,6 +27,7 @@ struct ConnectionColumnsMenu: View {
             footer
         }
         .frame(width: 280, height: 420)
+        .background(Theme.Colors.bg2)
         .sheet(isPresented: $showCreateSheet) {
             CustomFieldEditorSheet()
                 .environment(appState)

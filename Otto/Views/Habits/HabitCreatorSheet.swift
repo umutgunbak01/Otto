@@ -40,7 +40,7 @@ struct HabitCreatorSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                     templatesSection
-                    Divider().background(Theme.Colors.border)
+                    OttoDivider()
                     formSection
                 }
                 .padding(Theme.Spacing.lg)
@@ -55,8 +55,9 @@ struct HabitCreatorSheet: View {
 
     private var header: some View {
         HStack {
-            Text("NEW HABIT")
-                .hudLabel(tracking: Theme.Tracking.xxwide, color: Theme.Colors.cyan)
+            Text("New Habit")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Colors.text)
             Spacer()
             Button {
                 dismiss()
@@ -75,11 +76,13 @@ struct HabitCreatorSheet: View {
     private var footer: some View {
         HStack {
             Spacer()
-            Button("CANCEL") { dismiss() }
+            Button("Cancel") { dismiss() }
+                .font(.system(size: 12, weight: .medium))
                 .buttonStyle(GhostButtonStyle())
-            Button("CREATE") {
+            Button("Create") {
                 Task { await save() }
             }
+            .font(.system(size: 12, weight: .medium))
             .buttonStyle(AccentButtonStyle())
             .disabled(!canSave)
             .opacity(canSave ? 1 : 0.5)
@@ -94,8 +97,8 @@ struct HabitCreatorSheet: View {
 
     private var templatesSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("STARTERS")
-                .hudLabel(tracking: Theme.Tracking.wide)
+            Text("Starters")
+                .hudLabel()
             let cols = [GridItem(.adaptive(minimum: 150), spacing: Theme.Spacing.sm)]
             LazyVGrid(columns: cols, spacing: Theme.Spacing.sm) {
                 ForEach(HabitTemplate.starters) { t in
@@ -116,7 +119,14 @@ struct HabitCreatorSheet: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(Theme.Spacing.sm)
-                        .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                        .background(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                .fill(Theme.Colors.panel)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                     }
                     .buttonStyle(.plain)
                 }
@@ -128,15 +138,15 @@ struct HabitCreatorSheet: View {
 
     private var formSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-            field(label: "TITLE") {
+            field(label: "Title") {
                 textField($title, placeholder: "e.g. Drink water")
             }
 
-            field(label: "NOTES (optional)") {
+            field(label: "Notes (optional)") {
                 textField($notes, placeholder: "What does success look like?")
             }
 
-            field(label: "KIND") {
+            field(label: "Kind") {
                 Picker("", selection: $kind) {
                     ForEach(Habit.Kind.allCases, id: \.self) { k in
                         Text(k.displayName).tag(k)
@@ -156,16 +166,16 @@ struct HabitCreatorSheet: View {
 
             if kind != .binary {
                 HStack(alignment: .top, spacing: Theme.Spacing.md) {
-                    field(label: "TARGET / DAY") {
+                    field(label: "Target / day") {
                         textField($dailyTarget, placeholder: "e.g. 2500")
                     }
-                    field(label: "UNIT") {
+                    field(label: "Unit") {
                         textField($unit, placeholder: "mL, min, g…")
                     }
                 }
             }
 
-            field(label: "FREQUENCY") {
+            field(label: "Frequency") {
                 Picker("", selection: $frequencyChoice) {
                     ForEach(FrequencyChoice.allCases) { c in
                         Text(c.rawValue).tag(c)
@@ -187,7 +197,7 @@ struct HabitCreatorSheet: View {
                 }
             }
 
-            field(label: "CATEGORY") {
+            field(label: "Category") {
                 Picker("", selection: $category) {
                     ForEach(Habit.Category.allCases, id: \.self) { c in
                         Text(c.displayName).tag(c)
@@ -196,7 +206,7 @@ struct HabitCreatorSheet: View {
                 .pickerStyle(.menu)
             }
 
-            field(label: "COLOR") {
+            field(label: "Color") {
                 HStack(spacing: Theme.Spacing.sm) {
                     ForEach(Habit.ColorTag.allCases, id: \.self) { c in
                         Button {
@@ -227,9 +237,15 @@ struct HabitCreatorSheet: View {
                     Text(String(d.shortName.prefix(1)))
                         .font(Theme.Typography.caption)
                         .frame(width: 32, height: 28)
-                        .foregroundStyle(isOn ? Theme.Colors.cyan : Theme.Colors.textDim)
-                        .background(isOn ? Theme.Colors.cyan.opacity(0.1) : Color.clear)
-                        .overlay(Rectangle().stroke(isOn ? Theme.Colors.cyan : Theme.Colors.borderSubtle, lineWidth: 1))
+                        .foregroundStyle(isOn ? Theme.Colors.accentText : Theme.Colors.textDim)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(isOn ? Theme.Colors.selectTint : Color.clear)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(isOn ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
             }
@@ -239,7 +255,9 @@ struct HabitCreatorSheet: View {
     @ViewBuilder
     private func field<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).hudLabel(tracking: Theme.Tracking.wide)
+            Text(label)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textDim)
             content()
         }
     }
@@ -250,8 +268,14 @@ struct HabitCreatorSheet: View {
             .font(Theme.Typography.body)
             .foregroundStyle(Theme.Colors.text)
             .padding(Theme.Spacing.sm)
-            .background(Theme.Colors.bg2)
-            .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(Theme.Colors.bgInput)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
     }
 
     // MARK: - Actions

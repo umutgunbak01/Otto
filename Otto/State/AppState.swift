@@ -114,6 +114,11 @@ final class AppState {
     /// picks it up on appear, sends it, and clears the field.
     var pendingChatPrompt: String?
 
+    /// One-shot request from the top bar's search pill: MainView switches to
+    /// Home, and HomeView flips into search mode when it sees this go true,
+    /// then resets it.
+    var homeSearchRequested: Bool = false
+
     // Voice mode — lifted from OttoChatView so the wake-word path can present
     // the overlay programmatically and hand it a greeting to speak on open.
     var showVoiceOverlay: Bool = false
@@ -151,6 +156,11 @@ final class AppState {
     // Services
     private let persistence = PersistenceService.shared
     let claude = AgentService.shared
+    /// Live chat runs — one controller per conversation, owned here (not by
+    /// the chat view) so in-flight queries keep streaming and persisting when
+    /// the chat sheet closes or the user switches sessions/tabs mid-run.
+    /// Multiple conversations can run concurrently.
+    let chatRuns = ChatRunRegistry()
     let voice = VoiceSessionManager()
     let wakeWord = WakeWordService()
     let meetingPrep = MeetingPrepService()
@@ -703,6 +713,26 @@ final class AppState {
             newReminder.notificationId = notificationId
         }
         reminders.append(newReminder)
+        try? await persistence.updateReminders(reminders)
+    }
+
+    @MainActor
+    func updateReminder(_ reminder: Reminder) async {
+        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
+        var updated = reminder
+        // Re-arm the notification: drop any pending one, then schedule fresh
+        // if the (possibly moved) fire time is still ahead and the reminder
+        // is still open.
+        if let notificationId = reminders[index].notificationId {
+            await notifications.cancelReminder(notificationId: notificationId)
+            updated.notificationId = nil
+        }
+        if !updated.isCompleted, updated.reminderDate > Date() {
+            if let notificationId = try? await notifications.scheduleReminder(updated) {
+                updated.notificationId = notificationId
+            }
+        }
+        reminders[index] = updated
         try? await persistence.updateReminders(reminders)
     }
 
@@ -1343,6 +1373,9 @@ final class AppState {
 
     @MainActor
     func deleteChatSession(_ id: UUID) async {
+        // Deleting the session a live run belongs to also cancels the run —
+        // otherwise its next checkpoint would resurrect the deleted chat.
+        chatRuns.abandon(sessionId: id)
         chatSessions.removeAll { $0.id == id }
         if activeChatSessionId == id { activeChatSessionId = nil }
         try? await persistence.updateChatSessions(chatSessions)
@@ -1350,6 +1383,7 @@ final class AppState {
 
     @MainActor
     func clearChatSessions() async {
+        chatRuns.abandonAll()
         chatSessions.removeAll()
         activeChatSessionId = nil
         try? await persistence.updateChatSessions(chatSessions)
@@ -2074,11 +2108,11 @@ final class AppState {
             let pages = try await notion.searchPages()
             print("[Notion] Found \(pages.count) pages")
 
-            // Fetch blocks for each page (skip failures gracefully)
+            // Fetch blocks for each page, including nested children (skip failures gracefully)
             var blocksMap: [String: [NotionBlock]] = [:]
             for page in pages {
                 do {
-                    let blocks = try await notion.fetchPageBlocks(pageId: page.id)
+                    let blocks = try await notion.fetchBlockTree(parentId: page.id)
                     blocksMap[page.id] = blocks
                 } catch {
                     print("[Notion] Failed to fetch blocks for page \(page.id): \(error)")

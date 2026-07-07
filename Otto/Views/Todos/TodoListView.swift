@@ -238,19 +238,12 @@ struct TodoListView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                Text("⌬ TO-DOS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("To-dos")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(activeTodos.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: activeTodos.count)
 
                 Spacer()
 

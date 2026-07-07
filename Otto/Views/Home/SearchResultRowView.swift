@@ -77,7 +77,7 @@ struct SearchResultRowView: View {
             // Date and archived badge
             VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
                 Text(formattedDate)
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 if result.isArchived {
@@ -114,7 +114,7 @@ struct SearchResultRowView: View {
 
     private var highlightedTitle: some View {
         highlightText(result.title, query: searchQuery)
-            .font(Theme.Typography.headline)
+            .font(.system(size: 13.5, weight: .medium))
             .foregroundStyle(result.isArchived ? Theme.Colors.secondaryText : Theme.Colors.text)
             .lineLimit(1)
     }
@@ -123,8 +123,8 @@ struct SearchResultRowView: View {
 
     private func highlightedSnippet(_ snippet: String) -> some View {
         highlightText(snippet, query: searchQuery)
-            .font(Theme.Typography.caption)
-            .foregroundStyle(Theme.Colors.tertiaryText)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.Colors.textDim)
             .lineLimit(2)
     }
 
@@ -181,12 +181,12 @@ struct SearchResultRowView: View {
 
     private var archivedBadge: some View {
         Text(archivedLabel)
-            .font(.system(size: 9, weight: .medium))
+            .font(Theme.Typography.monoSmall)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Theme.Colors.borderSubtle)
-            .clipShape(Capsule())
+            .background(Theme.Colors.hoverTint)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private var archivedLabel: String {

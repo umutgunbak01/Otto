@@ -1,5 +1,71 @@
 import SwiftUI
 
+// MARK: - Shared X helpers (avatars + row cards)
+
+/// Rotating tinted avatar palette for the X views (mockup .fava a1–a5).
+enum XAvatarPalette {
+    static let pairs: [(bg: Color, fg: Color)] = [
+        (Theme.Colors.tintViolet, Theme.Colors.violet),
+        (Theme.Colors.tintGreen,  Theme.Colors.green),
+        (Theme.Colors.selectTint, Theme.Colors.accentText),
+        (Theme.Colors.tintAmber,  Theme.Colors.amber),
+        (Theme.Colors.tintRed,    Theme.Colors.red)
+    ]
+
+    /// Stable color pair for a given seed string (e.g. a username).
+    static func pair(for seed: String) -> (bg: Color, fg: Color) {
+        let sum = seed.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return pairs[abs(sum) % pairs.count]
+    }
+}
+
+/// 26pt tinted initials avatar used across X rows.
+struct XAvatar: View {
+    let seed: String
+    let initials: String
+    var size: CGFloat = 26
+
+    var body: some View {
+        let pair = XAvatarPalette.pair(for: seed)
+        ZStack {
+            Circle()
+                .fill(pair.bg)
+                .frame(width: size, height: size)
+
+            Text(initials)
+                .font(.system(size: size * 0.42, weight: .semibold))
+                .foregroundStyle(pair.fg)
+        }
+    }
+}
+
+/// Row card: panel bg, rounded hairline border, stronger border on hover.
+struct XRowCard: ViewModifier {
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .strokeBorder(
+                        isHovered ? Theme.Colors.borderStrong : Theme.Colors.border,
+                        lineWidth: 1
+                    )
+            )
+            .onHover { isHovered = $0 }
+    }
+}
+
+extension View {
+    func xRowCard() -> some View {
+        modifier(XRowCard())
+    }
+}
+
 struct XPostListView: View {
     @Environment(AppState.self) private var appState
     @State private var searchText: String = ""
@@ -92,19 +158,12 @@ struct XPostListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⌬ X POSTS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("X Posts")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filteredPosts.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredPosts.count)
 
                 Spacer()
 
@@ -139,8 +198,14 @@ struct XPostListView: View {
                     }
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(Theme.Colors.bgInput)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
 
                     // Sort picker
                     HStack(spacing: Theme.Spacing.sm) {
@@ -158,17 +223,23 @@ struct XPostListView: View {
                                 }
                             }
                         } label: {
-                            HStack(spacing: 2) {
+                            HStack(spacing: 4) {
                                 Image(systemName: "arrow.up.arrow.down")
                                     .font(.system(size: 9))
-                                Text(sortOption.rawValue)
-                                    .font(Theme.Typography.caption)
+                                Text("Sort: \(sortOption.rawValue)")
+                                    .font(.system(size: 12))
                             }
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Theme.Colors.borderSubtle)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                            .foregroundStyle(Theme.Colors.textDim)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .fill(Theme.Colors.panel)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                            )
                         }
                         #if os(macOS)
                         .menuStyle(.borderlessButton)
@@ -188,7 +259,7 @@ struct XPostListView: View {
 
     private var postList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: Theme.Spacing.sm) {
                 ForEach(filteredPosts) { post in
                     postRow(post)
                         .contentShape(Rectangle())
@@ -198,6 +269,7 @@ struct XPostListView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
         }
     }
 
@@ -206,41 +278,37 @@ struct XPostListView: View {
     private func postRow(_ post: XPost) -> some View {
         HStack(alignment: .top, spacing: Theme.Spacing.md) {
             // Author avatar
-            ZStack {
-                Circle()
-                    .fill(ContentType.xPost.color.opacity(0.12))
-                    .frame(width: 32, height: 32)
-
-                Text(String(post.authorDisplayName.prefix(1)).uppercased())
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ContentType.xPost.color)
-            }
+            XAvatar(
+                seed: post.authorUsername,
+                initials: String(post.authorDisplayName.prefix(1)).uppercased()
+            )
+            .padding(.top, 2)
 
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 // Author info and date
                 HStack {
                     Text(post.authorDisplayName)
-                        .font(Theme.Typography.headline)
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.Colors.text)
                         .lineLimit(1)
 
                     Text("@\(post.authorUsername)")
-                        .font(Theme.Typography.caption)
+                        .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
 
                     Spacer()
 
                     Text(post.formattedDate)
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
                 // Post text preview
                 Text(post.text)
                     .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(Theme.Colors.text)
                     .lineLimit(2)
 
                 // Engagement stats
@@ -252,12 +320,9 @@ struct XPostListView: View {
                 .padding(.top, Theme.Spacing.xs)
             }
         }
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.sm)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Color.clear)
-        )
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm + 2)
+        .xRowCard()
     }
 
     private func engagementStat(icon: String, count: Int) -> some View {
@@ -265,7 +330,7 @@ struct XPostListView: View {
             Image(systemName: icon)
                 .font(.system(size: 11))
             Text("\(count)")
-                .font(Theme.Typography.caption)
+                .font(Theme.Typography.monoCaption)
         }
         .foregroundStyle(Theme.Colors.tertiaryText)
     }
@@ -277,23 +342,19 @@ struct XPostListView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 // Author header
                 HStack(spacing: Theme.Spacing.md) {
-                    ZStack {
-                        Circle()
-                            .fill(ContentType.xPost.color.opacity(0.12))
-                            .frame(width: 48, height: 48)
-
-                        Text(String(post.authorDisplayName.prefix(1)).uppercased())
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(ContentType.xPost.color)
-                    }
+                    XAvatar(
+                        seed: post.authorUsername,
+                        initials: String(post.authorDisplayName.prefix(1)).uppercased(),
+                        size: 48
+                    )
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(post.authorDisplayName)
                             .font(Theme.Typography.title)
 
                         Text("@\(post.authorUsername)")
-                            .font(Theme.Typography.body)
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(Theme.Typography.monoBody)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                     }
 
                     Spacer()
@@ -307,7 +368,7 @@ struct XPostListView: View {
 
                 // Date
                 Text(post.formattedDate)
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 OttoDivider()
@@ -316,7 +377,7 @@ struct XPostListView: View {
                 HStack(spacing: Theme.Spacing.xl) {
                     VStack(spacing: Theme.Spacing.xs) {
                         Text("\(post.likeCount)")
-                            .font(Theme.Typography.title)
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Theme.Colors.text)
                         HStack(spacing: Theme.Spacing.xs) {
                             Image(systemName: "heart")
@@ -329,7 +390,7 @@ struct XPostListView: View {
 
                     VStack(spacing: Theme.Spacing.xs) {
                         Text("\(post.retweetCount)")
-                            .font(Theme.Typography.title)
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Theme.Colors.text)
                         HStack(spacing: Theme.Spacing.xs) {
                             Image(systemName: "arrow.2.squarepath")
@@ -342,7 +403,7 @@ struct XPostListView: View {
 
                     VStack(spacing: Theme.Spacing.xs) {
                         Text("\(post.replyCount)")
-                            .font(Theme.Typography.title)
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
                             .foregroundStyle(Theme.Colors.text)
                         HStack(spacing: Theme.Spacing.xs) {
                             Image(systemName: "bubble.right")
@@ -358,22 +419,18 @@ struct XPostListView: View {
                 if post.isRetweet || post.isReply {
                     HStack(spacing: Theme.Spacing.sm) {
                         if post.isRetweet {
-                            Text("Repost")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(ContentType.xPost.color)
-                                .padding(.horizontal, Theme.Spacing.sm)
-                                .padding(.vertical, Theme.Spacing.xs)
-                                .background(ContentType.xPost.color.opacity(0.1))
-                                .clipShape(Capsule())
+                            AngularChip(fill: Theme.Colors.selectTint) {
+                                Text("Repost")
+                                    .font(Theme.Typography.monoSmall)
+                                    .foregroundStyle(Theme.Colors.accentText)
+                            }
                         }
                         if post.isReply {
-                            Text("Reply")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(ContentType.xPost.color)
-                                .padding(.horizontal, Theme.Spacing.sm)
-                                .padding(.vertical, Theme.Spacing.xs)
-                                .background(ContentType.xPost.color.opacity(0.1))
-                                .clipShape(Capsule())
+                            AngularChip(fill: Theme.Colors.selectTint) {
+                                Text("Reply")
+                                    .font(Theme.Typography.monoSmall)
+                                    .foregroundStyle(Theme.Colors.accentText)
+                            }
                         }
                     }
                 }

@@ -83,7 +83,7 @@ struct XFollowerDetailView: View {
             HStack(spacing: 6) {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 12))
-                    .foregroundStyle(ContentType.xFollower.color)
+                    .foregroundStyle(Theme.Colors.textDim)
                 Text("X Followers")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.tertiaryText)

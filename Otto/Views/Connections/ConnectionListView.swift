@@ -18,6 +18,8 @@ struct ConnectionListView: View {
     @State private var draggingColumn: ConnectionColumn?
     /// Which (row, column) is currently in edit mode. Only one at a time.
     @State private var editingCell: EditingCell?
+    /// Row currently under the pointer — drives the hover tint.
+    @State private var hoveredRowId: UUID?
 
     private struct EditingCell: Equatable {
         let connectionId: UUID
@@ -205,7 +207,9 @@ struct ConnectionListView: View {
                     .buttonStyle(.plain)
                 }
                 Text("Name")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.tertiaryText)
                 Spacer()
             }
@@ -217,7 +221,9 @@ struct ConnectionListView: View {
             // and the ScrollView's content extent in sync.
             ForEach(layout.visible, id: \.self) { column in
                 Text(ColumnLayout.label(for: column, definitions: appState.connectionCustomFields))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Theme.Typography.label)
+                    .tracking(Theme.Tracking.xwide)
+                    .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.tertiaryText)
                     .padding(.horizontal, 8)
                     .frame(
@@ -246,7 +252,7 @@ struct ConnectionListView: View {
                     #endif
             }
         }
-        .background(Theme.Colors.borderSubtle.opacity(0.5))
+        .background(Theme.Colors.bg1)
         // Catch-all so a drop on the pinned Name column or a gap still
         // finalizes the reorder (persist + clear the drag state).
         .onDrop(
@@ -288,16 +294,17 @@ struct ConnectionListView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
+                        let avatar = ConnectionAvatarPalette.colors(for: connection)
                         ZStack {
                             Circle()
-                                .fill(neonColor(for: connection).opacity(0.14))
+                                .fill(avatar.bg)
                                 .frame(width: 26, height: 26)
                             Text(connection.initials)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(neonColor(for: connection))
+                                .foregroundStyle(avatar.fg)
                         }
                         Text(connection.fullName)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(Theme.Colors.text)
                             .lineLimit(1)
                         Spacer(minLength: 0)
@@ -329,11 +336,18 @@ struct ConnectionListView: View {
                 )
             }
         }
+        .background(hoveredRowId == connection.id ? Theme.Colors.hoverTint : Color.clear)
+        #if os(macOS)
+        .onHover { hovering in
+            if hovering {
+                hoveredRowId = connection.id
+            } else if hoveredRowId == connection.id {
+                hoveredRowId = nil
+            }
+        }
+        #endif
     }
 
-    private func neonColor(for connection: Connection) -> Color {
-        connection.category == .unknown ? ContentType.connection.color : connection.category.color
-    }
 
     // MARK: - Sheet binding
 
@@ -384,18 +398,11 @@ struct ConnectionListView: View {
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
             HStack(alignment: .center) {
-                Text("⌬ LINKEDIN CONNECTIONS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                Text("LinkedIn Connections")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filteredConnections.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredConnections.count)
 
                 Spacer()
 
@@ -415,13 +422,13 @@ struct ConnectionListView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "trash").font(.system(size: 11))
-                            Text("Delete (\(selectedConnectionIds.count))").font(.system(size: 12))
+                            Text("Delete (\(selectedConnectionIds.count))").font(.system(size: 12, weight: .medium))
                         }
                         .foregroundStyle(Theme.Colors.bg0)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(Theme.Colors.priorityUrgent)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .background(Theme.Colors.red)
+                        .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
                     .buttonStyle(.plain)
                 }
@@ -434,7 +441,17 @@ struct ConnectionListView: View {
                 } label: {
                     Text(isSelectionMode ? "Cancel" : "Select")
                         .font(.system(size: 12))
-                        .foregroundStyle(isSelectionMode ? Theme.Colors.secondaryText : Theme.Colors.accent)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(Theme.Colors.panel)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
 
@@ -443,15 +460,10 @@ struct ConnectionListView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "square.and.arrow.down").font(.system(size: 11))
-                        Text("Import CSV").font(.system(size: 12))
+                        Text("Import CSV").font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -474,8 +486,12 @@ struct ConnectionListView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(Theme.Colors.bgInput)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
                 .frame(maxWidth: 280)
 
                 Menu {
@@ -632,13 +648,19 @@ struct ConnectionListView: View {
     private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 11))
+            Text(text).font(.system(size: 12, weight: .medium))
         }
-        .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
-        .padding(.horizontal, 8)
+        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+        .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background(isActive ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Empty states
@@ -706,6 +728,25 @@ struct ConnectionListView: View {
         case .failure(let error):
             print("File import error: \(error)")
         }
+    }
+}
+
+/// Avatar tint rotation — pairs of (background tint, initials color) cycled
+/// deterministically per person, matching the mockup's .fava a1–a5 classes.
+enum ConnectionAvatarPalette {
+    static let pairs: [(bg: Color, fg: Color)] = [
+        (Theme.Colors.tintViolet, Theme.Colors.violet),
+        (Theme.Colors.tintGreen, Theme.Colors.green),
+        (Theme.Colors.selectTint, Theme.Colors.accentText),
+        (Theme.Colors.tintAmber, Theme.Colors.amber),
+        (Theme.Colors.tintRed, Theme.Colors.red),
+    ]
+
+    /// Stable across launches: derived from the name's scalar sum, not
+    /// `hashValue` (which is seeded per-process).
+    static func colors(for connection: Connection) -> (bg: Color, fg: Color) {
+        let sum = connection.fullName.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return pairs[sum % pairs.count]
     }
 }
 

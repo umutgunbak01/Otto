@@ -36,7 +36,8 @@ struct InputView: View {
                 // Text input
                 TextField(placeholderText, text: $state.inputText, axis: .vertical)
                     .textFieldStyle(.plain)
-                    .font(Theme.Typography.body)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1...3)
                     .focused($isFocused)
                     .onSubmit {
@@ -48,9 +49,14 @@ struct InputView: View {
                     Button {
                         submitInput()
                     } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(Theme.Colors.accent)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.onAccent)
+                            .frame(width: 26, height: 26)
+                            .background(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .fill(Theme.Colors.accent)
+                            )
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.return, modifiers: .command)
@@ -69,11 +75,11 @@ struct InputView: View {
                     .padding(.vertical, Theme.Spacing.sm)
             }
         }
-        .background(Theme.Colors.background)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+        .background(Theme.Colors.bgInput)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl))
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .stroke(isFocused ? Theme.Colors.accent.opacity(0.5) : Theme.Colors.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                .strokeBorder(isFocused ? Theme.Colors.accent : Theme.Colors.borderStrong, lineWidth: 1)
         )
     }
 
@@ -94,7 +100,7 @@ struct InputView: View {
         case .note: return Theme.Colors.work
         case .idea: return Theme.Colors.hobby
         case .reminder: return Theme.Colors.priorityHigh
-        case .bookmark: return .pink
+        case .bookmark: return Theme.Colors.red
         default: return Theme.Colors.accent
         }
     }
@@ -116,7 +122,7 @@ struct InputView: View {
             case .note: return Theme.Colors.work
             case .idea: return Theme.Colors.hobby
             case .reminder: return Theme.Colors.priorityHigh
-            case .bookmark: return .pink
+            case .bookmark: return Theme.Colors.red
             default: return Theme.Colors.accent
             }
         }()

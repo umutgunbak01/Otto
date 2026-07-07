@@ -34,15 +34,28 @@ final class OttoToolExecutor {
         case .update_todo:      result = await updateTodo(input)
         case .update_note:      result = await updateNote(input)
         case .update_idea:      result = await updateIdea(input)
+        case .update_reminder:  result = await updateReminder(input)
+        case .update_bookmark:  result = await updateBookmark(input)
+        case .update_meeting:   result = await updateMeeting(input)
+        case .create_network_entry: result = await createNetworkEntry(input)
+        case .update_network_entry: result = await updateNetworkEntry(input)
+        case .create_company:   result = await createCompany(input)
+        case .update_company:   result = await updateCompany(input)
+        case .create_event:     result = await createEvent(input)
+        case .update_event:     result = await updateEvent(input)
+        case .create_community: result = await createCommunity(input)
+        case .update_community: result = await updateCommunity(input)
         case .complete_todo:    result = await setTodoCompletion(input, completed: true)
         case .uncomplete_todo:  result = await setTodoCompletion(input, completed: false)
         case .complete_reminder:result = await completeReminder(input)
         case .delete_item:      result = await deleteItem(input)
         case .search_items:     result = searchItems(input)
+        case .grep_data:        result = grepData(input)
         case .get_item:         result = getItem(input)
         case .attach_item_preview: result = attachItemPreview(input)
         case .open_url:         result = openURLTool(input)
         case .create_habit:     result = await createHabit(input)
+        case .update_habit:     result = await updateHabitTool(input)
         case .log_habit_entry:  result = await logHabitEntryTool(input)
         case .complete_habit:   result = await completeHabitTool(input)
         case .list_habits:      result = listHabitsTool(input)
@@ -63,13 +76,44 @@ final class OttoToolExecutor {
     private static let writeTools: Set<OttoTools.Name> = [
         .create_todo, .create_note, .create_idea, .create_reminder, .create_bookmark, .create_meeting,
         .update_todo, .update_note, .update_idea,
+        .update_reminder, .update_bookmark, .update_meeting,
+        .create_network_entry, .update_network_entry,
+        .create_company, .update_company,
+        .create_event, .update_event,
+        .create_community, .update_community,
         .complete_todo, .uncomplete_todo, .complete_reminder,
         .delete_item,
-        .create_habit, .log_habit_entry, .complete_habit,
+        .create_habit, .update_habit, .log_habit_entry, .complete_habit,
         // A successful genmedia_run lands a real artifact in the Files tab,
         // so it earns the same "thing happened" chime as the create_* tools.
         .genmedia_run
     ]
+
+    // MARK: - Grep data (workspace tables over MCP)
+
+    /// Backend-agnostic access to the AgentWorkspaceExporter tables. The CLI
+    /// backends get real files in their cwd; Hermes runs remotely and can't
+    /// see those, so it greps the same snapshot through this tool — one call
+    /// with an alternation pattern instead of a chain of search_items calls.
+    private func grepData(_ input: [String: Any]) -> ToolResult {
+        let file = (input["file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = input["pattern"] as? String ?? ""
+        let maxResults = min(max(input["max_results"] as? Int ?? 50, 1), 200)
+        guard !file.isEmpty, !pattern.isEmpty else {
+            return err("grep_data needs both `file` and `pattern`.", summary: "grep_data: missing arguments")
+        }
+        let out = AgentWorkspaceExporter.grep(
+            file: file,
+            pattern: pattern,
+            maxResults: maxResults,
+            appState: appState
+        )
+        if out.isError {
+            return err(out.text, summary: "grep \(file) failed")
+        }
+        let noun = out.matchCount == 1 ? "match" : "matches"
+        return ok(out.text, summary: "\(out.matchCount) \(noun) in \(file)")
+    }
 
     // MARK: - Open URL
 
@@ -121,6 +165,7 @@ final class OttoToolExecutor {
             case "event":      return appState.events.first(where: { $0.id == id })?.name
             case "community":  return appState.communities.first(where: { $0.id == id })?.name
             case "habit":      return appState.habits.first(where: { $0.id == id })?.title
+            case "file":       return appState.files.first(where: { $0.id == id })?.name
             case "x_post":     return appState.xPosts.first(where: { $0.id == id }).map { "@\($0.authorUsername): \(String($0.text.prefix(60)))" }
             case "x_follower": return appState.xFollowers.first(where: { $0.id == id }).map { "\($0.displayName) (@\($0.username))" }
             case "x_dm":       return appState.xDirectMessages.first(where: { $0.id == id }).map { "DM from @\($0.senderUsername)" }
@@ -334,6 +379,283 @@ final class OttoToolExecutor {
         return ok("Updated idea \(idea.id.uuidString).", summary: "Updated idea: \(idea.title)")
     }
 
+    private func updateReminder(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update reminder failed")
+        }
+        guard var reminder = appState.reminders.first(where: { $0.id == id }) else {
+            return err("No reminder with id \(id.uuidString).", summary: "Update reminder failed")
+        }
+        var changed = false
+        if let t = string(input, "title").nonEmpty { reminder.title = t; changed = true }
+        if let raw = string(input, "reminder_date").nonEmpty {
+            guard let date = parseDate(raw) else {
+                return err("Invalid 'reminder_date' (expected ISO8601).", summary: "Update reminder failed")
+            }
+            reminder.reminderDate = date
+            // A moved reminder should fire again even if the old time passed.
+            reminder.isTriggered = false
+            changed = true
+        }
+        guard changed else { return err("No fields provided to update.", summary: "Update reminder failed") }
+        await appState.updateReminder(reminder)
+        return ok(
+            "Updated reminder \(reminder.id.uuidString) — fires \(ISO8601DateFormatter().string(from: reminder.reminderDate)).",
+            summary: "Updated reminder: \(reminder.title)"
+        )
+    }
+
+    private func updateBookmark(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update bookmark failed")
+        }
+        guard var bookmark = appState.bookmarks.first(where: { $0.id == id }) else {
+            return err("No bookmark with id \(id.uuidString).", summary: "Update bookmark failed")
+        }
+        var changed = false
+        if let t = string(input, "title").nonEmpty { bookmark.title = t; changed = true }
+        if let u = string(input, "url").nonEmpty { bookmark.url = u; changed = true }
+        if let d = string(input, "description") { bookmark.description = d; changed = true }
+        if let m = parseMediaType(string(input, "media_type")) { bookmark.mediaType = m; changed = true }
+        if let r = input["is_read"] as? Bool { bookmark.isRead = r; changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update bookmark failed") }
+        await appState.updateBookmark(bookmark)
+        return ok("Updated bookmark \(bookmark.id.uuidString).", summary: "Updated bookmark: \(bookmark.title)")
+    }
+
+    private func updateMeeting(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update meeting failed")
+        }
+        guard var meeting = appState.meetings.first(where: { $0.id == id }) else {
+            return err("No meeting with id \(id.uuidString).", summary: "Update meeting failed")
+        }
+        var changed = false
+        if let t = string(input, "title").nonEmpty { meeting.title = t; changed = true }
+        if let c = string(input, "content") { meeting.content = c; changed = true }
+        if let o = string(input, "overview") { meeting.overview = o; changed = true }
+        if let a = string(input, "action_items") { meeting.actionItems = a; changed = true }
+        if let org = string(input, "organizer") { meeting.organizer = org; changed = true }
+        if input["participants"] != nil { meeting.participants = stringArray(input, "participants"); changed = true }
+        if let mins = intValue(input, "duration_minutes") { meeting.duration = max(0, mins) * 60; changed = true }
+        if let d = parseDate(string(input, "meeting_date")) { meeting.meetingDate = d; changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update meeting failed") }
+        await appState.updateMeeting(meeting)
+        return ok("Updated meeting \(meeting.id.uuidString).", summary: "Updated meeting: \(meeting.title)")
+    }
+
+    // MARK: - CRM (Network Hub / Companies / Events / Communities)
+
+    private func createNetworkEntry(_ input: [String: Any]) async -> ToolResult {
+        let name = string(input, "name").nonEmpty ?? ""
+        let company = string(input, "company").nonEmpty ?? ""
+        guard !name.isEmpty || !company.isEmpty else {
+            return err("Provide at least 'name' or 'company'.", summary: "Create network entry failed")
+        }
+        let entry = NetworkEntry(
+            type: parseNetworkType(string(input, "type")) ?? .other,
+            company: company,
+            industry: string(input, "industry") ?? "",
+            name: name,
+            individualType: parseIndividualType(string(input, "individual_type")) ?? .other,
+            title: string(input, "title") ?? "",
+            location: string(input, "location") ?? "",
+            email: string(input, "email") ?? "",
+            linkedin: string(input, "linkedin").nonEmpty,
+            closeness: parseCloseness(string(input, "closeness")) ?? .unknown,
+            notes: string(input, "notes") ?? ""
+        )
+        await appState.addNetworkEntry(entry)
+        let display = name.isEmpty ? company : name
+        return ok(
+            "Created network entry id=\(entry.id.uuidString) name=\(display)",
+            summary: "Added to Network Hub: \(display)"
+        )
+    }
+
+    private func updateNetworkEntry(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update network entry failed")
+        }
+        guard var entry = appState.networkEntries.first(where: { $0.id == id }) else {
+            return err("No network entry with id \(id.uuidString).", summary: "Update network entry failed")
+        }
+        var changed = false
+        if let v = string(input, "name").nonEmpty { entry.name = v; changed = true }
+        if let v = string(input, "company").nonEmpty { entry.company = v; changed = true }
+        if let v = string(input, "title") { entry.title = v; changed = true }
+        if let v = parseNetworkType(string(input, "type")) { entry.type = v; changed = true }
+        if let v = parseIndividualType(string(input, "individual_type")) { entry.individualType = v; changed = true }
+        if let v = string(input, "industry") { entry.industry = v; changed = true }
+        if let v = string(input, "location") { entry.location = v; changed = true }
+        if let v = string(input, "email") { entry.email = v; changed = true }
+        if let v = string(input, "linkedin") { entry.linkedin = v.nonEmpty; changed = true }
+        if let v = parseCloseness(string(input, "closeness")) { entry.closeness = v; changed = true }
+        if let v = string(input, "notes") { entry.notes = v; changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update network entry failed") }
+        await appState.updateNetworkEntry(entry)
+        let display = entry.name.isEmpty ? entry.company : entry.name
+        return ok("Updated network entry \(entry.id.uuidString).", summary: "Updated network entry: \(display)")
+    }
+
+    private func createCompany(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name").nonEmpty else {
+            return err("Missing required 'name'.", summary: "Create company failed")
+        }
+        if let existing = appState.companies.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return err(
+                "A company named '\(existing.name)' already exists (id \(existing.id.uuidString)). Use update_company to change it.",
+                summary: "Company already exists"
+            )
+        }
+        var linkedIds: [UUID] = []
+        if let linked = linkedNetworkIds(input) {
+            guard linked.unknown.isEmpty else {
+                return err(
+                    "Unknown network entry ids: \(linked.unknown.joined(separator: ", ")). Use search_items with type=network to find ids.",
+                    summary: "Create company failed"
+                )
+            }
+            linkedIds = linked.ids
+        }
+        let company = Company(
+            name: name,
+            type: parseCompanyType(string(input, "type")) ?? .unknown,
+            location: string(input, "location") ?? "",
+            isCustomer: input["is_customer"] as? Bool ?? false,
+            commitmentAmount: double(input, "commitment_amount").flatMap { $0 > 0 ? $0 : nil },
+            website: string(input, "website").nonEmpty,
+            notes: string(input, "notes") ?? "",
+            tags: stringArray(input, "tags"),
+            linkedNetworkEntryIds: linkedIds
+        )
+        await appState.addCompany(company)
+        return ok("Created company id=\(company.id.uuidString) name=\(name)", summary: "Created company: \(name)")
+    }
+
+    private func updateCompany(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update company failed")
+        }
+        guard var company = appState.companies.first(where: { $0.id == id }) else {
+            return err("No company with id \(id.uuidString).", summary: "Update company failed")
+        }
+        var changed = false
+        if let v = string(input, "name").nonEmpty { company.name = v; changed = true }
+        if let v = parseCompanyType(string(input, "type")) { company.type = v; changed = true }
+        if let v = string(input, "location") { company.location = v; changed = true }
+        if let v = input["is_customer"] as? Bool { company.isCustomer = v; changed = true }
+        if let v = double(input, "commitment_amount") { company.commitmentAmount = v > 0 ? v : nil; changed = true }
+        if let v = string(input, "website") { company.website = v.nonEmpty; changed = true }
+        if let v = string(input, "notes") { company.notes = v; changed = true }
+        if input["tags"] != nil { company.tags = stringArray(input, "tags"); changed = true }
+        if let linked = linkedNetworkIds(input) {
+            guard linked.unknown.isEmpty else {
+                return err(
+                    "Unknown network entry ids: \(linked.unknown.joined(separator: ", ")). Use search_items with type=network to find ids.",
+                    summary: "Update company failed"
+                )
+            }
+            company.linkedNetworkEntryIds = linked.ids
+            changed = true
+        }
+        guard changed else { return err("No fields provided to update.", summary: "Update company failed") }
+        await appState.updateCompany(company)
+        return ok("Updated company \(company.id.uuidString).", summary: "Updated company: \(company.name)")
+    }
+
+    private func createEvent(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name").nonEmpty else {
+            return err("Missing required 'name'.", summary: "Create event failed")
+        }
+        let event = Event(
+            name: name,
+            type: parseEventType(string(input, "type")) ?? .unknown,
+            location: string(input, "location") ?? "",
+            startDate: parseDate(string(input, "start_date")),
+            endDate: parseDate(string(input, "end_date")),
+            status: parseEventStatus(string(input, "status")) ?? .considering,
+            budgetAmount: double(input, "budget_amount").flatMap { $0 > 0 ? $0 : nil },
+            notes: string(input, "notes") ?? "",
+            tags: stringArray(input, "tags")
+        )
+        await appState.addEvent(event)
+        return ok("Created event id=\(event.id.uuidString) name=\(name)", summary: "Created event: \(name)")
+    }
+
+    private func updateEvent(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update event failed")
+        }
+        guard var event = appState.events.first(where: { $0.id == id }) else {
+            return err("No event with id \(id.uuidString).", summary: "Update event failed")
+        }
+        var changed = false
+        if let v = string(input, "name").nonEmpty { event.name = v; changed = true }
+        if let v = parseEventType(string(input, "type")) { event.type = v; changed = true }
+        if let v = string(input, "location") { event.location = v; changed = true }
+        if input["start_date"] != nil {
+            let raw = string(input, "start_date") ?? ""
+            event.startDate = raw.isEmpty ? nil : parseDate(raw)
+            changed = true
+        }
+        if input["end_date"] != nil {
+            let raw = string(input, "end_date") ?? ""
+            event.endDate = raw.isEmpty ? nil : parseDate(raw)
+            changed = true
+        }
+        if let v = parseEventStatus(string(input, "status")) { event.status = v; changed = true }
+        if let v = double(input, "budget_amount") { event.budgetAmount = v > 0 ? v : nil; changed = true }
+        if let v = string(input, "notes") { event.notes = v; changed = true }
+        if input["tags"] != nil { event.tags = stringArray(input, "tags"); changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update event failed") }
+        await appState.updateEvent(event)
+        return ok("Updated event \(event.id.uuidString).", summary: "Updated event: \(event.name)")
+    }
+
+    private func createCommunity(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name").nonEmpty else {
+            return err("Missing required 'name'.", summary: "Create community failed")
+        }
+        if let existing = appState.communities.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return err(
+                "A community named '\(existing.name)' already exists (id \(existing.id.uuidString)). Use update_community to change it.",
+                summary: "Community already exists"
+            )
+        }
+        let community = Community(
+            name: name,
+            type: parseCommunityType(string(input, "type")) ?? .community,
+            location: string(input, "location") ?? "",
+            builderSupportPerk: input["builder_support_perk"] as? Bool ?? false,
+            url: string(input, "url").nonEmpty,
+            notes: string(input, "notes") ?? "",
+            tags: stringArray(input, "tags")
+        )
+        await appState.addCommunity(community)
+        return ok("Created community id=\(community.id.uuidString) name=\(name)", summary: "Created community: \(name)")
+    }
+
+    private func updateCommunity(_ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update community failed")
+        }
+        guard var community = appState.communities.first(where: { $0.id == id }) else {
+            return err("No community with id \(id.uuidString).", summary: "Update community failed")
+        }
+        var changed = false
+        if let v = string(input, "name").nonEmpty { community.name = v; changed = true }
+        if let v = parseCommunityType(string(input, "type")) { community.type = v; changed = true }
+        if let v = string(input, "location") { community.location = v; changed = true }
+        if let v = input["builder_support_perk"] as? Bool { community.builderSupportPerk = v; changed = true }
+        if let v = string(input, "url") { community.url = v.nonEmpty; changed = true }
+        if let v = string(input, "notes") { community.notes = v; changed = true }
+        if input["tags"] != nil { community.tags = stringArray(input, "tags"); changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update community failed") }
+        await appState.updateCommunity(community)
+        return ok("Updated community \(community.id.uuidString).", summary: "Updated community: \(community.name)")
+    }
+
     // MARK: - Complete / uncomplete
 
     private func setTodoCompletion(_ input: [String: Any], completed: Bool) async -> ToolResult {
@@ -401,6 +723,19 @@ final class OttoToolExecutor {
             }
             await appState.deleteBookmark(b)
             return ok("Deleted bookmark \(id.uuidString).", summary: "Deleted bookmark: \(b.title)")
+        case "meeting":
+            guard let m = appState.meetings.first(where: { $0.id == id }) else {
+                return err("No meeting with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteMeeting(m)
+            return ok("Deleted meeting \(id.uuidString).", summary: "Deleted meeting: \(m.title)")
+        case "network":
+            guard let n = appState.networkEntries.first(where: { $0.id == id }) else {
+                return err("No network entry with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteNetworkEntry(n)
+            let display = n.name.isEmpty ? n.company : n.name
+            return ok("Deleted network entry \(id.uuidString).", summary: "Deleted network entry: \(display)")
         case "habit":
             guard let h = appState.habits.first(where: { $0.id == id }) else {
                 return err("No habit with id \(id.uuidString).", summary: "Delete failed")
@@ -1185,6 +1520,32 @@ final class OttoToolExecutor {
         )
     }
 
+    private func updateHabitTool(_ input: [String: Any]) async -> ToolResult {
+        guard let raw = string(input, "habit")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
+            return err("Missing required 'habit' (id or name).", summary: "Update habit failed")
+        }
+        guard var habit = resolveHabit(raw) else {
+            return err(
+                "No habit matches '\(raw)'. Active habits: \(habitNames()).",
+                summary: "Update habit failed"
+            )
+        }
+        var changed = false
+        if let t = string(input, "title").nonEmpty { habit.title = t; changed = true }
+        if let n = string(input, "notes") { habit.notes = n; changed = true }
+        if let k = parseHabitKind(string(input, "kind")) { habit.kind = k; changed = true }
+        if let u = string(input, "unit") { habit.unit = u.nonEmpty; changed = true }
+        if let target = double(input, "daily_target") { habit.dailyTarget = max(0, target); changed = true }
+        if string(input, "frequency").nonEmpty != nil { habit.frequency = parseFrequency(input); changed = true }
+        if let c = parseHabitCategory(string(input, "category")) { habit.category = c; changed = true }
+        if let icon = string(input, "icon").nonEmpty { habit.iconName = icon; changed = true }
+        if let color = parseColorTag(string(input, "color")) { habit.colorTag = color; changed = true }
+        if let archived = input["archived"] as? Bool { habit.isArchived = archived; changed = true }
+        guard changed else { return err("No fields provided to update.", summary: "Update habit failed") }
+        await appState.updateHabit(habit)
+        return ok("Updated habit \(habit.id.uuidString).", summary: "Updated habit: \(habit.title)")
+    }
+
     private func logHabitEntryTool(_ input: [String: Any]) async -> ToolResult {
         guard let raw = string(input, "habit")?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
             return err("Missing required 'habit' (id or name).", summary: "Log habit failed")
@@ -1347,6 +1708,98 @@ final class OttoToolExecutor {
     private func parseUUID(_ s: String?) -> UUID? {
         guard let s, !s.isEmpty else { return nil }
         return UUID(uuidString: s)
+    }
+
+    private func double(_ input: [String: Any], _ key: String) -> Double? {
+        if let n = input[key] as? Double { return n }
+        if let n = input[key] as? Int { return Double(n) }
+        if let s = string(input, key), let n = Double(s) { return n }
+        return nil
+    }
+
+    private func intValue(_ input: [String: Any], _ key: String) -> Int? {
+        if let n = input[key] as? Int { return n }
+        if let n = input[key] as? Double { return Int(n) }
+        if let s = string(input, key), let n = Int(s) { return n }
+        return nil
+    }
+
+    /// Resolve `linked_network_entry_ids` input into known NetworkEntry ids.
+    /// Returns nil when the key is absent; unknown/invalid ids are reported
+    /// back to the agent rather than silently dropped.
+    private func linkedNetworkIds(_ input: [String: Any]) -> (ids: [UUID], unknown: [String])? {
+        guard input["linked_network_entry_ids"] != nil else { return nil }
+        var ids: [UUID] = []
+        var unknown: [String] = []
+        for raw in stringArray(input, "linked_network_entry_ids") {
+            if let id = UUID(uuidString: raw), appState.networkEntries.contains(where: { $0.id == id }) {
+                ids.append(id)
+            } else {
+                unknown.append(raw)
+            }
+        }
+        return (ids, unknown)
+    }
+
+    // MARK: - CRM enum parsing
+    //
+    // The tool schemas advertise snake_case values ("app_studio",
+    // "close_friend") while the Swift enums use display-style raw values
+    // ("App Studio", "Close friend"). Folding both sides to bare
+    // alphanumerics makes the match format-insensitive.
+
+    private func foldEnumKey(_ s: String) -> String {
+        s.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private func parseNetworkType(_ s: String?) -> NetworkType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return NetworkType.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseIndividualType(_ s: String?) -> IndividualType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return IndividualType.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseCloseness(_ s: String?) -> NetworkCloseness? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        // Accept both the schema's "intro_path_available" and a bare "intro_path".
+        if key == "intropath" { return .introPath }
+        return NetworkCloseness.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseCompanyType(_ s: String?) -> CompanyType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return CompanyType.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseEventType(_ s: String?) -> EventType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return EventType.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseEventStatus(_ s: String?) -> EventStatus? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return EventStatus.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseCommunityType(_ s: String?) -> CommunityType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return CommunityType.allCases.first { foldEnumKey($0.rawValue) == key }
+    }
+
+    private func parseMediaType(_ s: String?) -> Bookmark.MediaType? {
+        guard let s = s.nonEmpty else { return nil }
+        let key = foldEnumKey(s)
+        return Bookmark.MediaType.allCases.first { foldEnumKey($0.rawValue) == key }
     }
 
     private func parseDate(_ s: String?) -> Date? {

@@ -185,7 +185,7 @@ private struct ShortTextCell: View {
             if isEditing {
                 TextField(placeholder, text: $draft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12.5))
                     .focused($focused)
                     .onAppear {
                         draft = value
@@ -199,7 +199,11 @@ private struct ShortTextCell: View {
                     .padding(.vertical, 3)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1)
+                            .fill(Theme.Colors.bgInput)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1)
+                            )
                     )
             } else {
                 CellDisplayText(
@@ -233,11 +237,11 @@ private struct LongTextCell: View {
         .popover(isPresented: Binding(get: { isEditing }, set: { if !$0 { onEndEdit() } })) {
             VStack(alignment: .trailing, spacing: 8) {
                 TextEditor(text: $draft)
-                    .font(.system(size: 12))
+                    .font(.system(size: 13))
                     .frame(width: 360, height: 180)
                     .scrollContentBackground(.hidden)
                     .padding(8)
-                    .background(Theme.Colors.borderSubtle.opacity(0.4))
+                    .background(Theme.Colors.bgInput)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
                 HStack(spacing: 8) {
@@ -312,13 +316,13 @@ struct CellDisplayText: View {
             HStack(spacing: 0) {
                 if text.isEmpty {
                     Text(placeholder)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
                         .italic()
                 } else {
                     Text(text)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.Colors.textDim)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -341,12 +345,12 @@ private struct LastContactDisplay: View {
         HStack(spacing: 0) {
             if let date = date {
                 Text(ConnectionDateFormat.relative(date))
-                    .font(.system(size: 12))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .help(ConnectionDateFormat.short(date))
             } else {
                 Text("—")
-                    .font(.system(size: 12))
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
             }
             Spacer(minLength: 0)
@@ -379,17 +383,21 @@ private struct ClosenessMenuCell: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: connection.closeness.icon).font(.system(size: 11))
-                Text(connection.closeness.label).font(.system(size: 11)).lineLimit(1)
+                HStack(spacing: 3) {
+                    Text(connection.closeness.label).font(Theme.Typography.monoSmall).lineLimit(1)
+                    Text("▾").font(.system(size: 8)).opacity(0.7)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(connection.closeness == .unknown ? Theme.Colors.hoverTint : connection.closeness.color.opacity(0.12))
+                )
                 Spacer(minLength: 0)
             }
             .foregroundStyle(connection.closeness == .unknown ? Theme.Colors.tertiaryText : connection.closeness.color)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 4)
             .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(connection.closeness == .unknown ? Theme.Colors.hoverTint : connection.closeness.color.opacity(0.1))
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -421,17 +429,21 @@ private struct CategoryMenuCell: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: connection.category.icon).font(.system(size: 11))
-                Text(connection.category.label).font(.system(size: 11)).lineLimit(1)
+                HStack(spacing: 3) {
+                    Text(connection.category.label).font(Theme.Typography.monoSmall).lineLimit(1)
+                    Text("▾").font(.system(size: 8)).opacity(0.7)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(connection.category == .unknown ? Theme.Colors.hoverTint : connection.category.color.opacity(0.12))
+                )
                 Spacer(minLength: 0)
             }
             .foregroundStyle(connection.category == .unknown ? Theme.Colors.tertiaryText : connection.category.color)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 4)
             .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(connection.category == .unknown ? Theme.Colors.hoverTint : connection.category.color.opacity(0.1))
-            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -459,13 +471,13 @@ private struct TagsCell: View {
             HStack(spacing: 4) {
                 if connection.tags.isEmpty {
                     Text("Tags")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
                         .italic()
                 } else {
                     ForEach(connection.tags.prefix(3), id: \.self) { tag in
                         Text(tag)
-                            .font(.system(size: 10))
+                            .font(Theme.Typography.monoSmall)
                             .foregroundStyle(ContentType.connection.color)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -477,7 +489,7 @@ private struct TagsCell: View {
                     }
                     if connection.tags.count > 3 {
                         Text("+\(connection.tags.count - 3)")
-                            .font(.system(size: 10))
+                            .font(Theme.Typography.monoSmall)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                 }
@@ -495,7 +507,7 @@ private struct TagsCell: View {
                 FlowLayout(spacing: 4) {
                     ForEach(draft, id: \.self) { tag in
                         HStack(spacing: 4) {
-                            Text(tag).font(.system(size: 11))
+                            Text(tag).font(Theme.Typography.monoSmall)
                             Button {
                                 draft.removeAll { $0 == tag }
                             } label: {
@@ -522,7 +534,7 @@ private struct TagsCell: View {
                     .disabled(newTag.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .padding(6)
-                .background(Theme.Colors.borderSubtle.opacity(0.4))
+                .background(Theme.Colors.bgInput)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
                 HStack {
@@ -599,7 +611,7 @@ struct CustomFieldCell: View {
             if isEditing {
                 TextField(definition.name, text: $textDraft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(.system(size: 12.5))
                     .focused($focused)
                     .onAppear {
                         textDraft = currentString
@@ -609,7 +621,7 @@ struct CustomFieldCell: View {
                     .onChange(of: focused) { _, new in if !new { commitText() } }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Colors.bgInput).overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1)))
             } else {
                 CellDisplayText(text: currentString, placeholder: definition.name, onTap: onBeginEdit)
             }
@@ -621,11 +633,11 @@ struct CustomFieldCell: View {
             .popover(isPresented: Binding(get: { isEditing }, set: { if !$0 { onEndEdit() } })) {
                 VStack(alignment: .trailing, spacing: 8) {
                     TextEditor(text: $textDraft)
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                         .frame(width: 360, height: 180)
                         .scrollContentBackground(.hidden)
                         .padding(8)
-                        .background(Theme.Colors.borderSubtle.opacity(0.4))
+                        .background(Theme.Colors.bgInput)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     HStack(spacing: 8) {
                         Button("Cancel") { onEndEdit() }.buttonStyle(.plain).foregroundStyle(Theme.Colors.tertiaryText)
@@ -661,7 +673,7 @@ struct CustomFieldCell: View {
             if isEditing {
                 TextField(definition.name, text: $numberDraft)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12))
+                    .font(Theme.Typography.monoBody)
                     .focused($focused)
                     .onAppear {
                         if case .number(let n) = value {
@@ -675,7 +687,7 @@ struct CustomFieldCell: View {
                     .onChange(of: focused) { _, new in if !new { commitNumber() } }
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1))
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.Colors.bgInput).overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.Colors.accent.opacity(0.4), lineWidth: 1)))
             } else {
                 let display: String = {
                     if case .number(let n) = value {
@@ -780,15 +792,15 @@ struct CustomFieldCell: View {
                 if let opt = selectedOption {
                     let chipColor = Color.fromHex(opt.colorHex) ?? Theme.Colors.accent
                     Text(opt.label)
-                        .font(.system(size: 11))
+                        .font(Theme.Typography.monoSmall)
                         .foregroundStyle(chipColor)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(chipColor.opacity(0.15)))
+                        .background(RoundedRectangle(cornerRadius: 4).fill(chipColor.opacity(0.12)))
                         .lineLimit(1)
                 } else {
                     Text(definition.name)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
                         .italic()
                 }
@@ -816,7 +828,7 @@ struct CustomFieldCell: View {
             HStack(spacing: 4) {
                 if selectedIds.isEmpty {
                     Text(definition.name)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
                         .italic()
                 } else {
@@ -824,16 +836,16 @@ struct CustomFieldCell: View {
                     ForEach(selectedOptions.prefix(3)) { opt in
                         let chipColor = Color.fromHex(opt.colorHex) ?? Theme.Colors.accent
                         Text(opt.label)
-                            .font(.system(size: 10))
+                            .font(Theme.Typography.monoSmall)
                             .foregroundStyle(chipColor)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(chipColor.opacity(0.15)))
+                            .background(RoundedRectangle(cornerRadius: 4).fill(chipColor.opacity(0.12)))
                             .lineLimit(1)
                     }
                     if selectedOptions.count > 3 {
                         Text("+\(selectedOptions.count - 3)")
-                            .font(.system(size: 10))
+                            .font(Theme.Typography.monoSmall)
                             .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                 }

@@ -7,15 +7,87 @@ enum OttoTools {
     /// Compile-time set of tool names. Executor switches on these.
     enum Name: String {
         case create_todo, create_note, create_idea, create_reminder, create_bookmark, create_meeting
-        case update_todo, update_note, update_idea
+        case update_todo, update_note, update_idea, update_reminder, update_bookmark, update_meeting
+        case create_network_entry, update_network_entry
+        case create_company, update_company
+        case create_event, update_event
+        case create_community, update_community
         case complete_todo, uncomplete_todo, complete_reminder
         case delete_item
-        case search_items, get_item
+        case search_items, grep_data, get_item
         case attach_item_preview
         case open_url
-        case create_habit, log_habit_entry, complete_habit, list_habits
+        case create_habit, log_habit_entry, complete_habit, list_habits, update_habit
         case read_file
         case genmedia_search_models, genmedia_get_model_schema, genmedia_run, genmedia_upload_file
+    }
+
+    // MARK: - Backend-agnostic name / preview helpers
+    //
+    // Tool calls reach the chat UI under different names depending on the
+    // backend: the direct API path uses the bare `Name` (e.g.
+    // "attach_item_preview"), while MCP clients (Hermes over ACP) announce
+    // the same tool as `mcp__otto__attach_item_preview`. These helpers give
+    // every consumer one canonical view.
+
+    /// Strip an MCP client's `mcp__<server>__` prefix from a tool name so
+    /// callers can match against the bare `OttoTools.Name`.
+    static func canonicalToolName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("mcp__") else { return trimmed }
+        let rest = trimmed.dropFirst("mcp__".count)
+        guard let sep = rest.range(of: "__") else { return trimmed }
+        return String(rest[sep.upperBound...])
+    }
+
+    /// True when `raw` names the attach_item_preview tool under any backend's
+    /// naming — bare, MCP-prefixed, or humanized ("Attach Item Preview").
+    static func isAttachItemPreview(_ raw: String) -> Bool {
+        let normalized = canonicalToolName(raw)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+        return normalized.hasSuffix(Name.attach_item_preview.rawValue)
+    }
+
+    /// Map the tool schema's snake_case `type` strings onto `ContentType`,
+    /// whose raw values are camelCase for the multi-word cases.
+    static func previewContentType(_ raw: String) -> ContentType? {
+        switch raw {
+        case "network":    return .networkHub
+        case "x_post":     return .xPost
+        case "x_follower": return .xFollower
+        case "x_dm":       return .xDm
+        default:           return ContentType(rawValue: raw)
+        }
+    }
+
+    /// Recover `(type, id)` from the executor's
+    /// "Attached preview: <type> <uuid> — <title>" result line. Used when a
+    /// backend doesn't deliver tool inputs (ACP tool_call without rawInput),
+    /// so the preview card can still be built from the tool result.
+    static func parsePreviewResult(_ text: String) -> (typeString: String, id: UUID)? {
+        guard let marker = text.range(of: "Attached preview: ") else { return nil }
+        let tokens = text[marker.upperBound...]
+            .split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        guard tokens.count >= 2, let id = UUID(uuidString: String(tokens[1])) else { return nil }
+        return (String(tokens[0]), id)
+    }
+
+    /// Parse an inline item-reference URL the agent embeds in its prose:
+    /// `otto://<type>/<uuid>` (type uses the tool schema's snake_case names).
+    /// The chat renderer styles these markdown links as clickable chips that
+    /// open the item's detail popup. Parsed by hand rather than via URL
+    /// host/path because Foundation is picky about underscores in hostnames
+    /// (`x_post`).
+    static func parseItemURL(_ url: URL) -> (type: ContentType, id: UUID)? {
+        guard url.scheme?.lowercased() == "otto" else { return nil }
+        let rest = url.absoluteString.dropFirst("otto://".count)
+        let parts = rest.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count >= 2,
+              let type = previewContentType(String(parts[0]).lowercased()),
+              let id = UUID(uuidString: String(parts[1]))
+        else { return nil }
+        return (type, id)
     }
 
     /// The array of tool definitions sent with every chat request.
@@ -143,6 +215,237 @@ enum OttoTools {
                 required: ["id"]
             )
         ],
+        [
+            "name": Name.update_reminder.rawValue,
+            "description": "Update a reminder's title or fire time. Use for 'push that to 6pm' / 'rename my reminder'. Rescheduling to a future time re-arms the notification.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the reminder."),
+                    "title": stringProp(""),
+                    "reminder_date": stringProp("New ISO8601 datetime when to fire, e.g. 2026-04-19T17:00:00Z.")
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.update_bookmark.rawValue,
+            "description": "Update fields on an existing bookmark. Only include fields you want to change.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the bookmark."),
+                    "title": stringProp(""),
+                    "url": stringProp(""),
+                    "description": stringProp(""),
+                    "media_type": enumProp(["read_later", "listen_later", "watch_later"], "Which queue the bookmark lives in."),
+                    "is_read": ["type": "boolean", "description": "Mark the bookmark read (true) or unread (false)."]
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.update_meeting.rawValue,
+            "description": "Update fields on an existing meeting note. Only include fields you want to change. `participants` replaces the whole list when provided.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the meeting."),
+                    "title": stringProp(""),
+                    "content": stringProp("Full notes / transcript body."),
+                    "overview": stringProp("Short summary shown at the top of the meeting card."),
+                    "action_items": stringProp("Action items / follow-ups, one per line."),
+                    "participants": arrayOfStrings("Replaces the full participant list."),
+                    "organizer": stringProp(""),
+                    "duration_minutes": ["type": "integer", "description": "Meeting length in minutes.", "minimum": 0],
+                    "meeting_date": stringProp("ISO8601 datetime.")
+                ],
+                required: ["id"]
+            )
+        ],
+
+        // MARK: CRM — Network Hub / Companies / Events / Communities
+        [
+            "name": Name.create_network_entry.rawValue,
+            "description": "Add a person or organization to the Network Hub (the curated people CRM, type=network). Use when the user meets someone new or wants a contact tracked. Provide at least a `name` or a `company`.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Person's full name. May be empty for org-only entries that have a `company`."),
+                    "company": stringProp("Company / organization the person belongs to (or the org itself)."),
+                    "title": stringProp("Their role title, e.g. 'General Partner'."),
+                    "type": enumProp(
+                        ["startup", "investor", "app_studio", "enterprise", "media", "community", "incubator", "accelerator", "consulting", "ecosystem", "other"],
+                        "Organization classification. Defaults to other."
+                    ),
+                    "individual_type": enumProp(
+                        ["founder", "vc", "operator", "engineer", "community_builder", "angel_investor", "creative", "other"],
+                        "The person's role bucket. Defaults to other."
+                    ),
+                    "industry": stringProp("Industry, e.g. 'AI infra', 'Fintech'."),
+                    "location": stringProp("City / region, e.g. 'Barcelona'."),
+                    "email": stringProp(""),
+                    "linkedin": stringProp("LinkedIn profile URL."),
+                    "closeness": enumProp(
+                        ["close_friend", "warm_relationship", "known_personally", "intro_path_available", "light_connection", "unknown"],
+                        "Relationship strength. Defaults to unknown."
+                    ),
+                    "notes": stringProp("Free-form notes — how you met, what they care about, follow-ups.")
+                ],
+                required: []
+            )
+        ],
+        [
+            "name": Name.update_network_entry.rawValue,
+            "description": "Update fields on a Network Hub entry (type=network). Only include fields you want to change. The structured LinkedIn profile section (summary, experience, education) is import-managed and not editable here.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the network entry."),
+                    "name": stringProp(""),
+                    "company": stringProp(""),
+                    "title": stringProp(""),
+                    "type": enumProp(
+                        ["startup", "investor", "app_studio", "enterprise", "media", "community", "incubator", "accelerator", "consulting", "ecosystem", "other"],
+                        ""
+                    ),
+                    "individual_type": enumProp(
+                        ["founder", "vc", "operator", "engineer", "community_builder", "angel_investor", "creative", "other"],
+                        ""
+                    ),
+                    "industry": stringProp(""),
+                    "location": stringProp(""),
+                    "email": stringProp(""),
+                    "linkedin": stringProp("LinkedIn profile URL. Empty string clears it."),
+                    "closeness": enumProp(
+                        ["close_friend", "warm_relationship", "known_personally", "intro_path_available", "light_connection", "unknown"],
+                        ""
+                    ),
+                    "notes": stringProp("")
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.create_company.rawValue,
+            "description": "Add a company to the location CRM (type=company). Use for customers, prospects, or orgs worth tracking. Fails if a company with the same name already exists — update that one instead.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Company name (required)."),
+                    "type": enumProp(
+                        ["startup", "scaleup", "enterprise", "vc", "agency", "research", "media", "other"],
+                        "Company classification. Defaults to uncategorized."
+                    ),
+                    "location": stringProp("Free-text city/region; drives map placement, e.g. 'Barcelona'."),
+                    "is_customer": ["type": "boolean", "description": "Whether they're a customer. Default false."],
+                    "commitment_amount": ["type": "number", "description": "$ committed (revenue / deal size)."],
+                    "website": stringProp(""),
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings(""),
+                    "linked_network_entry_ids": arrayOfStrings("UUIDs of Network Hub people to link to this company (from search_items type=network).")
+                ],
+                required: ["name"]
+            )
+        ],
+        [
+            "name": Name.update_company.rawValue,
+            "description": "Update fields on a company. Only include fields you want to change. `tags` and `linked_network_entry_ids` replace the whole list when provided; commitment_amount of 0 clears it.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the company."),
+                    "name": stringProp(""),
+                    "type": enumProp(
+                        ["startup", "scaleup", "enterprise", "vc", "agency", "research", "media", "other"],
+                        ""
+                    ),
+                    "location": stringProp(""),
+                    "is_customer": ["type": "boolean"],
+                    "commitment_amount": ["type": "number", "description": "$ committed. Pass 0 to clear."],
+                    "website": stringProp("Empty string clears it."),
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings("Replaces the full tag list."),
+                    "linked_network_entry_ids": arrayOfStrings("Replaces the full linked-people list.")
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.create_event.rawValue,
+            "description": "Add an event to the location CRM (type=event) — conferences, summits, dinners the user is hosting, attending, or considering.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Event name (required)."),
+                    "type": enumProp(
+                        ["conference", "summit", "meetup", "hackathon", "dinner", "workshop", "party", "other"],
+                        "Kind of event. Defaults to uncategorized."
+                    ),
+                    "location": stringProp("Free-text city/region; drives map placement."),
+                    "start_date": stringProp("ISO8601 date or datetime, e.g. 2026-09-14."),
+                    "end_date": stringProp("ISO8601 date or datetime. Omit for single-day events."),
+                    "status": enumProp(
+                        ["considering", "attending", "hosting", "declined"],
+                        "The user's relationship to the event. Defaults to considering."
+                    ),
+                    "budget_amount": ["type": "number", "description": "$ budget / sponsorship."],
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings("")
+                ],
+                required: ["name"]
+            )
+        ],
+        [
+            "name": Name.update_event.rawValue,
+            "description": "Update fields on an event. Only include fields you want to change. Empty string on start_date/end_date clears the date; budget_amount of 0 clears it; `tags` replaces the whole list.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the event."),
+                    "name": stringProp(""),
+                    "type": enumProp(
+                        ["conference", "summit", "meetup", "hackathon", "dinner", "workshop", "party", "other"],
+                        ""
+                    ),
+                    "location": stringProp(""),
+                    "start_date": stringProp("ISO8601, or empty string to clear."),
+                    "end_date": stringProp("ISO8601, or empty string to clear."),
+                    "status": enumProp(["considering", "attending", "hosting", "declined"], ""),
+                    "budget_amount": ["type": "number", "description": "$ budget. Pass 0 to clear."],
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings("Replaces the full tag list.")
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.create_community.rawValue,
+            "description": "Add a community / society / accelerator to the location CRM (type=community). Fails if one with the same name already exists — update that one instead.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Community name (required)."),
+                    "type": enumProp(
+                        ["community", "society", "collective", "accelerator", "dao", "other"],
+                        "Kind of community. Defaults to community."
+                    ),
+                    "location": stringProp("Free-text city/region; drives map placement."),
+                    "builder_support_perk": ["type": "boolean", "description": "Whether it offers a perk for builders. Default false."],
+                    "url": stringProp("Website / community link."),
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings("")
+                ],
+                required: ["name"]
+            )
+        ],
+        [
+            "name": Name.update_community.rawValue,
+            "description": "Update fields on a community. Only include fields you want to change. `tags` replaces the whole list when provided.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the community."),
+                    "name": stringProp(""),
+                    "type": enumProp(["community", "society", "collective", "accelerator", "dao", "other"], ""),
+                    "location": stringProp(""),
+                    "builder_support_perk": ["type": "boolean"],
+                    "url": stringProp("Empty string clears it."),
+                    "notes": stringProp(""),
+                    "tags": arrayOfStrings("Replaces the full tag list.")
+                ],
+                required: ["id"]
+            )
+        ],
 
         // MARK: Complete / toggle
         [
@@ -178,7 +481,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "habit", "file"],
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "habit", "file", "network", "company", "event", "community"],
                         "Which collection the item lives in."
                     )
                 ],
@@ -222,6 +525,23 @@ enum OttoTools {
             )
         ],
         [
+            "name": Name.grep_data.rawValue,
+            "description": "Regex-search ONE data-workspace snapshot table (one record per line) and get back only the matching lines (CSV header included so you can map columns). Case-insensitive; tables are rebuilt fresh from live data on every call. Use for bulk / multi-entity / relational / analytical questions — one call with an alternation pattern (e.g. file=\"connections.csv\", pattern=\"molten|wing|revo\") replaces a whole chain of search_items calls. Tables: connections.csv, network_hub.csv, companies.csv, events.csv, communities.csv, todos.csv, reminders.csv, habits.csv, bookmarks.csv, files.csv, x_followers.csv, emails.jsonl, meetings.jsonl, notes.jsonl, ideas.jsonl, calendar_events.jsonl, x_posts.jsonl, x_dms.jsonl.",
+            "input_schema": objectSchema(
+                properties: [
+                    "file": stringProp("Table filename, e.g. \"connections.csv\" or \"emails.jsonl\"."),
+                    "pattern": stringProp("Regular expression, matched case-insensitively against each record line."),
+                    "max_results": [
+                        "type": "integer",
+                        "description": "Max matching lines to return (default 50, max 200).",
+                        "minimum": 1,
+                        "maximum": 200
+                    ]
+                ],
+                required: ["file", "pattern"]
+            )
+        ],
+        [
             "name": Name.get_item.rawValue,
             "description": "Fetch full details of a single item by id and type. For files, returns metadata plus a short text preview — use `read_file` for the full extracted content.",
             "input_schema": objectSchema(
@@ -237,7 +557,7 @@ enum OttoTools {
         ],
         [
             "name": Name.attach_item_preview.rawValue,
-            "description": "Attach a clickable preview card for a specific item to your response so the user can open it in the relevant tab with one click. Use this whenever you reference an existing item by name — much better UX than quoting the title in text. You can call this multiple times in one turn to attach several cards.",
+            "description": "Attach a large standalone clickable preview card for one item below your response text. For referencing items WITHIN your prose, prefer inline markdown links — `[Title](otto://<type>/<id>)` — which render as small clickable chips; reserve this tool for the 1-3 headline items of your answer. Never both card and inline-link the same item.",
             "input_schema": objectSchema(
                 properties: [
                     "id": stringProp("UUID of the item (from search_items or get_item)."),
@@ -317,6 +637,38 @@ enum OttoTools {
             "input_schema": objectSchema(
                 properties: [
                     "habit": stringProp("UUID of the habit, OR a fuzzy name to look up.")
+                ],
+                required: ["habit"]
+            )
+        ],
+        [
+            "name": Name.update_habit.rawValue,
+            "description": "Update a habit's definition — rename, change target / unit / frequency / icon, or archive it. Only include fields you want to change. For logging progress use `log_habit_entry` / `complete_habit` instead.",
+            "input_schema": objectSchema(
+                properties: [
+                    "habit": stringProp("UUID of the habit, OR a fuzzy name to look up (case-insensitive contains match)."),
+                    "title": stringProp(""),
+                    "notes": stringProp(""),
+                    "kind": enumProp(["binary", "quantity", "duration", "count"], ""),
+                    "unit": stringProp("Unit string, e.g. 'mL', 'min'. Empty string clears it."),
+                    "daily_target": ["type": "number", "description": "Per-day target value."],
+                    "frequency": enumProp(
+                        ["daily", "weekdays", "weekly"],
+                        "Provide `weekdays` or `weekly_count` alongside when relevant."
+                    ),
+                    "weekdays": [
+                        "type": "array",
+                        "description": "Required when frequency=weekdays.",
+                        "items": ["type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
+                    ],
+                    "weekly_count": ["type": "integer", "description": "Required when frequency=weekly.", "minimum": 1, "maximum": 7],
+                    "category": enumProp(
+                        ["health", "fitness", "learning", "mindfulness", "personalCare", "nutrition", "productivity", "custom"],
+                        ""
+                    ),
+                    "icon": stringProp("SF Symbol name."),
+                    "color": enumProp(["cyan", "green", "amber", "red", "aiAccent", "cyanDim", "hobby"], ""),
+                    "archived": ["type": "boolean", "description": "Archive (true) or restore (false) the habit."]
                 ],
                 required: ["habit"]
             )

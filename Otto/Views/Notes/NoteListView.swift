@@ -41,7 +41,7 @@ struct NoteListView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
                 Rectangle()
-                    .fill(Theme.Colors.cyan.opacity(0.18))
+                    .fill(Theme.Colors.border)
                     .frame(width: 1)
             }
 
@@ -137,20 +137,21 @@ struct NoteListView: View {
             // Header
             VStack(spacing: 10) {
                 HStack {
-                    Text("⌬ NOTES")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .tracking(3)
-                        .foregroundStyle(Theme.Colors.cyan)
-                        .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                    Text("Notes")
+                        .font(Theme.Typography.headline)
+                        .foregroundStyle(Theme.Colors.text)
 
                     Spacer()
 
                     Text("\(filteredNotes.count)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.textDim)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Theme.Colors.borderSubtle)
-                        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
 
                     // Select mode toggle
                     Button {
@@ -198,7 +199,7 @@ struct NoteListView: View {
                         } label: {
                             Text(selectedNoteIds.count == filteredNotes.count ? "Deselect All" : "Select All")
                                 .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Theme.Colors.accent)
+                                .foregroundStyle(Theme.Colors.accentText)
                         }
                         .buttonStyle(.plain)
 
@@ -278,7 +279,7 @@ struct NoteListView: View {
                 }
             }
         }
-        .background(Theme.Colors.background.opacity(0.5))
+        .background(Theme.Colors.bg1)
     }
 
     // MARK: - Sidebar Note Row (compact, Notion-style)
@@ -297,18 +298,18 @@ struct NoteListView: View {
                 // Page icon
                 Image(systemName: "doc.text")
                     .font(.system(size: 12))
-                    .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.system(size: 13, weight: isActive && !isSelectMode ? .medium : .regular))
-                    .foregroundStyle(isActive && !isSelectMode ? Theme.Colors.text : Theme.Colors.secondaryText)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(isActive && !isSelectMode ? Theme.Colors.accentText : Theme.Colors.text)
                     .lineLimit(1)
 
                 if !note.content.isEmpty {
                     Text(strippedNotePreview(note.content))
-                        .font(.system(size: 11))
+                        .font(.system(size: 11.5))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
                 }
@@ -319,9 +320,9 @@ struct NoteListView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isChecked && isSelectMode ? Theme.Colors.accent.opacity(0.08) :
-                      isActive && !isSelectMode ? Theme.Colors.accent.opacity(0.1) : Color.clear)
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(isChecked && isSelectMode ? Theme.Colors.selectTint :
+                      isActive && !isSelectMode ? Theme.Colors.selectTint : Color.clear)
         )
         .contentShape(Rectangle())
         #if os(macOS)
@@ -438,11 +439,11 @@ struct NoteListView: View {
             }
         } label: {
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 12, weight: .medium))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(isSelected ? Theme.Colors.accent.opacity(0.12) : Theme.Colors.hoverTint)
-                .foregroundStyle(isSelected ? Theme.Colors.accent : Theme.Colors.tertiaryText)
+                .background(isSelected ? Theme.Colors.selectTint : Color.clear)
+                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.textDim)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
         }
         .buttonStyle(.plain)

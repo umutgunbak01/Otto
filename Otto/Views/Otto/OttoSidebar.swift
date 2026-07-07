@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Otto-styled sidebar — neural index header, nav items with count badges,
-/// dashed dividers, social-feed sub-section, and a sys-block at the bottom
-/// reporting neural load / memory / context / model.
+/// Left navigation sidebar (mockup .sidebar) — Home + Map, then Library /
+/// Network / X sections, with Integrations + Settings pinned at the bottom
+/// alongside a small model chip.
 struct OttoSidebar: View {
     @Environment(AppState.self) private var appState
     @Binding var showingHome: Bool
@@ -10,8 +10,8 @@ struct OttoSidebar: View {
     @Binding var showingSettings: Bool
     @Binding var showingIntegrations: Bool
 
-    /// Bound to the AgentService model UserDefaults keys so the sys-block model
-    /// label updates the moment the user picks a new preset in Settings. We
+    /// Bound to the AgentService model UserDefaults keys so the model chip
+    /// updates the moment the user picks a new preset in Settings. We
     /// observe both keys (and the backend selector) so swapping backends
     /// re-renders the label without an app restart.
     @AppStorage(AgentService.Claude.modelIdDefaultsKey) private var storedClaudeModelId: String = AgentService.Claude.defaultModelId
@@ -23,200 +23,111 @@ struct OttoSidebar: View {
             // Scrollable nav list — when the window is short, this scrolls so
             // the bottom buttons stay reachable.
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 4) {
-                    sectionHeader("// NEURAL INDEX")
-                        .padding(.bottom, 6)
-
+                VStack(alignment: .leading, spacing: 2) {
                     OttoNavItem(
-                        icon: AnyView(HexPip(size: 10)),
-                        label: "HOME",
+                        systemImage: "house",
+                        label: "Home",
                         count: nil,
                         isActive: showingHome && !showingMap,
                         action: { showingHome = true; showingMap = false }
                     )
+                    .padding(.top, 2)
 
                     OttoNavItem(
-                        icon: AnyView(navGlyph("⊕")),
-                        label: "MAP",
+                        systemImage: "map",
+                        label: "Map",
                         count: nil,
                         isActive: showingMap,
                         action: { showingMap = true; showingHome = false }
                     )
 
-                    ForEach(coreTypes, id: \.self) { type in
-                        OttoNavItem(
-                            icon: AnyView(navGlyph(type.icon)),
-                            label: type.label,
-                            count: type.count(appState),
-                            isActive: !showingHome && !showingMap && appState.selectedTab == type.tab,
-                            action: {
-                                showingHome = false
-                                showingMap = false
-                                appState.selectedTab = type.tab
-                            }
-                        )
+                    sectionHeader("Library")
+                    ForEach(libraryTypes, id: \.self) { type in
+                        navItem(type)
                     }
 
+                    sectionHeader("Network")
+                    ForEach(networkTypes, id: \.self) { type in
+                        navItem(type)
+                    }
+
+                    sectionHeader("X")
+                    ForEach(xTypes, id: \.self) { type in
+                        navItem(type)
+                    }
                 }
                 .padding(.bottom, 12)
             }
             .frame(maxHeight: .infinity)
 
-            // Pinned bottom block — sys stats + LINKS / SYS buttons.
-            sysBlock
+            // Pinned bottom block.
+            OttoDivider()
+                .padding(.bottom, 8)
 
-            HStack(spacing: 8) {
-                Button {
-                    showingIntegrations = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "link")
-                            .font(.system(size: 10))
-                        Text("LINKS")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .tracking(2)
-                    }
-                    .foregroundStyle(Theme.Colors.textDim)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity)
-                    .overlay(
-                        Rectangle().stroke(Theme.Colors.cyan.opacity(0.18), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
+            OttoNavItem(
+                systemImage: "link",
+                label: "Integrations",
+                count: nil,
+                isActive: false,
+                action: { showingIntegrations = true }
+            )
+            OttoNavItem(
+                systemImage: "gearshape",
+                label: "Settings",
+                count: nil,
+                isActive: false,
+                action: { showingSettings = true }
+            )
 
-                Button {
-                    showingSettings = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "gear")
-                            .font(.system(size: 10))
-                        Text("SYS")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .tracking(2)
-                    }
-                    .foregroundStyle(Theme.Colors.textDim)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity)
-                    .overlay(
-                        Rectangle().stroke(Theme.Colors.cyan.opacity(0.18), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
+            // Model chip — quiet mono line showing the active backend/model.
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Theme.Colors.accent)
+                    .frame(width: 5, height: 5)
+                Text("\(modelLabel) · \(contextLabel)")
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .lineLimit(1)
             }
+            .padding(.horizontal, 10)
             .padding(.top, 8)
+            .padding(.bottom, 4)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 18)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 12)
         .frame(maxHeight: .infinity, alignment: .top)
-        .angledPanel(.topRight(18))
+        .background(Theme.Colors.bg1)
+        .overlay(alignment: .trailing) {
+            OttoDivider()
+                .frame(width: 1)
+                .frame(maxHeight: .infinity)
+        }
     }
 
     // MARK: - Pieces
 
     private func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .tracking(3.2)
-            .foregroundStyle(Theme.Colors.textDim)
+        Text(text.uppercased())
+            .font(Theme.Typography.label)
+            .tracking(Theme.Tracking.xwide)
+            .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .bottom) {
-                DashedLine()
-                    .stroke(
-                        Theme.Colors.cyan.opacity(0.18),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
-                    )
-                    .frame(height: 1)
+            .padding(.top, 14)
+            .padding(.bottom, 6)
+    }
+
+    private func navItem(_ type: NavType) -> some View {
+        OttoNavItem(
+            systemImage: type.icon,
+            label: type.label,
+            count: type.count(appState),
+            isActive: !showingHome && !showingMap && appState.selectedTab == type.tab,
+            action: {
+                showingHome = false
+                showingMap = false
+                appState.selectedTab = type.tab
             }
-    }
-
-    private func divider() -> some View {
-        LinearGradient(
-            colors: [.clear, Theme.Colors.cyan.opacity(0.22), .clear],
-            startPoint: .leading,
-            endPoint: .trailing
         )
-        .frame(height: 1)
-    }
-
-    @ViewBuilder
-    private func navGlyph(_ ch: String) -> some View {
-        Text(ch)
-            .font(.system(size: 12, weight: .medium, design: .monospaced))
-            .frame(width: 14, height: 14)
-    }
-
-    private var sysBlock: some View {
-        VStack(spacing: 6) {
-            sysRow("NEURAL LOAD", value: "73%")
-            VStack(spacing: 0) { sysBar(progress: 0.73) }
-                .padding(.top, 2)
-            sysRow("MEMORY", value: memoryLabel)
-            sysRow("CONTEXT", value: contextLabel)
-            sysRow("MODEL", value: modelLabel)
-        }
-        .padding(12)
-        .overlay(
-            Rectangle().stroke(Theme.Colors.cyan.opacity(0.18), lineWidth: 1)
-        )
-        .background(Theme.Colors.cyan.opacity(0.03))
-    }
-
-    private func sysRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(2)
-                .foregroundStyle(Theme.Colors.textDim)
-            Spacer()
-            Text(value)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .tracking(0.5)
-                .foregroundStyle(Theme.Colors.cyan)
-        }
-    }
-
-    private func sysBar(progress: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
-            Rectangle()
-                .fill(Theme.Colors.cyan.opacity(0.1))
-                .frame(maxWidth: .infinity)
-            GeometryReader { geo in
-                LinearGradient(
-                    colors: [Theme.Colors.cyanDim, Theme.Colors.cyan],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: geo.size.width * progress)
-            }
-        }
-        .frame(height: 3)
-    }
-
-    private var memoryLabel: String {
-        // Total items as a stand-in for "indexed neural memory".
-        let n = appState.todos.count
-            + appState.notes.count
-            + appState.ideas.count
-            + appState.reminders.count
-            + appState.bookmarks.count
-            + appState.meetings.count
-            + appState.emails.count
-            + appState.connections.count
-            + appState.files.count
-            + appState.xPosts.count
-            + appState.xFollowers.count
-            + appState.xDirectMessages.count
-        let mb = Double(n) * 0.0017 // arbitrary scaling for show
-        if mb >= 1.0 {
-            return String(format: "%.1f GB", mb)
-        }
-        return String(format: "%.0f MB", mb * 1024)
     }
 
     /// Active backend, derived from the AppStorage-bound raw value so the
@@ -235,9 +146,7 @@ struct OttoSidebar: View {
         case .codex:
             return storedCodexModelId.isEmpty ? AgentService.Codex.defaultModelId : storedCodexModelId
         case .hermes:
-            // Hermes picks its model server-side; the label below shows
-            // "HERMES" instead of a concrete model id, so this string is
-            // never user-visible.
+            // Hermes picks its model server-side; the chip shows "hermes".
             return "hermes"
         }
     }
@@ -247,20 +156,17 @@ struct OttoSidebar: View {
         switch activeBackend {
         case .claude:
             if id.hasSuffix("[1m]") { id = String(id.dropLast(4)).trimmingCharacters(in: .whitespaces) }
-            // claude-opus-4-7 → OPUS-4.7, claude-sonnet-4-6 → SONNET-4.6, etc.
+            // claude-opus-4-7 → opus-4.7, claude-sonnet-4-6 → sonnet-4.6, etc.
             let stripped = id.hasPrefix("claude-") ? String(id.dropFirst("claude-".count)) : id
             let parts = stripped.split(separator: "-", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { return stripped.uppercased() }
-            let family = parts[0].uppercased()
+            guard parts.count == 2 else { return stripped.lowercased() }
+            let family = parts[0].lowercased()
             let version = parts[1].replacingOccurrences(of: "-", with: ".")
             return "\(family)-\(version)"
         case .codex:
-            // gpt-5.5 → GPT-5.5, gpt-5-codex → GPT-5-CODEX, o3 → O3
-            return id.uppercased()
+            return id.lowercased()
         case .hermes:
-            // Hermes config (model + provider) lives on the Hetzner box; we
-            // don't surface a model id here.
-            return "HERMES"
+            return "hermes"
         }
     }
 
@@ -278,7 +184,6 @@ struct OttoSidebar: View {
         let tab: ContentType
         let label: String
         let icon: String
-        let counter: String
         // Compare by tab for Hashable
         func hash(into hasher: inout Hasher) { hasher.combine(tab) }
         static func == (l: Self, r: Self) -> Bool { l.tab == r.tab }
@@ -306,25 +211,35 @@ struct OttoSidebar: View {
         }
     }
 
-    private var coreTypes: [NavType] {
+    private var libraryTypes: [NavType] {
         [
-            NavType(tab: .todo,       label: "TO-DO",       icon: "▣", counter: "12"),
-            NavType(tab: .note,       label: "NOTE",        icon: "≡", counter: "270"),
-            NavType(tab: .idea,       label: "IDEA",        icon: "◇", counter: "1"),
-            NavType(tab: .reminder,   label: "REMINDER",    icon: "◉", counter: "4"),
-            NavType(tab: .bookmark,   label: "BOOKMARK",    icon: "▭", counter: "103"),
-            NavType(tab: .habit,      label: "HABITS",      icon: "♨", counter: "—"),
-            NavType(tab: .meeting,    label: "MEETING",     icon: "▶", counter: "870"),
-            NavType(tab: .email,      label: "EMAIL",       icon: "✉", counter: "8.351"),
-            NavType(tab: .connection, label: "LINKEDIN", icon: "⌬", counter: "4.128"),
-            NavType(tab: .networkHub, label: "NETWORK HUB", icon: "⬡", counter: "—"),
-            NavType(tab: .company,    label: "COMPANIES",   icon: "▦", counter: "—"),
-            NavType(tab: .event,      label: "EVENTS",      icon: "◈", counter: "—"),
-            NavType(tab: .community,  label: "COMMUNITIES", icon: "❖", counter: "—"),
-            NavType(tab: .file,       label: "FILES",       icon: "◰", counter: "1"),
-            NavType(tab: .xPost,      label: "X-POSTS",     icon: "✕", counter: "—"),
-            NavType(tab: .xFollower,  label: "X-FOLLOWERS", icon: "⊙", counter: "—"),
-            NavType(tab: .xDm,        label: "X-DMS",       icon: "⌖", counter: "—"),
+            NavType(tab: .todo,     label: "To-dos",    icon: "checkmark.square"),
+            NavType(tab: .note,     label: "Notes",     icon: "doc.text"),
+            NavType(tab: .idea,     label: "Ideas",     icon: "bolt"),
+            NavType(tab: .reminder, label: "Reminders", icon: "bell"),
+            NavType(tab: .bookmark, label: "Bookmarks", icon: "bookmark"),
+            NavType(tab: .habit,    label: "Habits",    icon: "repeat"),
+            NavType(tab: .meeting,  label: "Meetings",  icon: "video"),
+            NavType(tab: .email,    label: "Emails",    icon: "envelope"),
+            NavType(tab: .file,     label: "Files",     icon: "folder"),
+        ]
+    }
+
+    private var networkTypes: [NavType] {
+        [
+            NavType(tab: .connection, label: "LinkedIn",    icon: "person.2"),
+            NavType(tab: .networkHub, label: "Network hub", icon: "globe"),
+            NavType(tab: .company,    label: "Companies",   icon: "briefcase"),
+            NavType(tab: .event,      label: "Events",      icon: "calendar"),
+            NavType(tab: .community,  label: "Communities", icon: "bubble.left.and.bubble.right"),
+        ]
+    }
+
+    private var xTypes: [NavType] {
+        [
+            NavType(tab: .xPost,     label: "Posts",     icon: "text.bubble"),
+            NavType(tab: .xFollower, label: "Followers", icon: "person.2"),
+            NavType(tab: .xDm,       label: "DMs",       icon: "envelope"),
         ]
     }
 }
@@ -332,7 +247,7 @@ struct OttoSidebar: View {
 // MARK: - Nav item
 
 struct OttoNavItem: View {
-    let icon: AnyView
+    let systemImage: String
     let label: String
     let count: Int?
     let isActive: Bool
@@ -342,83 +257,38 @@ struct OttoNavItem: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
-                icon
-                    .foregroundStyle(isActive ? Theme.Colors.cyan : (hover ? Theme.Colors.text : Theme.Colors.textDim))
+            HStack(spacing: 9) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 16)
+                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
                 Text(label)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .tracking(2)
-                    .foregroundStyle(isActive ? Theme.Colors.cyan : (hover ? Theme.Colors.text : Theme.Colors.textDim))
+                    .font(.system(size: 13))
+                    .foregroundStyle(isActive ? Theme.Colors.accentText : (hover ? Theme.Colors.text : Theme.Colors.textDim))
                 Spacer(minLength: 6)
-                countChip
+                if let count = count {
+                    Text(formatted(count))
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(isActive ? Theme.Colors.accentText.opacity(0.75) : Theme.Colors.tertiaryText)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5.5)
             .background(
-                isActive
-                    ? AnyShapeStyle(LinearGradient(
-                        colors: [Theme.Colors.cyan.opacity(0.18), .clear],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    ))
-                    : (hover
-                        ? AnyShapeStyle(Theme.Colors.cyan.opacity(0.04))
-                        : AnyShapeStyle(Color.clear))
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(
+                        isActive
+                            ? Theme.Colors.selectTint
+                            : (hover ? Theme.Colors.hoverTint : Color.clear)
+                    )
             )
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(isActive
-                          ? Theme.Colors.cyan
-                          : (hover ? Theme.Colors.cyan.opacity(0.4) : .clear))
-                    .frame(width: 2)
-            }
-            .shadow(color: isActive ? Theme.Colors.cyanGlow.opacity(0.4) : .clear, radius: 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
     }
 
-    @ViewBuilder
-    private var countChip: some View {
-        if let count = count {
-            Text(formatted(count))
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(0.5)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .foregroundStyle(isActive ? Theme.Colors.cyan : Theme.Colors.textDim)
-                .overlay(
-                    Rectangle()
-                        .stroke(
-                            isActive ? Theme.Colors.cyanDim : Theme.Colors.cyan.opacity(0.14),
-                            lineWidth: 1
-                        )
-                )
-                .background(
-                    Theme.Colors.cyan.opacity(isActive ? 0.15 : 0.07)
-                )
-        }
-    }
-
     private func formatted(_ n: Int) -> String {
-        if n >= 1000 {
-            // European-style separator to match the mockup ("8.351").
-            let nf = NumberFormatter()
-            nf.groupingSeparator = "."
-            nf.numberStyle = .decimal
-            return nf.string(from: NSNumber(value: n)) ?? "\(n)"
-        }
-        return "\(n)"
-    }
-}
-
-// MARK: - Dashed line shape
-
-struct DashedLine: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: 0, y: rect.midY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return p
+        OttoFormatters.decimal.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 }

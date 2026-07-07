@@ -95,19 +95,12 @@ struct EmailListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⌬ EMAILS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Emails")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filteredEmails.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredEmails.count)
 
                 Spacer()
 
@@ -190,7 +183,7 @@ struct EmailListView: View {
 
                         TextField("Search emails...", text: $searchText)
                             .textFieldStyle(.plain)
-                            .font(Theme.Typography.body)
+                            .font(Theme.Typography.callout)
 
                         if !searchText.isEmpty {
                             Button {
@@ -205,8 +198,14 @@ struct EmailListView: View {
                     }
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Theme.Colors.bgInput)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
 
                     // Search scope picker (visible when searching)
                     if !searchText.isEmpty {
@@ -222,16 +221,14 @@ struct EmailListView: View {
                                     }
                                 } label: {
                                     Text(scope.rawValue)
-                                        .font(Theme.Typography.caption)
-                                        .foregroundStyle(searchScope == scope ? Theme.Colors.bg0 : Theme.Colors.secondaryText)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(searchScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim)
                                         .padding(.horizontal, Theme.Spacing.md)
                                         .padding(.vertical, Theme.Spacing.xs)
                                         .background(
-                                            searchScope == scope
-                                                ? Theme.Colors.accent
-                                                : Theme.Colors.borderSubtle
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(searchScope == scope ? Theme.Colors.selectTint : Color.clear)
                                         )
-                                        .clipShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -251,7 +248,7 @@ struct EmailListView: View {
 
     private var emailList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 6) {
                 ForEach(filteredEmails) { email in
                     HStack(spacing: Theme.Spacing.sm) {
                         // Checkbox in selection mode
@@ -288,6 +285,7 @@ struct EmailListView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
         }
         .animation(.easeInOut(duration: 0.2), value: isSelectionMode)
     }
@@ -335,11 +333,12 @@ struct EmailListView: View {
                     Image(systemName: "link")
                     Text("Connect Gmail")
                 }
+                .font(.system(size: 12, weight: .medium))
                 .padding(.horizontal, Theme.Spacing.lg)
                 .padding(.vertical, Theme.Spacing.sm)
                 .background(Theme.Colors.accent)
-                .foregroundStyle(Theme.Colors.bg0)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .foregroundStyle(Theme.Colors.onAccent)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
             .buttonStyle(.plain)
         }

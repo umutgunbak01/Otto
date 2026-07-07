@@ -22,7 +22,12 @@ struct SearchResultDetailPopup: View {
             }
         }
         .frame(width: 550, height: 500)
-        .background(Theme.Colors.background)
+        .background(Theme.Colors.panel)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Header
@@ -39,11 +44,12 @@ struct SearchResultDetailPopup: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(result.contentType.displayName)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Text(result.title)
-                    .font(Theme.Typography.headline)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
             }
 
@@ -194,7 +200,7 @@ struct SearchResultDetailPopup: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             // Status
             HStack(spacing: Theme.Spacing.md) {
-                statusBadge(todo.isCompleted ? "Completed" : "Active", color: todo.isCompleted ? .green : .blue)
+                statusBadge(todo.isCompleted ? "Completed" : "Active", color: todo.isCompleted ? Theme.Colors.green : Theme.Colors.cyan)
 
                 if let dueDate = todo.dueDate {
                     Label(formatDate(dueDate), systemImage: "calendar")
@@ -291,7 +297,7 @@ struct SearchResultDetailPopup: View {
                     .padding(.vertical, Theme.Spacing.sm)
 
                 Label("Created: \(formatDate(reminder.createdAt))", systemImage: "plus.circle")
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
         }
@@ -303,8 +309,8 @@ struct SearchResultDetailPopup: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             // Status & Type
             HStack(spacing: Theme.Spacing.md) {
-                statusBadge(bookmark.isRead ? "Read" : "Unread", color: bookmark.isRead ? .gray : .pink)
-                statusBadge(bookmark.mediaType.rawValue, color: .purple)
+                statusBadge(bookmark.isRead ? "Read" : "Unread", color: bookmark.isRead ? Theme.Colors.textDim : Theme.Colors.red)
+                statusBadge(bookmark.mediaType.rawValue, color: Theme.Colors.textDim)
             }
 
             // URL
@@ -380,7 +386,7 @@ struct SearchResultDetailPopup: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             // Status & Sender
             HStack(spacing: Theme.Spacing.md) {
-                statusBadge(email.isRead ? "Read" : "Unread", color: email.isRead ? .gray : .cyan)
+                statusBadge(email.isRead ? "Read" : "Unread", color: email.isRead ? Theme.Colors.textDim : Theme.Colors.cyan)
             }
 
             // From
@@ -415,10 +421,10 @@ struct SearchResultDetailPopup: View {
             // Headline & Company
             HStack(spacing: Theme.Spacing.md) {
                 if !connection.headline.isEmpty {
-                    statusBadge(connection.headline, color: .indigo)
+                    statusBadge(connection.headline, color: Theme.Colors.textDim)
                 }
                 if !connection.company.isEmpty {
-                    statusBadge(connection.company, color: .teal)
+                    statusBadge(connection.company, color: Theme.Colors.textDim)
                 }
             }
 
@@ -516,7 +522,7 @@ struct SearchResultDetailPopup: View {
                         .padding(.vertical, Theme.Spacing.sm)
 
                     Label("Connected: \(formatDate(connectionDate))", systemImage: "person.badge.plus")
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
@@ -530,7 +536,7 @@ struct SearchResultDetailPopup: View {
             // Type & Size
             HStack(spacing: Theme.Spacing.md) {
                 statusBadge(file.fileType.displayName, color: fileTypeColor(file.fileType))
-                statusBadge(file.formattedSize, color: .gray)
+                statusBadge(file.formattedSize, color: Theme.Colors.textDim)
             }
 
             // File Info
@@ -588,16 +594,7 @@ struct SearchResultDetailPopup: View {
         }
     }
 
-    private func fileTypeColor(_ type: FileType) -> Color {
-        switch type {
-        case .csv, .excel: return .green
-        case .image: return .blue
-        case .pdf: return .red
-        case .text: return .secondary
-        case .video: return .purple
-        case .audio: return .orange
-        }
-    }
+    private func fileTypeColor(_ type: FileType) -> Color { type.color }
 
     // MARK: - Calendar Event Detail
 
@@ -605,7 +602,7 @@ struct SearchResultDetailPopup: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             // Time
             HStack(spacing: Theme.Spacing.md) {
-                statusBadge(event.isPast ? "Past" : "Upcoming", color: event.isPast ? .gray : .teal)
+                statusBadge(event.isPast ? "Past" : "Upcoming", color: event.isPast ? Theme.Colors.textDim : Theme.Colors.cyan)
 
                 Label(event.formattedTimeRange, systemImage: "clock")
                     .font(Theme.Typography.caption)
@@ -657,9 +654,7 @@ struct SearchResultDetailPopup: View {
     private func detailSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             Text(title)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.tertiaryText)
-                .textCase(.uppercase)
+                .hudLabel()
 
             content()
         }
@@ -667,12 +662,12 @@ struct SearchResultDetailPopup: View {
 
     private func statusBadge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .medium))
+            .font(Theme.Typography.monoSmall)
             .foregroundStyle(color)
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, 3)
-            .background(color.opacity(0.1))
-            .clipShape(Capsule())
+            .background(color.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private func priorityBadge(_ priority: Todo.Priority) -> some View {
@@ -680,13 +675,13 @@ struct SearchResultDetailPopup: View {
             Image(systemName: priority.iconName)
                 .font(.system(size: 10))
             Text(priority.displayName)
-                .font(.system(size: 10, weight: .medium))
+                .font(Theme.Typography.monoSmall)
         }
         .foregroundStyle(priorityColor(priority))
         .padding(.horizontal, Theme.Spacing.sm)
         .padding(.vertical, 3)
-        .background(priorityColor(priority).opacity(0.1))
-        .clipShape(Capsule())
+        .background(priorityColor(priority).opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private func metadataSection(created: Date, updated: Date) -> some View {
@@ -696,11 +691,11 @@ struct SearchResultDetailPopup: View {
 
             HStack(spacing: Theme.Spacing.lg) {
                 Label("Created: \(formatDate(created))", systemImage: "plus.circle")
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Label("Updated: \(formatDate(updated))", systemImage: "pencil.circle")
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
         }
@@ -748,10 +743,10 @@ struct SearchResultDetailPopup: View {
 
     private func ideaStatusColor(_ status: Idea.Status) -> Color {
         switch status {
-        case .raw: return .gray
-        case .researched: return .blue
-        case .validated: return .green
-        case .archived: return .gray
+        case .raw: return Theme.Colors.textDim
+        case .researched: return Theme.Colors.cyan
+        case .validated: return Theme.Colors.green
+        case .archived: return Theme.Colors.tertiaryText
         }
     }
 }

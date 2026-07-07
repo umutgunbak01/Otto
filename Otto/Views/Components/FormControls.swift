@@ -9,7 +9,9 @@ struct FormField<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).hudLabel(tracking: Theme.Tracking.wide)
+            Text(label)
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.textDim)
             content()
         }
     }
@@ -19,20 +21,29 @@ struct FormText: View {
     @Binding var text: String
     var placeholder: String
 
+    @FocusState private var isFocused: Bool
+
     var body: some View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.plain)
             .font(Theme.Typography.body)
             .foregroundStyle(Theme.Colors.text)
+            .focused($isFocused)
             .padding(Theme.Spacing.sm)
-            .background(Theme.Colors.bg2)
-            .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+            .background(Theme.Colors.bgInput)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(isFocused ? Theme.Colors.accent : Theme.Colors.border, lineWidth: 1)
+            )
     }
 }
 
 struct FormTextEditor: View {
     @Binding var text: String
     var placeholder: String
+
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -48,11 +59,16 @@ struct FormTextEditor: View {
                 .font(Theme.Typography.body)
                 .foregroundStyle(Theme.Colors.text)
                 .scrollContentBackground(.hidden)
+                .focused($isFocused)
                 .padding(Theme.Spacing.xs)
                 .frame(minHeight: 90)
         }
-        .background(Theme.Colors.bg2)
-        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+        .background(Theme.Colors.bgInput)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(isFocused ? Theme.Colors.accent : Theme.Colors.border, lineWidth: 1)
+        )
     }
 }
 

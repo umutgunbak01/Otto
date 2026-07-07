@@ -74,11 +74,9 @@ struct FilesListView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("⌬ FILES")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                Text("Files")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
                 Text("\(appState.files.count) file\(appState.files.count == 1 ? "" : "s")")
                     .font(Theme.Typography.caption)

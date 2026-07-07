@@ -46,7 +46,7 @@ struct BookmarkListView: View {
                 .frame(minWidth: 320, maxWidth: showDetailPanel ? 400 : .infinity)
 
             if showDetailPanel {
-                OttoDivider()
+                OttoVerticalDivider()
 
                 // Detail Panel - collapsible
                 detailPanel
@@ -111,33 +111,31 @@ struct BookmarkListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⌬ BOOKMARKS")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Bookmarks")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
+                    .lineLimit(1)
 
-                Text("\(filteredBookmarks.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filteredBookmarks.count)
 
                 Spacer()
-
-                // Status filter picker
-                BookmarkFilterPicker(selection: $filter)
             }
 
-            // Media type filter
-            HStack(spacing: Theme.Spacing.sm) {
-                mediaTypeButton(nil, label: "All")
-                mediaTypeButton(.readLater, label: "Read Later")
-                mediaTypeButton(.listenLater, label: "Listen Later")
-                mediaTypeButton(.watchLater, label: "Watch Later")
-                Spacer()
+            // Filters — horizontally scrollable so the narrow list pane
+            // (400pt when the detail panel is open) can never compress the
+            // pills into letter-wrapped text.
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Theme.Spacing.md) {
+                    BookmarkFilterPicker(selection: $filter)
+
+                    HStack(spacing: Theme.Spacing.xs) {
+                        mediaTypeButton(nil, label: "All")
+                        mediaTypeButton(.readLater, label: "Read Later")
+                        mediaTypeButton(.listenLater, label: "Listen Later")
+                        mediaTypeButton(.watchLater, label: "Watch Later")
+                    }
+                }
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
@@ -159,19 +157,17 @@ struct BookmarkListView: View {
                         .font(.system(size: 10))
                 }
                 Text(label)
-                    .font(Theme.Typography.caption)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.sm)
+            .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(isActive ? Theme.Colors.accent.opacity(0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(isActive ? Theme.Colors.selectTint : Color.clear)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(isActive ? Theme.Colors.accent.opacity(0.3) : Theme.Colors.border, lineWidth: 1)
-            )
-            .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
+            .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
         }
         .buttonStyle(.plain)
     }
@@ -180,7 +176,7 @@ struct BookmarkListView: View {
 
     private var bookmarkList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: Theme.Spacing.sm) {
                 ForEach(filteredBookmarks) { bookmark in
                     BookmarkRowView(bookmark: bookmark, isSelected: selectedBookmarkId == bookmark.id)
                         .contentShape(Rectangle())
@@ -196,6 +192,7 @@ struct BookmarkListView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
         }
     }
 

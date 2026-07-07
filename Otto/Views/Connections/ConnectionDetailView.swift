@@ -196,16 +196,17 @@ struct ConnectionDetailView: View {
             ZStack {
                 Circle()
                     .fill(ContentType.connection.color.opacity(0.12))
-                    .frame(width: 64, height: 64)
+                    .frame(width: 40, height: 40)
 
                 Text(connection.initials)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(ContentType.connection.color)
             }
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(connection.fullName)
-                    .font(Theme.Typography.largeTitle)
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
                 if !connection.headline.isEmpty {
                     Text(connection.headline)
@@ -239,7 +240,7 @@ struct ConnectionDetailView: View {
     private var closenessSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text("Relationship")
-                .font(Theme.Typography.headline)
+                .hudLabel()
 
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(ConnectionCloseness.allCases, id: \.self) { tier in
@@ -278,7 +279,7 @@ struct ConnectionDetailView: View {
     private var contactSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text("Contact Information")
-                .font(Theme.Typography.headline)
+                .hudLabel()
 
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 // LinkedIn profile — prominent button
@@ -289,7 +290,7 @@ struct ConnectionDetailView: View {
                         HStack(spacing: Theme.Spacing.md) {
                             Image(systemName: "link.circle.fill")
                                 .font(.system(size: 24))
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(Theme.Colors.accentText)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("View LinkedIn Profile")
@@ -297,7 +298,7 @@ struct ConnectionDetailView: View {
                                     .foregroundStyle(Theme.Colors.text)
 
                                 Text(profileUrl)
-                                    .font(Theme.Typography.caption)
+                                    .font(Theme.Typography.monoCaption)
                                     .foregroundStyle(Theme.Colors.tertiaryText)
                                     .lineLimit(1)
                             }
@@ -311,11 +312,11 @@ struct ConnectionDetailView: View {
                         .padding(Theme.Spacing.md)
                         .background(
                             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .fill(Color.blue.opacity(0.06))
+                                .fill(Theme.Colors.panel)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                .strokeBorder(Color.blue.opacity(0.15), lineWidth: 1)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
                         )
                     }
                     .buttonStyle(.plain)
@@ -330,7 +331,7 @@ struct ConnectionDetailView: View {
                             .frame(width: 20)
 
                         Text(email)
-                            .font(Theme.Typography.body)
+                            .font(Theme.Typography.monoBody)
                             .foregroundStyle(Theme.Colors.text)
 
                         Spacer()
@@ -356,8 +357,8 @@ struct ConnectionDetailView: View {
                             .foregroundStyle(Theme.Colors.secondaryText)
                             .frame(width: 20)
 
-                        Text("Connected \(formatDate(date))")
-                            .font(Theme.Typography.body)
+                        (Text("Connected ").font(Theme.Typography.body)
+                            + Text(formatDate(date)).font(Theme.Typography.monoCaption))
                             .foregroundStyle(Theme.Colors.secondaryText)
                     }
                 }
@@ -379,7 +380,7 @@ struct ConnectionDetailView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack {
                 Text("More Info")
-                    .font(Theme.Typography.headline)
+                    .hudLabel()
                 Spacer()
                 Button {
                     if isEditingMoreInfo {
@@ -427,13 +428,14 @@ struct ConnectionDetailView: View {
                         }
                     }
                 } else {
-                    moreInfoDisplayRow(icon: "envelope", label: "Email", value: connection.email, placeholder: "Not set")
+                    moreInfoDisplayRow(icon: "envelope", label: "Email", value: connection.email, placeholder: "Not set", mono: true)
                     moreInfoDisplayRow(icon: "graduationcap", label: "Education", value: connection.education, placeholder: "Not set")
                     moreInfoDisplayRow(
                         icon: "gift",
                         label: "Birthday",
                         value: connection.birthday.map { formatDate($0) },
-                        placeholder: "Not set"
+                        placeholder: "Not set",
+                        mono: true
                     )
                     lastContactRow
                 }
@@ -453,7 +455,7 @@ struct ConnectionDetailView: View {
         .padding(.vertical, 4)
     }
 
-    private func moreInfoDisplayRow(icon: String, label: String, value: String?, placeholder: String) -> some View {
+    private func moreInfoDisplayRow(icon: String, label: String, value: String?, placeholder: String, mono: Bool = false) -> some View {
         HStack(spacing: Theme.Spacing.md) {
             Image(systemName: icon)
                 .font(.system(size: 14))
@@ -461,7 +463,7 @@ struct ConnectionDetailView: View {
                 .frame(width: 20)
             if let value = value, !value.isEmpty {
                 Text(value)
-                    .font(Theme.Typography.body)
+                    .font(mono ? Theme.Typography.monoBody : Theme.Typography.body)
                     .foregroundStyle(Theme.Colors.text)
             } else {
                 Text(placeholder)
@@ -481,11 +483,11 @@ struct ConnectionDetailView: View {
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .frame(width: 20)
                 if let date = connection.lastContactedAt {
-                    Text("Last contact: \(ConnectionDateFormat.relative(date))")
-                        .font(Theme.Typography.body)
+                    (Text("Last contact: ").font(Theme.Typography.body)
+                        + Text(ConnectionDateFormat.relative(date)).font(Theme.Typography.monoCaption))
                         .foregroundStyle(Theme.Colors.text)
                     Text(ConnectionDateFormat.short(date))
-                        .font(Theme.Typography.caption)
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 } else {
                     Text("No recorded touchpoints")
@@ -525,7 +527,7 @@ struct ConnectionDetailView: View {
                                     .font(.system(size: 10))
                                     .foregroundStyle(Theme.Colors.tertiaryText)
                                 Text(ConnectionDateFormat.short(touchpoint.date))
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(Theme.Typography.monoCaption)
                                     .foregroundStyle(Theme.Colors.secondaryText)
                                 Text(touchpoint.title)
                                     .font(.system(size: 11))
@@ -546,7 +548,7 @@ struct ConnectionDetailView: View {
     private var customFieldsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text("Custom Fields")
-                .font(Theme.Typography.headline)
+                .hudLabel()
 
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 ForEach(appState.connectionCustomFields.sorted(by: { $0.sortIndex < $1.sortIndex })) { definition in
@@ -562,7 +564,7 @@ struct ConnectionDetailView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack {
                 Text("Tags")
-                    .font(Theme.Typography.headline)
+                    .hudLabel()
 
                 Spacer()
 
@@ -585,7 +587,7 @@ struct ConnectionDetailView: View {
                         ForEach(editedTags, id: \.self) { tag in
                             HStack(spacing: 4) {
                                 Text(tag)
-                                    .font(Theme.Typography.caption)
+                                    .font(Theme.Typography.monoSmall)
 
                                 Button {
                                     editedTags.removeAll { $0 == tag }
@@ -599,8 +601,8 @@ struct ConnectionDetailView: View {
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                                    .fill(ContentType.connection.color.opacity(0.1))
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(ContentType.connection.color.opacity(0.12))
                             )
                         }
                     }
@@ -621,7 +623,7 @@ struct ConnectionDetailView: View {
                     }
                     .padding(.horizontal, Theme.Spacing.sm)
                     .padding(.vertical, Theme.Spacing.xs)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
+                    .background(Theme.Colors.bgInput)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
                 }
             } else {
@@ -634,13 +636,13 @@ struct ConnectionDetailView: View {
                     FlowLayout(spacing: Theme.Spacing.xs) {
                         ForEach(connection.tags, id: \.self) { tag in
                             Text(tag)
-                                .font(Theme.Typography.caption)
+                                .font(Theme.Typography.monoSmall)
                                 .foregroundStyle(ContentType.connection.color)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(
-                                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                                        .fill(ContentType.connection.color.opacity(0.1))
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(ContentType.connection.color.opacity(0.12))
                                 )
                         }
                     }
@@ -655,7 +657,7 @@ struct ConnectionDetailView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             HStack {
                 Text("Notes")
-                    .font(Theme.Typography.headline)
+                    .hudLabel()
 
                 Spacer()
 
@@ -678,7 +680,7 @@ struct ConnectionDetailView: View {
                     .scrollContentBackground(.hidden)
                     .padding(Theme.Spacing.sm)
                     .frame(minHeight: 100)
-                    .background(Theme.Colors.borderSubtle.opacity(0.5))
+                    .background(Theme.Colors.bgInput)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
             } else {
                 if connection.notes.isEmpty {
@@ -700,7 +702,7 @@ struct ConnectionDetailView: View {
     private var linkedXSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.md) {
             Text("Linked X Account")
-                .font(Theme.Typography.headline)
+                .hudLabel()
 
             if let follower = appState.linkedFollower(for: connection) {
                 // Show linked X follower

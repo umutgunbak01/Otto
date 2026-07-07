@@ -138,17 +138,7 @@ struct FileRowView: View {
         }
     }
 
-    private var iconBackgroundColor: Color {
-        switch file.fileType {
-        case .csv: return Theme.Colors.green
-        case .excel: return Color(red: 0.13, green: 0.55, blue: 0.13) // Darker green for Excel
-        case .image: return Theme.Colors.cyan
-        case .pdf: return Theme.Colors.red
-        case .text: return Theme.Colors.secondaryText
-        case .video: return .purple
-        case .audio: return .orange
-        }
-    }
+    private var iconBackgroundColor: Color { file.fileType.color }
 
     // MARK: - Formatted Date
 

@@ -92,19 +92,18 @@ struct MapView: View {
             }
         }
         .padding(24)
-        .background(Theme.Colors.bg1.opacity(0.85))
-        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+        .background(Theme.Colors.panel)
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).strokeBorder(Theme.Colors.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
     // MARK: - Header
 
     private func header(located: [CityGroup], unlocated: Int) -> some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
-            Text("⊕ MAP")
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .tracking(3)
-                .foregroundStyle(Theme.Colors.cyan)
-                .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            Text("Map")
+                .font(Theme.Typography.title)
+                .foregroundStyle(Theme.Colors.text)
 
             statPill(icon: "mappin", value: "\(located.count)", label: "cities")
             statPill(icon: "point.3.connected.trianglepath.dotted", value: "\(appState.networkEntries.count)", label: "network")
@@ -119,7 +118,7 @@ struct MapView: View {
                 HStack(spacing: 5) {
                     ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
                     Text("resolving \(unlocated)…")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
@@ -129,13 +128,19 @@ struct MapView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10))
-                    Text("Fit").font(.system(size: 11))
+                    Text("Fit").font(.system(size: 12))
                 }
-                .foregroundStyle(Theme.Colors.accent)
-                .padding(.horizontal, 8)
+                .foregroundStyle(Theme.Colors.textDim)
+                .padding(.horizontal, 9)
                 .padding(.vertical, 4)
-                .background(Theme.Colors.accent.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.panel)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
         }
@@ -145,13 +150,20 @@ struct MapView: View {
 
     private func statPill(icon: String, value: String, label: String) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 9)).foregroundStyle(Theme.Colors.cyanDim)
-            Text(value).font(.system(size: 11, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.Colors.text)
-            Text(label).font(.system(size: 9, design: .monospaced)).foregroundStyle(Theme.Colors.textDim)
+            Image(systemName: icon).font(.system(size: 9)).foregroundStyle(Theme.Colors.tertiaryText)
+            Text(value).font(Theme.Typography.monoSmall).foregroundStyle(Theme.Colors.text)
+            Text(label).font(.system(size: 10)).foregroundStyle(Theme.Colors.textDim)
         }
-        .padding(.horizontal, 7)
+        .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .fill(Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
     }
 
 }
@@ -175,7 +187,6 @@ private struct CityPin: View {
                     Circle()
                         .fill(Theme.Colors.cyan.opacity(isSelected ? 0.95 : (hover ? 0.85 : 0.7)))
                         .frame(width: diameter, height: diameter)
-                        .shadow(color: Theme.Colors.cyanGlow, radius: isSelected || hover ? 10 : 5)
                     Circle()
                         .stroke(Theme.Colors.bg0, lineWidth: 1.5)
                         .frame(width: diameter, height: diameter)
@@ -185,12 +196,18 @@ private struct CityPin: View {
                 }
                 if isSelected || hover {
                     Text(group.displayName)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Theme.Colors.text)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Theme.Colors.bg0.opacity(0.85))
-                        .overlay(Rectangle().stroke(Theme.Colors.cyan.opacity(0.5), lineWidth: 1))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Colors.panel)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                        )
                         .fixedSize()
                 }
             }

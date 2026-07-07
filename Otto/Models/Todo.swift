@@ -68,10 +68,10 @@ struct Todo: Identifiable, Codable {
 
         var color: Color {
             switch self {
-            case .low: return .gray
-            case .medium: return .blue
-            case .high: return .orange
-            case .urgent: return .red
+            case .low: return Theme.Colors.priorityLow
+            case .medium: return Theme.Colors.priorityMedium
+            case .high: return Theme.Colors.priorityHigh
+            case .urgent: return Theme.Colors.priorityUrgent
             }
         }
 

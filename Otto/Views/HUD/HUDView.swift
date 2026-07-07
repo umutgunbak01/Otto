@@ -156,7 +156,7 @@ struct HUDView: View {
     private var phaseColor: Color {
         switch appState.voice.phase {
         case .speaking: return Theme.Colors.aiAccent
-        case .error:    return .orange
+        case .error:    return Theme.Colors.amber
         default:        return Theme.Colors.accent
         }
     }

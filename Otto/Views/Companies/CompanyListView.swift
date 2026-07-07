@@ -66,14 +66,15 @@ struct CompanyListView: View {
                 noResultsState
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 6) {
                         ForEach(filtered) { company in
                             CompanyRow(company: company) {
                                 editing = EditingTarget(id: company.id, company: company)
                             }
-                            OttoDivider()
                         }
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.vertical, Theme.Spacing.lg)
                 }
             }
         }
@@ -87,27 +88,23 @@ struct CompanyListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⬡ COMPANIES")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Companies")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filtered.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filtered.count)
 
                 if totalCommitment > 0 {
                     Text("Σ \(Company.formatMoney(totalCommitment))")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .font(Theme.Typography.monoSmall)
                         .foregroundStyle(Theme.Colors.green)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .overlay(Rectangle().stroke(Theme.Colors.green.opacity(0.4), lineWidth: 1))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2.5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.Colors.tintGreen)
+                        )
                 }
 
                 Spacer()
@@ -117,17 +114,12 @@ struct CompanyListView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "plus")
-                            .font(.system(size: 11))
+                            .font(.system(size: 11, weight: .medium))
                         Text("New")
-                            .font(.system(size: 12))
+                            .font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -140,18 +132,36 @@ struct CompanyListView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.bgInput)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
                 .frame(maxWidth: 260)
 
                 // Customer filter
-                Picker("", selection: $customerFilter) {
-                    ForEach(CustomerFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                HStack(spacing: 3) {
+                    ForEach(CustomerFilter.allCases, id: \.self) { option in
+                        Button { customerFilter = option } label: {
+                            Text(option.rawValue)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(customerFilter == option ? Theme.Colors.accentText : Theme.Colors.textDim)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(customerFilter == option ? Theme.Colors.selectTint : Color.clear)
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 220)
 
                 // Type filter
                 Menu {
@@ -198,15 +208,21 @@ struct CompanyListView: View {
     }
 
     private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 11))
+            Text(text).font(.system(size: 12, weight: .medium))
         }
-        .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(isActive ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Empty states
@@ -259,75 +275,73 @@ private struct CompanyRow: View {
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: Theme.Spacing.md) {
+            HStack(spacing: 11) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(neon.opacity(isHovered ? 0.22 : 0.12))
-                        .frame(width: 32, height: 32)
-                        .shadow(color: neon.opacity(isHovered ? 0.7 : 0), radius: isHovered ? 8 : 0)
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(neon.opacity(0.12))
+                        .frame(width: 30, height: 30)
                     Image(systemName: company.type.icon)
                         .font(.system(size: 13))
                         .foregroundStyle(neon)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(company.name.isEmpty ? "Untitled" : company.name)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(isHovered ? neon : Theme.Colors.text)
-                            .lineLimit(1)
-                        if company.isCustomer {
-                            Text("CUSTOMER")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .tracking(1)
-                                .foregroundStyle(Theme.Colors.green)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .overlay(Rectangle().stroke(Theme.Colors.green.opacity(0.5), lineWidth: 1))
-                        }
-                    }
+                    Text(company.name.isEmpty ? "Untitled" : company.name)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(Theme.Colors.text)
+                        .lineLimit(1)
                     HStack(spacing: 6) {
                         Text(company.type.label)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.textDim)
                         if !company.location.isEmpty {
                             Image(systemName: "mappin.circle")
-                                .font(.system(size: 9))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.Colors.textDim)
                             Text(company.location)
-                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.textDim)
                                 .lineLimit(1)
                         }
+                        if !company.linkedNetworkEntryIds.isEmpty {
+                            Text("· \(company.linkedNetworkEntryIds.count) linked")
+                                .font(Theme.Typography.monoCaption)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .help("\(company.linkedNetworkEntryIds.count) linked Network Hub people")
+                        }
                     }
-                    .font(.system(size: 11))
                 }
 
                 Spacer(minLength: 0)
 
-                if !company.linkedNetworkEntryIds.isEmpty {
-                    HStack(spacing: 3) {
-                        Image(systemName: "person.2.fill").font(.system(size: 9))
-                        Text("\(company.linkedNetworkEntryIds.count)")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    }
-                    .foregroundStyle(ContentType.networkHub.color)
-                    .help("\(company.linkedNetworkEntryIds.count) linked Network Hub people")
-                }
+                Text(company.isCustomer ? "Customer" : "Prospect")
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(company.isCustomer ? Theme.Colors.green : Theme.Colors.amber)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(company.isCustomer ? Theme.Colors.tintGreen : Theme.Colors.tintAmber)
+                    )
 
                 if let commitment = company.formattedCommitment {
                     Text(commitment)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .font(Theme.Typography.monoCaption)
                         .foregroundStyle(Theme.Colors.green)
                 }
             }
-            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(neon.opacity(isHovered ? 0.08 : 0))
-                .padding(.horizontal, Theme.Spacing.md)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }

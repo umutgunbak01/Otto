@@ -131,7 +131,7 @@ struct NetworkHubListView: View {
             headerCell("EMAIL", NHCol.email)
             headerCell("CLOSENESS", NHCol.closeness)
         }
-        .background(Theme.Colors.borderSubtle.opacity(0.7))
+        .background(Theme.Colors.bg1)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.Colors.border).frame(height: 1)
         }
@@ -139,13 +139,13 @@ struct NetworkHubListView: View {
 
     private func headerCell(_ t: String, _ w: CGFloat) -> some View {
         Text(t)
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .tracking(1.2)
+            .font(Theme.Typography.label)
+            .tracking(Theme.Tracking.xwide)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 7)
             .frame(width: w, height: 28, alignment: .leading)
             .overlay(alignment: .trailing) {
-                Rectangle().fill(Theme.Colors.border.opacity(0.4)).frame(width: 1)
+                Rectangle().fill(Theme.Colors.border).frame(width: 1)
             }
     }
 
@@ -153,19 +153,12 @@ struct NetworkHubListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("⬡ NETWORK HUB")
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(ContentType.networkHub.color)
-                    .shadow(color: ContentType.networkHub.color.opacity(0.6), radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text("Network hub")
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
 
-                Text("\(filtered.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Theme.Colors.borderSubtle)
-                    .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                OttoCountBadge(count: filtered.count)
 
                 Spacer()
 
@@ -173,16 +166,11 @@ struct NetworkHubListView: View {
                     isCreatingNew = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 11))
-                        Text("Add").font(.system(size: 12))
+                        Image(systemName: "plus").font(.system(size: 10, weight: .medium))
+                        Text("Add").font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(Theme.Colors.accent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.Colors.accent.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AccentButtonStyle())
             }
 
             HStack(spacing: Theme.Spacing.sm) {
@@ -202,10 +190,16 @@ struct NetworkHubListView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Theme.Colors.bgInput)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
                 .frame(maxWidth: 320)
 
                 Menu {
@@ -273,15 +267,21 @@ struct NetworkHubListView: View {
     }
 
     private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 11)).lineLimit(1)
+            Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1)
         }
-        .foregroundStyle(isActive ? Theme.Colors.accent : Theme.Colors.secondaryText)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(isActive ? Theme.Colors.accent.opacity(0.1) : Theme.Colors.borderSubtle)
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4.5)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
+        )
     }
 
     // MARK: - Empty states
@@ -291,9 +291,9 @@ struct NetworkHubListView: View {
             Image(systemName: ContentType.networkHub.iconName)
                 .font(.system(size: 40, weight: .thin))
                 .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No network entries").font(.system(size: 15)).foregroundStyle(Theme.Colors.tertiaryText)
+            Text("No network entries").font(Theme.Typography.body).foregroundStyle(Theme.Colors.tertiaryText)
             Button { isCreatingNew = true } label: {
-                Text("Add the first one").font(.system(size: 13)).foregroundStyle(Theme.Colors.accent)
+                Text("Add the first one").font(Theme.Typography.body).foregroundStyle(Theme.Colors.accentText)
             }
             .buttonStyle(.plain)
         }
@@ -305,11 +305,11 @@ struct NetworkHubListView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 40, weight: .thin))
                 .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No results").font(.system(size: 15)).foregroundStyle(Theme.Colors.tertiaryText)
+            Text("No results").font(Theme.Typography.body).foregroundStyle(Theme.Colors.tertiaryText)
             Button {
                 searchText = ""; filterType = nil; filterIndividualType = nil; filterCloseness = nil
             } label: {
-                Text("Clear filters").font(.system(size: 13)).foregroundStyle(Theme.Colors.accent)
+                Text("Clear filters").font(Theme.Typography.body).foregroundStyle(Theme.Colors.accentText)
             }
             .buttonStyle(.plain)
         }
@@ -357,7 +357,7 @@ private struct NetworkTableRow: View {
             Button(action: onOpen) {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 10))
-                    .foregroundStyle(entry.profile != nil ? ContentType.networkHub.color : Theme.Colors.tertiaryText)
+                    .foregroundStyle(entry.profile != nil ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
                     .frame(width: NHCol.open, height: 34)
             }
             .buttonStyle(.plain)
@@ -381,13 +381,13 @@ private struct NetworkTableRow: View {
         .frame(height: 34)
         .background(hover ? Theme.Colors.hoverTint : Color.clear)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.Colors.border.opacity(0.35)).frame(height: 1)
+            Rectangle().fill(Theme.Colors.border).frame(height: 1)
         }
         .onHover { hover = $0 }
     }
 
     private var gridLine: some View {
-        Rectangle().fill(Theme.Colors.border.opacity(0.4)).frame(width: 1)
+        Rectangle().fill(Theme.Colors.border).frame(width: 1)
     }
 }
 
@@ -406,8 +406,8 @@ private struct NHEditableCell: View {
     var body: some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: bold ? .medium : .regular))
-            .foregroundStyle(Theme.Colors.text)
+            .font(.system(size: 12.5, weight: bold ? .medium : .regular))
+            .foregroundStyle(bold ? Theme.Colors.text : Theme.Colors.textDim)
             .focused($focused)
             .onAppear { draft = text }
             .onChange(of: text) { _, nv in if !focused { draft = nv } }
@@ -419,7 +419,7 @@ private struct NHEditableCell: View {
             .frame(width: width, height: 34, alignment: .leading)
             .background(focused ? Theme.Colors.selectTint : Color.clear)
             .overlay(alignment: .trailing) {
-                Rectangle().fill(Theme.Colors.border.opacity(0.4)).frame(width: 1)
+                Rectangle().fill(Theme.Colors.border).frame(width: 1)
             }
     }
 }
@@ -447,17 +447,27 @@ private struct NHEnumCell<T: Hashable>: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: icon(value)).font(.system(size: 10))
-                Text(title(value)).font(.system(size: 11)).lineLimit(1)
+            HStack(spacing: 5) {
+                Text(title(value))
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(color(value))
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(color(value).opacity(0.12))
+                    )
+                Text("▾")
+                    .font(.system(size: 8))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                 Spacer(minLength: 2)
             }
-            .foregroundStyle(color(value))
             .padding(.horizontal, 7)
             .frame(width: width, height: 34, alignment: .leading)
             .contentShape(Rectangle())
             .overlay(alignment: .trailing) {
-                Rectangle().fill(Theme.Colors.border.opacity(0.4)).frame(width: 1)
+                Rectangle().fill(Theme.Colors.border).frame(width: 1)
             }
         }
         .buttonStyle(.plain)
@@ -496,10 +506,9 @@ struct NetworkEntryEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(isEditing ? "EDIT ENTRY" : "NEW ENTRY")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(ContentType.networkHub.color)
+                Text(isEditing ? "Edit entry" : "New entry")
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(Theme.Colors.text)
                 Spacer()
                 Button { onClose() } label: {
                     Image(systemName: "xmark")
@@ -562,14 +571,9 @@ struct NetworkEntryEditor: View {
                         Spacer()
                         Button { save() } label: {
                             Text(isEditing ? "Save" : "Create")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.bg0)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 6)
-                                .background(ContentType.networkHub.color)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .font(.system(size: 12, weight: .medium))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(AccentButtonStyle())
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty
                                   && company.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
@@ -601,15 +605,13 @@ struct NetworkEntryEditor: View {
     @ViewBuilder
     private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Theme.Colors.tertiaryText)
+            Text(label)
+                .hudLabel()
             content()
                 .font(.system(size: 12))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(Theme.Colors.hoverTint)
+                .background(Theme.Colors.bgInput)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
@@ -627,10 +629,8 @@ struct NetworkEntryEditor: View {
         title: @escaping (T) -> String
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Theme.Colors.tertiaryText)
+            Text(label)
+                .hudLabel()
             Menu {
                 ForEach(options, id: \.self) { opt in
                     Button { selection.wrappedValue = opt } label: {
@@ -653,7 +653,7 @@ struct NetworkEntryEditor: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
-                .background(Theme.Colors.hoverTint)
+                .background(Theme.Colors.bgInput)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
@@ -699,13 +699,13 @@ struct NetworkEntryEditor: View {
         if let p = entry?.profile, !p.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
-                    Image(systemName: "person.text.rectangle").font(.system(size: 12))
-                    Text("LINKEDIN PROFILE")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .tracking(2)
+                    Image(systemName: "person.text.rectangle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("LinkedIn profile")
+                        .hudLabel()
                     Spacer()
                 }
-                .foregroundStyle(ContentType.networkHub.color)
 
                 if !p.headline.isEmpty {
                     Text(p.headline)
@@ -791,10 +791,8 @@ struct NetworkEntryEditor: View {
     }
 
     private func sectionLabel(_ t: String) -> some View {
-        Text(t.uppercased())
-            .font(.system(size: 9, weight: .semibold, design: .monospaced))
-            .tracking(1.5)
-            .foregroundStyle(ContentType.networkHub.color.opacity(0.9))
+        Text(t)
+            .hudLabel()
             .padding(.top, 2)
     }
 
@@ -809,7 +807,7 @@ struct NetworkEntryEditor: View {
                 }
                 if !e.dateRange.isEmpty {
                     Text((e.company.isEmpty || e.title.isEmpty ? "" : "·  ") + e.dateRange)
-                        .font(.system(size: 10)).foregroundStyle(Theme.Colors.tertiaryText)
+                        .font(Theme.Typography.monoSmall).foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
             if !e.location.isEmpty {
@@ -884,10 +882,8 @@ private struct EntryCompanyLinker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("LINKED COMPANIES")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Theme.Colors.tertiaryText)
+            Text("Linked companies")
+                .hudLabel()
 
             if linked.isEmpty {
                 Text("No companies linked yet.")
@@ -910,8 +906,14 @@ private struct EntryCompanyLinker: View {
                         }
                         .buttonStyle(.plain).help("Unlink")
                     }
-                    .background(Theme.Colors.bg2)
-                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .fill(Theme.Colors.bg2)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                 }
             }
 
@@ -920,7 +922,7 @@ private struct EntryCompanyLinker: View {
                     Image(systemName: adding ? "chevron.down" : "plus.circle").font(.system(size: 11))
                     Text(adding ? "Done" : "Link company").font(.system(size: 12))
                 }
-                .foregroundStyle(Theme.Colors.accent)
+                .foregroundStyle(Theme.Colors.accentText)
             }
             .buttonStyle(.plain)
 
@@ -929,7 +931,7 @@ private struct EntryCompanyLinker: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .padding(.horizontal, 8).padding(.vertical, 6)
-                    .background(Theme.Colors.hoverTint)
+                    .background(Theme.Colors.bgInput)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.md).stroke(Theme.Colors.border, lineWidth: 1))
                 if candidates.isEmpty {
@@ -939,12 +941,15 @@ private struct EntryCompanyLinker: View {
                     VStack(spacing: 0) {
                         ForEach(candidates) { c in
                             Button { link(c) } label: {
-                                companyRowContent(c, trailingIcon: "plus", trailingTint: Theme.Colors.accent)
+                                companyRowContent(c, trailingIcon: "plus", trailingTint: Theme.Colors.accentText)
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                    .overlay(Rectangle().stroke(Theme.Colors.borderSubtle, lineWidth: 1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                 }
             }
         }

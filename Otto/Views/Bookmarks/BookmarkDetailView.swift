@@ -30,8 +30,10 @@ struct BookmarkDetailView: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     // Title
                     TextField("Untitled", text: $title)
-                        .font(.system(size: 28, weight: .bold))
+                        .font(Theme.Typography.largeTitle)
+                        .kerning(-0.4)
                         .textFieldStyle(.plain)
+                        .foregroundStyle(Theme.Colors.text)
 
                     // Meta section
                     VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -48,9 +50,9 @@ struct BookmarkDetailView: View {
 
                             HStack {
                                 TextField("https://...", text: $url)
-                                    .font(Theme.Typography.body)
+                                    .font(Theme.Typography.monoBody)
                                     .textFieldStyle(.plain)
-                                    .foregroundStyle(Theme.Colors.accent)
+                                    .foregroundStyle(Theme.Colors.accentText)
 
                                 if !url.isEmpty, let urlObj = URL(string: url) {
                                     Button {
@@ -119,18 +121,18 @@ struct BookmarkDetailView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                             Text("Added \(timeAgo(bookmark.createdAt))")
-                                .font(Theme.Typography.caption)
+                                .font(Theme.Typography.monoCaption)
                                 .foregroundStyle(Theme.Colors.tertiaryText)
                         }
                     }
                     .padding(Theme.Spacing.md)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                            .fill(Theme.Colors.panel)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
 
                     // Notes/Description
@@ -146,16 +148,17 @@ struct BookmarkDetailView: View {
 
                         TextEditor(text: $description)
                             .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Colors.text)
                             .scrollContentBackground(.hidden)
                             .frame(minHeight: 150)
                             .padding(Theme.Spacing.md)
                             .background(
                                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                    .fill(Theme.Colors.borderSubtle.opacity(0.5))
+                                    .fill(Theme.Colors.bgInput)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: Theme.Radius.md)
-                                    .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
+                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
                             )
                     }
                 }
@@ -187,24 +190,28 @@ struct BookmarkDetailView: View {
                 .buttonStyle(.plain)
             }
 
-            // Breadcrumb
+            // Breadcrumb — only the bookmark title is flexible; the fixed
+            // parts must never letter-wrap in a narrow pane.
             HStack(spacing: Theme.Spacing.xs) {
                 Image(systemName: "bookmark")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.pink)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                 Text("Bookmarks")
-                    .font(Theme.Typography.caption)
+                    .font(Theme.Typography.monoCaption)
                     .foregroundStyle(Theme.Colors.tertiaryText)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                Text(bookmark.title)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
                     .lineLimit(1)
+                    .fixedSize()
+                Text("/")
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
+                Text(bookmark.title)
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
 
-            Spacer()
+            Spacer(minLength: Theme.Spacing.sm)
 
             // Read status toggle
             Button {
@@ -215,8 +222,10 @@ struct BookmarkDetailView: View {
                         .font(.system(size: 12))
                     Text(currentBookmark.isRead ? "Read" : "Mark as Read")
                         .font(Theme.Typography.caption)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                .foregroundStyle(currentBookmark.isRead ? Theme.Colors.personal : Theme.Colors.secondaryText)
+                .foregroundStyle(currentBookmark.isRead ? Theme.Colors.green : Theme.Colors.textDim)
             }
             .buttonStyle(.plain)
 

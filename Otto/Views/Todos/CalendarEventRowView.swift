@@ -7,22 +7,22 @@ struct CalendarEventRowView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
-            // Teal/cyan left indicator bar
+            // Accent left indicator bar
             RoundedRectangle(cornerRadius: 2)
-                .fill(Theme.Colors.cyan)
-                .frame(width: 3, height: 36)
+                .fill(Theme.Colors.accent)
+                .frame(width: 3, height: 32)
 
             // Time range
             Text(event.formattedTimeRange)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Theme.Colors.secondaryText)
-                .frame(width: 70, alignment: .leading)
+                .font(Theme.Typography.monoCaption)
+                .foregroundStyle(Theme.Colors.textDim)
+                .frame(width: 76, alignment: .leading)
 
             // Event title
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.title)
-                    .font(.system(size: 14))
-                    .foregroundStyle(event.isPast ? Theme.Colors.secondaryText : Theme.Colors.text)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(event.isPast ? Theme.Colors.textDim : Theme.Colors.text)
                     .lineLimit(1)
 
                 // Location or attendees preview
@@ -59,9 +59,14 @@ struct CalendarEventRowView: View {
         .padding(.vertical, Theme.Spacing.sm)
         .padding(.horizontal, Theme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(isHovered ? Theme.Colors.cyan.opacity(0.05) : Color.clear)
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(isHovered ? Theme.Colors.hoverTint : Theme.Colors.panel)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .strokeBorder(Theme.Colors.borderStrong, lineWidth: 1)
+        )
+        .padding(.vertical, 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if let htmlLink = event.htmlLink, let url = URL(string: htmlLink) {

@@ -16,8 +16,8 @@ struct XFollowerListView: View {
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .all:     return "ALL"
-            case .mutuals: return "MUTUALS"
+            case .all:     return "All"
+            case .mutuals: return "Mutuals"
             }
         }
     }
@@ -59,7 +59,7 @@ struct XFollowerListView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
                 Rectangle()
-                    .fill(Theme.Colors.cyan.opacity(0.18))
+                    .fill(Theme.Colors.border)
                     .frame(width: 1)
             }
 
@@ -111,21 +111,14 @@ struct XFollowerListView: View {
         VStack(spacing: 0) {
             // Header
             VStack(spacing: Theme.Spacing.sm) {
-                HStack(alignment: .center) {
-                    Text("⌬ X FOLLOWERS")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .tracking(3)
-                        .foregroundStyle(Theme.Colors.cyan)
-                        .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+                HStack(alignment: .center, spacing: 8) {
+                    Text("X Followers")
+                        .font(Theme.Typography.title)
+                        .foregroundStyle(Theme.Colors.text)
 
                     Spacer()
 
-                    Text("\(filteredFollowers.count)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.Colors.borderSubtle)
-                        .overlay(Rectangle().stroke(Theme.Colors.border, lineWidth: 1))
+                    OttoCountBadge(count: filteredFollowers.count)
 
                     // Loading indicator
                     if appState.isLoadingX {
@@ -135,14 +128,30 @@ struct XFollowerListView: View {
                     }
                 }
 
-                // Scope picker — view everyone or only mutuals
-                Picker("Scope", selection: $filterScopeRaw) {
+                // Scope pills — view everyone or only mutuals
+                HStack(spacing: 4) {
                     ForEach(FilterScope.allCases) { scope in
-                        Text(scope.label).tag(scope.rawValue)
+                        Button {
+                            filterScopeRaw = scope.rawValue
+                        } label: {
+                            Text(scope.label)
+                                .font(.system(size: 12, weight: .medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(filterScope == scope ? Theme.Colors.selectTint : Color.clear)
+                                )
+                                .foregroundStyle(
+                                    filterScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim
+                                )
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
+
+                    Spacer()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
 
                 // Search field
                 HStack(spacing: 6) {
@@ -166,8 +175,14 @@ struct XFollowerListView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(Theme.Colors.bgInput)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -221,7 +236,7 @@ struct XFollowerListView: View {
                 }
             }
         }
-        .background(Theme.Colors.background.opacity(0.5))
+        .background(Theme.Colors.bg1)
     }
 
     // MARK: - Sidebar Follower Row
@@ -236,20 +251,12 @@ struct XFollowerListView: View {
         } label: {
             HStack(spacing: 8) {
                 // Initials avatar
-                ZStack {
-                    Circle()
-                        .fill(ContentType.xFollower.color.opacity(0.12))
-                        .frame(width: 30, height: 30)
-
-                    Text(follower.initials)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ContentType.xFollower.color)
-                }
+                XAvatar(seed: follower.username, initials: follower.initials)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
                         Text(follower.displayName)
-                            .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                            .font(.system(size: 13.5, weight: isSelected ? .medium : .regular))
                             .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.secondaryText)
                             .lineLimit(1)
 
@@ -257,12 +264,12 @@ struct XFollowerListView: View {
                         if follower.linkedConnectionId != nil {
                             Image(systemName: "link.circle.fill")
                                 .font(.system(size: 10))
-                                .foregroundStyle(ContentType.connection.color)
+                                .foregroundStyle(Theme.Colors.textDim)
                         }
                     }
 
                     Text("@\(follower.username)")
-                        .font(.system(size: 11))
+                        .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
 
@@ -276,11 +283,19 @@ struct XFollowerListView: View {
 
                 Spacer()
 
-                // Follower/following counts
-                VStack(alignment: .trailing, spacing: 2) {
+                // Mutual chip + follower count
+                VStack(alignment: .trailing, spacing: 3) {
+                    if follower.isMutual {
+                        AngularChip(fill: Theme.Colors.selectTint) {
+                            Text("Mutual")
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.accentText)
+                        }
+                    }
+
                     HStack(spacing: 2) {
                         Text("\(follower.followersCount)")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
                         Image(systemName: "person.2")
                             .font(.system(size: 8))
                     }
@@ -289,10 +304,7 @@ struct XFollowerListView: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(isSelected ? Theme.Colors.accent.opacity(0.1) : Color.clear)
-            )
+            .ottoRow(isSelected: isSelected)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

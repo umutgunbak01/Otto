@@ -3,12 +3,10 @@ import SwiftUI
 // MARK: - Cached formatters
 //
 // `DateFormatter` / `NumberFormatter` allocations are surprisingly expensive
-// when invoked in TimelineView bodies. The Otto HUD calls these dozens of
-// times per second, so we keep one instance per format and reuse it.
+// when invoked in TimelineView bodies, so we keep one instance per format.
 
 enum OttoFormatters {
-    /// Decimal formatter using a `.` thousands separator (matches the
-    /// "8.351" mockup style for sidebar count chips).
+    /// Decimal formatter using a `.` thousands separator.
     static let dottedThousands: NumberFormatter = {
         let f = NumberFormatter()
         f.numberStyle = .decimal
@@ -16,22 +14,22 @@ enum OttoFormatters {
         return f
     }()
 
-    /// Standard decimal formatter — comma thousands. Used by INDEX in the
-    /// top-bar.
+    /// Standard decimal formatter — comma thousands. Used by the top-bar
+    /// indexed count.
     static let decimal: NumberFormatter = {
         let f = NumberFormatter()
         f.numberStyle = .decimal
         return f
     }()
 
-    /// "EEE · MMM d · HH:mm" — for the Next Event panel.
+    /// "EEE · MMM d · HH:mm" — for the Next Event card.
     static let eventDate: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "EEE · MMM d · HH:mm"
         return f
     }()
 
-    /// "HHmm · MMM · dd" — for the SECTOR label on the home HUD.
+    /// "HHmm · MMM · dd" — legacy HUD sector label.
     static let sectorDate: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HHmm · MMM · dd"
@@ -41,40 +39,39 @@ enum OttoFormatters {
 
 // MARK: - OttoDivider
 //
-// Cyan dashed divider that replaces system `Divider()` in the list/detail
-// views. Defaults to a tight dashed style matching the mockup; can be solid
-// for tighter areas.
+// Hairline divider. The redesign has no dashed or gradient rules — every
+// variant renders the same 1px hairline so legacy call sites (`.dashed`,
+// `.gradient`) just get the new look.
 
 struct OttoDivider: View {
     enum Kind { case solid, dashed, gradient }
     var kind: Kind = .solid
-    var color: Color = Theme.Colors.cyan.opacity(0.18)
+    var color: Color = Theme.Colors.border
 
     var body: some View {
-        switch kind {
-        case .solid:
-            Rectangle()
-                .fill(color)
-                .frame(height: 1)
-        case .dashed:
-            DashedLine()
-                .stroke(color, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .frame(height: 1)
-        case .gradient:
-            LinearGradient(
-                colors: [.clear, color, .clear],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
+        Rectangle()
+            .fill(color)
             .frame(height: 1)
-        }
+    }
+}
+
+/// Vertical hairline for HStack pane splits. OttoDivider is height-1 and
+/// greedy in width — dropped into an HStack it silently swallows all the
+/// leftover width as an invisible gap, so splits must use this instead.
+struct OttoVerticalDivider: View {
+    var color: Color = Theme.Colors.border
+
+    var body: some View {
+        Rectangle()
+            .fill(color)
+            .frame(width: 1)
     }
 }
 
 // MARK: - OttoCountBadge
 //
-// The cyan-bordered count chip used in list-view headers ("To-Dos · 12").
-// Shapes match the sidebar nav-item count chip — angular, not capsule.
+// The mono count chip used in list-view headers (mockup .count-chip) and
+// semantic-tinted variants (mockup .chip.green/.amber/…).
 
 struct OttoCountBadge: View {
     let count: Int
@@ -85,7 +82,7 @@ struct OttoCountBadge: View {
     private var color: Color {
         switch tone {
         case .neutral: return Theme.Colors.textDim
-        case .cyan:    return Theme.Colors.cyan
+        case .cyan:    return Theme.Colors.accentText
         case .amber:   return Theme.Colors.amber
         case .red:     return Theme.Colors.red
         case .green:   return Theme.Colors.green
@@ -94,65 +91,72 @@ struct OttoCountBadge: View {
 
     private var bg: Color {
         switch tone {
-        case .neutral: return Theme.Colors.borderSubtle
-        case .cyan:    return Theme.Colors.cyan.opacity(0.15)
-        case .amber:   return Theme.Colors.amber.opacity(0.15)
-        case .red:     return Theme.Colors.red.opacity(0.15)
-        case .green:   return Theme.Colors.green.opacity(0.15)
+        case .neutral: return Color.clear
+        case .cyan:    return Theme.Colors.selectTint
+        case .amber:   return Theme.Colors.tintAmber
+        case .red:     return Theme.Colors.tintRed
+        case .green:   return Theme.Colors.tintGreen
         }
     }
 
     var body: some View {
-        Text("\(count)")
-            .font(.system(size: 9, weight: .medium, design: .monospaced))
-            .tracking(0.5)
-            .padding(.horizontal, 6)
+        Text(formatted)
+            .font(Theme.Typography.monoSmall)
+            .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .foregroundStyle(color)
-            .background(bg)
-            .overlay(
-                Rectangle().stroke(color.opacity(0.4), lineWidth: 1)
+            .foregroundStyle(tone == .neutral ? Theme.Colors.textDim : color)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(bg)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .strokeBorder(
+                        tone == .neutral ? Theme.Colors.border : color.opacity(0.0),
+                        lineWidth: 1
+                    )
+            )
+    }
+
+    private var formatted: String {
+        OttoFormatters.decimal.string(from: NSNumber(value: count)) ?? "\(count)"
     }
 }
 
 // MARK: - OttoListHeader
 //
-// Standard header for every list view — uppercased monospace title with the
-// cyan glow, an angular count chip on the right, optional trailing buttons,
-// and a dashed cyan baseline. Replaces the various ad-hoc Headers in
-// TodoListView / NoteListView / etc.
+// The mockup's viewbar formula: sans title + mono count chip + trailing
+// controls, closed with a hairline. Replaces the old glowing mono header.
 
 struct OttoListHeader<Trailing: View>: View {
     let title: String
     let count: Int?
-    var tone: OttoCountBadge.Tone = .cyan
+    var tone: OttoCountBadge.Tone = .neutral
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: Theme.Spacing.md) {
-                Text("⌬ " + title.uppercased())
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundStyle(Theme.Colors.cyan)
-                    .shadow(color: Theme.Colors.cyanGlow, radius: 4)
+            HStack(alignment: .center, spacing: 10) {
+                Text(title)
+                    .font(Theme.Typography.title)
+                    .foregroundStyle(Theme.Colors.text)
                 if let count = count {
                     OttoCountBadge(count: count, tone: tone)
                 }
                 Spacer()
                 trailing()
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.lg)
+            .padding(.bottom, Theme.Spacing.md)
 
-            OttoDivider(kind: .dashed)
+            OttoDivider()
         }
     }
 }
 
 extension OttoListHeader where Trailing == EmptyView {
-    init(title: String, count: Int? = nil, tone: OttoCountBadge.Tone = .cyan) {
+    init(title: String, count: Int? = nil, tone: OttoCountBadge.Tone = .neutral) {
         self.title = title
         self.count = count
         self.tone = tone
@@ -162,8 +166,7 @@ extension OttoListHeader where Trailing == EmptyView {
 
 // MARK: - OttoRow background
 //
-// View modifier used by list rows to give a uniform hover/selection
-// treatment with cyan glow when active.
+// Uniform hover/selection treatment for list rows — rounded tint, no bars.
 
 struct OttoRowBackground: ViewModifier {
     var isSelected: Bool = false
@@ -172,15 +175,13 @@ struct OttoRowBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                isSelected
-                    ? Theme.Colors.selectTint
-                    : (isHovered ? Theme.Colors.hoverTint : Color.clear)
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(
+                        isSelected
+                            ? Theme.Colors.selectTint
+                            : (isHovered ? Theme.Colors.hoverTint : Color.clear)
+                    )
             )
-            .overlay(alignment: .leading) {
-                Rectangle()
-                    .fill(isSelected ? Theme.Colors.cyan : .clear)
-                    .frame(width: 2)
-            }
     }
 }
 
@@ -190,23 +191,27 @@ extension View {
     }
 }
 
-// MARK: - OttoChip-style badge
+// MARK: - AngularChip
 //
-// Generic small rectangular chip — used to replace `Capsule()` count badges
-// in list headers without redoing the label/styling.
+// Generic small tag chip (mockup .tag) — despite the legacy name, it's now
+// a rounded 4px chip.
 
 struct AngularChip<Content: View>: View {
-    var stroke: Color = Theme.Colors.border
-    var fill: Color = Theme.Colors.borderSubtle
+    var stroke: Color = .clear
+    var fill: Color = Theme.Colors.hoverTint
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         content()
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(fill)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(fill)
+            )
             .overlay(
-                Rectangle().stroke(stroke, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(stroke, lineWidth: stroke == .clear ? 0 : 1)
             )
     }
 }

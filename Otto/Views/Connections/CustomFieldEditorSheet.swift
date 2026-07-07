@@ -37,6 +37,7 @@ struct CustomFieldEditorSheet: View {
             footer
         }
         .frame(width: 420, height: 560)
+        .background(Theme.Colors.bg2)
         .onAppear { hydrateFromExisting() }
         .confirmationDialog(
             "Delete \(existing?.name ?? "field")?",
@@ -62,7 +63,8 @@ struct CustomFieldEditorSheet: View {
     private var header: some View {
         HStack {
             Text(existing == nil ? "New custom field" : "Edit custom field")
-                .font(.system(size: 14, weight: .semibold))
+                .font(Theme.Typography.headline)
+                .foregroundStyle(Theme.Colors.text)
             Spacer()
             Button {
                 dismiss()
@@ -81,22 +83,24 @@ struct CustomFieldEditorSheet: View {
     private var nameField: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Name")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
+                .hudLabel()
             TextField("e.g. Lead status", text: $name)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .padding(8)
-                .background(Theme.Colors.borderSubtle.opacity(0.5))
+                .background(Theme.Colors.bgInput)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
         }
     }
 
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Type")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
+                .hudLabel()
 
             // Disable kind change when editing — switching the type of an
             // existing field would orphan every value already stored.
@@ -117,13 +121,13 @@ struct CustomFieldEditorSheet: View {
                         .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(kind == k ? Theme.Colors.accent.opacity(0.18) : Theme.Colors.borderSubtle.opacity(0.5))
+                                .fill(kind == k ? Theme.Colors.selectTint : Theme.Colors.panel)
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(kind == k ? Theme.Colors.accent : Color.clear, lineWidth: 1)
+                                .strokeBorder(kind == k ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
                         )
-                        .foregroundStyle(kind == k ? Theme.Colors.accent : Theme.Colors.text)
+                        .foregroundStyle(kind == k ? Theme.Colors.accentText : Theme.Colors.textDim)
                         .opacity(isLocked && kind != k ? 0.4 : 1)
                     }
                     .buttonStyle(.plain)
@@ -142,8 +146,7 @@ struct CustomFieldEditorSheet: View {
     private var optionsEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Options")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Theme.Colors.tertiaryText)
+                .hudLabel()
 
             VStack(spacing: 4) {
                 ForEach($options) { $option in
@@ -184,8 +187,12 @@ struct CustomFieldEditorSheet: View {
                         .buttonStyle(.plain)
                     }
                     .padding(6)
-                    .background(Theme.Colors.borderSubtle.opacity(0.3))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .background(Theme.Colors.bgInput)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
                 }
             }
 
@@ -201,8 +208,12 @@ struct CustomFieldEditorSheet: View {
                 .disabled(newOptionLabel.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(6)
-            .background(Theme.Colors.borderSubtle.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .background(Theme.Colors.bgInput)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
         }
     }
 
@@ -214,7 +225,7 @@ struct CustomFieldEditorSheet: View {
                 } label: {
                     Text("Delete")
                         .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.priorityUrgent)
+                        .foregroundStyle(Theme.Colors.red)
                 }
                 .buttonStyle(.plain)
             }
@@ -228,12 +239,8 @@ struct CustomFieldEditorSheet: View {
             } label: {
                 Text(existing == nil ? "Create" : "Save")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.Colors.accent))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AccentButtonStyle())
             .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(12)

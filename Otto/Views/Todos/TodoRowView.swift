@@ -19,22 +19,22 @@ struct TodoRowView: View {
             } label: {
                 ZStack {
                     Circle()
-                        .stroke(checkboxColor, lineWidth: 1.5)
-                        .frame(width: 20, height: 20)
+                        .stroke(Theme.Colors.borderStrong, lineWidth: 1.5)
+                        .frame(width: 16, height: 16)
 
                     if todo.isCompleted {
                         Circle()
-                            .fill(checkboxColor)
-                            .frame(width: 20, height: 20)
+                            .fill(Theme.Colors.accent)
+                            .frame(width: 16, height: 16)
 
                         Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Theme.Colors.bg0)
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Theme.Colors.onAccent)
                     } else if isCheckboxHovered {
                         // Show checkmark preview on hover
                         Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(checkboxColor.opacity(0.5))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Theme.Colors.accent.opacity(0.6))
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: isCheckboxHovered)
@@ -50,7 +50,7 @@ struct TodoRowView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     // Title
                     Text(todo.title)
-                        .font(.system(size: 14))
+                        .font(.system(size: 13.5, weight: .medium))
                         .strikethrough(todo.isCompleted, color: Theme.Colors.secondaryText)
                         .foregroundStyle(todo.isCompleted ? Theme.Colors.secondaryText : Theme.Colors.text)
                         .lineLimit(2)
@@ -68,14 +68,14 @@ struct TodoRowView: View {
                         if let dueDate = todo.dueDate {
                             HStack(spacing: 4) {
                                 Image(systemName: isOverdue(dueDate) ? "calendar.badge.exclamationmark" : "calendar")
-                                    .font(.system(size: 11))
+                                    .font(.system(size: 10))
                                 Text(formatDate(dueDate))
-                                    .font(.system(size: 12))
+                                    .font(Theme.Typography.monoCaption)
 
                                 // Show time if it has a specific time
                                 if hasSpecificTime(dueDate) {
                                     Text(formatTime(dueDate))
-                                        .font(.system(size: 12))
+                                        .font(Theme.Typography.monoCaption)
                                 }
                             }
                             .foregroundStyle(dateColor(dueDate))
@@ -88,12 +88,14 @@ struct TodoRowView: View {
                         }
                         if tags.count > 2 {
                             Text("+\(tags.count - 2)")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Theme.Colors.hoverTint)
-                                .clipShape(Capsule())
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.textDim)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Theme.Colors.hoverTint)
+                                )
                         }
 
                         // Sub-task progress
@@ -103,28 +105,32 @@ struct TodoRowView: View {
                                 Image(systemName: "checklist")
                                     .font(.system(size: 10))
                                 Text("\(completed)/\(todo.subTasks.count)")
-                                    .font(.system(size: 11))
+                                    .font(Theme.Typography.monoCaption)
                             }
-                            .foregroundStyle(completed == todo.subTasks.count ? Theme.Colors.personal : Theme.Colors.tertiaryText)
+                            .foregroundStyle(completed == todo.subTasks.count ? Theme.Colors.green : Theme.Colors.tertiaryText)
                         }
 
                         // Todoist project badge
                         if let projectName = todo.todoistProjectName {
                             Text(projectName)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(Theme.Colors.red.opacity(0.8))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Theme.Colors.red.opacity(0.08))
-                                .clipShape(Capsule())
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.accentText)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Theme.Colors.selectTint)
+                                )
                         } else if todo.todoistId != nil {
                             Text("Todoist")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(Theme.Colors.red.opacity(0.8))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Theme.Colors.red.opacity(0.08))
-                                .clipShape(Capsule())
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.accentText)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Theme.Colors.selectTint)
+                                )
                         }
                     }
                 }
@@ -166,16 +172,22 @@ struct TodoRowView: View {
                 onSelect?()
             }
         }
-        .padding(.vertical, Theme.Spacing.md)
+        .padding(.vertical, 10)
         .padding(.horizontal, Theme.Spacing.md)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.hoverTint : Color.clear))
+                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
         )
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isSelected ? Theme.Colors.accent.opacity(0.2) : Color.clear, lineWidth: 1)
+                .strokeBorder(
+                    isSelected
+                        ? Theme.Colors.accent.opacity(0.35)
+                        : (isHovered ? Theme.Colors.borderStrong : Theme.Colors.border),
+                    lineWidth: 1
+                )
         )
+        .padding(.vertical, 3)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
