@@ -43,7 +43,7 @@ Before you paste any credentials, know where they go.
 |---|---|---|
 | Your chat history, todos, notes, ideas, reminders, bookmarks, habits, meetings, emails, calendar events, files metadata, X data | `~/Library/Application Support/Otto/otto_data.json` (a single JSON file on disk) | Only the Otto app + you |
 | Imported file binaries (PDFs, CSVs, images, etc.) | `~/Documents/OttoFiles/` | Only the Otto app + you |
-| Agent (Claude / Codex) credentials | Owned by the CLI — `Claude Code-credentials` Keychain entry or `~/.codex/auth.json`. Otto invokes the CLI as a subprocess and never reads or writes those entries; it only checks whether they exist to show a sign-in badge. You manage them via `claude` or `codex login`. | macOS Keychain / file (signed in user) |
+| Agent (Claude / Codex / Hermes) credentials | Owned by each agent — `Claude Code-credentials` Keychain entry, `~/.codex/auth.json`, or `~/.hermes/.env` + `~/.hermes/config.yaml`. Otto invokes each as a subprocess and never reads or writes those entries; it only checks whether they exist to show a sign-in or install badge. You manage them via `claude`, `codex login`, or `hermes setup`. | macOS Keychain / file (signed in user) |
 | Anthropic / OpenAI API keys (optional, set in Settings) | macOS Keychain under `com.otto.anthropic.apikey` and `com.otto.openai.apikey`. Passed to the CLI subprocess as `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` when set. | macOS Keychain (signed in user) |
 | API keys for fal.ai, Fireflies, Todoist, Notion | `UserDefaults` for the per-app preferences scope (which lives at `~/Library/Preferences/com.example.Otto.plist`). Not synced to iCloud. | macOS Keychain-like protection on this user account |
 | Google OAuth Client ID + access/refresh tokens | UserDefaults (client id, non-secret) + macOS Keychain (tokens) | macOS Keychain (signed in user) |
@@ -72,9 +72,9 @@ has no backend — no telemetry, no analytics, no phone-home.
   tab before your first build.
 - **`/usr/bin/nc` (BSD netcat)** — ships with macOS by default. Otto uses it
   internally to bridge its in-process MCP server to the agent CLI subprocess
-  so Claude/Codex can call Otto's tools (create todo, search notes, etc.).
-  You shouldn't have to do anything here unless someone removed it.
-- **One of the two agent backends below** — required for the chat feature.
+  so the agent backend can call Otto's tools (create todo, search notes,
+  etc.). You shouldn't have to do anything here unless someone removed it.
+- **One of the three agent backends below** — required for the chat feature.
 
 ### Building from source
 
@@ -93,13 +93,20 @@ chat will show a banner pointing you at Settings → Agent.
 
 ## Step 1: Pick an agent backend (required)
 
-Otto's chat is powered by either **Claude Code** (Anthropic) or **Codex**
-(OpenAI). The two are functionally interchangeable — same tool surface, same
-chat UX, same voice mode — but they cost different things, run different
-models, and have different latency profiles. Pick whichever you're already
-paying for (or both, and switch in Settings).
+Otto's chat is powered by one of three backends:
 
-For each backend, Otto supports two auth paths:
+- **Claude Code** (Anthropic) — closed source, runs against api.anthropic.com.
+- **Codex** (OpenAI) — closed source, runs against api.openai.com.
+- **Hermes** (Nous Research) — open source ACP agent; picks its own model
+  provider (OpenRouter / Nous Portal / Anthropic / OpenAI / etc.) via
+  `hermes setup`.
+
+All three are functionally interchangeable from Otto's side — same tool
+surface, same chat UX, same voice mode — but they cost different things,
+run different models, and have different latency profiles. Pick whichever
+you prefer and switch in Settings.
+
+For Claude / Codex, Otto supports two auth paths:
 
 - **CLI login** — you sign in with `claude` or `codex login` and the CLI
   stores its own credentials. Otto invokes the CLI as a subprocess; the CLI
@@ -178,7 +185,54 @@ match wins.
 each time Otto invokes it. If chat fails with an auth error, re-run
 `codex login` in Terminal to force a re-login.
 
-### Option C — Paste an API key (either backend)
+### Option C — Hermes (Nous Research)
+
+Open-source agent that speaks ACP (Agent Client Protocol) over stdio.
+Otto spawns `hermes acp` as a local subprocess and talks JSON-RPC to it.
+Hermes picks its own model provider (OpenRouter, Nous Portal, Anthropic,
+OpenAI, NovitaAI, NVIDIA NIM, Hugging Face, or any custom endpoint) —
+Otto doesn't pass a model id; you set that with `hermes model` or the
+setup wizard.
+
+1. **Install Hermes:**
+   ```sh
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   uv tool install 'hermes-agent[acp]'
+   ```
+2. **Configure a model provider:**
+   ```sh
+   hermes setup
+   ```
+   Walk through the wizard, pick a provider, paste your API key,
+   pick a default model.
+3. **Switch Otto to Hermes:** Settings → Agent → toggle the segmented
+   picker to "Hermes". An install-status row shows the detected binary
+   path.
+4. **Wire Otto's tools to Hermes:** click **Set up Otto tools**. This
+   writes (or merges) an `otto` MCP server entry into your
+   `~/.hermes/config.yaml` pointing at Otto's local Unix socket
+   (`~/.otto/mcp.sock`). Idempotent — safe to re-click whenever Otto
+   moves its socket.
+
+Otto looks for the binary in this order: `~/.local/bin/hermes`,
+`/opt/homebrew/bin/hermes`, `/usr/local/bin/hermes`, `/usr/bin/hermes`.
+
+**Approval prompts:** Hermes uses ACP's `session/request_permission`
+flow, so tool calls show an inline approval card in the chat (Allow once
+/ Allow always / Deny once / Deny always). The "always" choices persist
+per-tool. Claude Code and Codex bypass approvals; only Hermes routes
+through this UI.
+
+**Persistent session:** unlike Claude/Codex, which spawn a fresh
+subprocess per turn, Otto holds one long-lived `hermes acp` process for
+the lifetime of the app. Conversation context is kept in-memory in
+Hermes. The process is torn down on Otto quit (`willTerminate`) or when
+you switch backend away from Hermes.
+
+**Model picker:** none — Hermes picks the model server-side. The
+sidebar just shows `HERMES` instead of a model id.
+
+### Option D — Paste an API key (Claude / Codex)
 
 If you'd rather pay by API usage than route through a subscription, or
 you want a hard guarantee that Otto isn't touching your CLI's stored
