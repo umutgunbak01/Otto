@@ -12,8 +12,8 @@ enum ApprovalDecision: String, Codable {
 /// Persists the user's per-tool approval preferences. Tools the user hasn't
 /// decided on default to `.askEachTime`.
 ///
-/// Single global store — preferences aren't scoped per Hetzner box because
-/// the tool surface (OttoTools) is identical no matter which agent is asking.
+/// Single global store — preferences aren't scoped per backend because the
+/// tool surface (OttoTools) is identical no matter which agent is asking.
 final class ToolApprovalPolicy: @unchecked Sendable {
     static let shared = ToolApprovalPolicy()
 
