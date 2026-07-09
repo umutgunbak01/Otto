@@ -27,6 +27,19 @@ struct OttoChatView: View {
     @State private var showFileImporter: Bool = false
     @State private var attachmentError: String?
 
+    // @-mention tagging state. Typing "@" in the composer opens an
+    // autocomplete over taggable items; accepted picks live in
+    // `pendingTags` until send, when their `@Title` tokens are expanded to
+    // `[Title](otto://<type>/<id>)` links (the same syntax the agent uses).
+    @State private var mentionActive: Bool = false
+    @State private var mentionResults: [MentionItem] = []
+    @State private var mentionSelection: Int = 0
+    /// UTF-16 location of an "@" the user Escape-dismissed — the panel stays
+    /// hidden for that token until the "@" is edited away.
+    @State private var mentionEscapedAt: Int? = nil
+    /// Items tagged via the picker, awaiting token expansion at send time.
+    @State private var pendingTags: [MentionItem] = []
+
     /// Detail popup opened by clicking an item-preview card. Held here (not
     /// inside `ItemPreviewCard`) because a `.sheet` attached to a row of the
     /// message list's LazyVStack fails to present — every other popup in the
@@ -156,6 +169,9 @@ struct OttoChatView: View {
         }
         inputText = ""
         pendingAttachments = []
+        pendingTags = []
+        mentionActive = false
+        mentionResults = []
     }
 
     // MARK: - Empty State
@@ -387,7 +403,9 @@ struct OttoChatView: View {
     private func entryView(_ entry: ChatUIEntry) -> some View {
         switch entry.kind {
         case .userText(let text, let attachments):
-            MessageBubble(text: text, isUser: true, attachments: attachments)
+            MessageBubble(text: text, isUser: true, attachments: attachments, onOttoLink: { url in
+                openOttoItem(url)
+            })
         case .assistantText(let text):
             MessageBubble(text: text, isUser: false, attachments: [], onOttoLink: { url in
                 openOttoItem(url)
@@ -513,8 +531,51 @@ struct OttoChatView: View {
                             }
                             return .ignored
                         }
+                        // While the @-mention panel is open, Return tags the
+                        // highlighted item instead of sending.
+                        if mentionPanelVisible {
+                            if mentionResults.indices.contains(mentionSelection) {
+                                acceptMention(mentionResults[mentionSelection])
+                            }
+                            return .handled
+                        }
                         if canSend { sendMessage() }
                         return .handled
+                    }
+                    .onKeyPress(.upArrow, phases: .down) { _ in
+                        guard mentionPanelVisible else { return .ignored }
+                        mentionSelection = (mentionSelection - 1 + mentionResults.count) % mentionResults.count
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow, phases: .down) { _ in
+                        guard mentionPanelVisible else { return .ignored }
+                        mentionSelection = (mentionSelection + 1) % mentionResults.count
+                        return .handled
+                    }
+                    .onKeyPress(.tab, phases: .down) { _ in
+                        guard mentionPanelVisible else { return .ignored }
+                        if mentionResults.indices.contains(mentionSelection) {
+                            acceptMention(mentionResults[mentionSelection])
+                        }
+                        return .handled
+                    }
+                    .onKeyPress(.escape, phases: .down) { _ in
+                        guard mentionPanelVisible else { return .ignored }
+                        if let token = activeMentionToken() {
+                            mentionEscapedAt = NSRange(token.atRange, in: inputText).location
+                        }
+                        mentionActive = false
+                        mentionResults = []
+                        return .handled
+                    }
+                    .onChange(of: inputText) { _, _ in
+                        refreshMentionState()
+                    }
+                    .onChange(of: inputFocused) { _, focused in
+                        if !focused {
+                            mentionActive = false
+                            mentionResults = []
+                        }
                     }
                     .padding(.horizontal, 2)
 
@@ -525,6 +586,10 @@ struct OttoChatView: View {
 
                     ComposerGhostButton(icon: "mic", help: "Voice mode — talk to Otto") {
                         appState.showVoiceOverlay = true
+                    }
+
+                    ComposerGhostButton(icon: "at", help: "Tag an item — reference a person, meeting, note…") {
+                        insertMentionTrigger()
                     }
 
                     if !displayedEntries.isEmpty {
@@ -579,6 +644,21 @@ struct OttoChatView: View {
             )
             .animation(.easeInOut(duration: 0.15), value: composerHovered || inputFocused)
             .onHover { composerHovered = $0 }
+        }
+        // The @-mention panel FLOATS above the composer (overlapping the
+        // transcript) instead of joining the layout — inline it would push
+        // the composer down and hide what the user is typing. The overlay
+        // is anchored so its bottom edge sits just above the input bar.
+        .overlay(alignment: .top) {
+            if mentionPanelVisible {
+                MentionSuggestionList(
+                    results: mentionResults,
+                    selectedIndex: $mentionSelection
+                ) { item in
+                    acceptMention(item)
+                }
+                .alignmentGuide(.top) { $0[.bottom] + Theme.Spacing.sm }
+            }
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
@@ -650,6 +730,148 @@ struct OttoChatView: View {
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
     }
 
+    // MARK: - @-Mention Tagging
+
+    private var mentionPanelVisible: Bool {
+        mentionActive && !mentionResults.isEmpty
+    }
+
+    /// The `@token` the caret currently sits in, if any. `atRange` covers
+    /// the "@" through the caret; `query` is the text after the "@". Spaces
+    /// are allowed inside the query (names have them); newlines end it.
+    private struct MentionToken {
+        let atRange: Range<String.Index>
+        let query: String
+    }
+
+    /// Find the active mention token around the caret. The caret comes from
+    /// the focused field editor; if it's unavailable (programmatic text
+    /// change) the end of the text is used. The "@" must start the text or
+    /// follow whitespace, so emails ("umut@fal.ai") never trigger the panel.
+    private func activeMentionToken() -> MentionToken? {
+        let text = inputText
+        guard !text.isEmpty else { return nil }
+
+        var caretIdx = text.endIndex
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.string == text {
+            let location = min(editor.selectedRange().location, (text as NSString).length)
+            if let prefix = Range(NSRange(location: 0, length: location), in: text) {
+                caretIdx = prefix.upperBound
+            }
+        }
+
+        var scan = caretIdx
+        while scan > text.startIndex {
+            let prev = text.index(before: scan)
+            let ch = text[prev]
+            if ch == "@" {
+                guard prev == text.startIndex || text[text.index(before: prev)].isWhitespace else {
+                    return nil
+                }
+                let query = String(text[scan..<caretIdx])
+                guard !query.contains(where: \.isNewline), query.count <= 40 else { return nil }
+                return MentionToken(atRange: prev..<caretIdx, query: query)
+            }
+            if ch.isNewline { return nil }
+            scan = prev
+        }
+        return nil
+    }
+
+    /// Recompute the panel's contents for the token under the caret. Runs on
+    /// every text change — the search is a local title scan, fast enough to
+    /// skip debouncing.
+    private func refreshMentionState() {
+        guard inputFocused, let token = activeMentionToken() else {
+            mentionActive = false
+            mentionResults = []
+            mentionEscapedAt = nil
+            return
+        }
+
+        let atLocation = NSRange(token.atRange, in: inputText).location
+        if let escaped = mentionEscapedAt {
+            if escaped == atLocation {
+                mentionActive = false
+                mentionResults = []
+                return
+            }
+            mentionEscapedAt = nil
+        }
+
+        // Caret sitting right after an already-accepted tag ("@Title ") —
+        // don't pop the panel back open over a completed token.
+        let trimmed = token.query.trimmingCharacters(in: .whitespaces)
+        if pendingTags.contains(where: { $0.title == trimmed }) {
+            mentionActive = false
+            mentionResults = []
+            return
+        }
+
+        mentionResults = MentionSearch.items(matching: token.query, appState: appState)
+        mentionSelection = 0
+        mentionActive = true
+    }
+
+    /// Replace the active `@token` with the picked item's `@Title` token and
+    /// remember the item for send-time expansion. Insertion goes through the
+    /// field editor when possible so the caret lands after the tag.
+    private func acceptMention(_ item: MentionItem) {
+        guard let token = activeMentionToken() else {
+            mentionActive = false
+            mentionResults = []
+            return
+        }
+        if !pendingTags.contains(where: { $0.id == item.id }) {
+            pendingTags.append(item)
+        }
+        let replacement = "@\(item.title) "
+        if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.string == inputText {
+            editor.insertText(replacement, replacementRange: NSRange(token.atRange, in: inputText))
+        } else {
+            inputText.replaceSubrange(token.atRange, with: replacement)
+        }
+        mentionActive = false
+        mentionResults = []
+    }
+
+    /// The "@" composer button: focus the field and type an "@" at the
+    /// caret (space-separated from any preceding word) so the panel opens.
+    private func insertMentionTrigger() {
+        inputFocused = true
+        DispatchQueue.main.async {
+            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.string == inputText {
+                let caret = editor.selectedRange()
+                let needsSpace: Bool = {
+                    guard caret.location > 0 else { return false }
+                    let prev = (editor.string as NSString).substring(
+                        with: NSRange(location: caret.location - 1, length: 1)
+                    )
+                    return prev.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+                }()
+                editor.insertText(needsSpace ? " @" : "@", replacementRange: caret)
+            } else {
+                if !(inputText.isEmpty || inputText.hasSuffix(" ") || inputText.hasSuffix("\n")) {
+                    inputText += " "
+                }
+                inputText += "@"
+            }
+        }
+    }
+
+    /// Expand accepted `@Title` tokens into the agent-readable inline item
+    /// links. Longest titles first so "@Bob Smith" is never half-eaten by a
+    /// "@Bob" tag. Tokens the user edited away simply don't match — the tag
+    /// silently degrades to plain text.
+    private func expandMentionTags(in text: String) -> String {
+        guard !pendingTags.isEmpty else { return text }
+        var out = text
+        for tag in pendingTags.sorted(by: { $0.title.count > $1.title.count }) {
+            out = out.replacingOccurrences(of: "@\(tag.title)", with: tag.markdownLink)
+        }
+        return out
+    }
+
     // MARK: - File Import
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
@@ -698,7 +920,7 @@ struct OttoChatView: View {
     /// session from the very first turn, so the query survives this view
     /// being torn down mid-run. Other conversations' runs are unaffected.
     private func sendMessage() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = expandMentionTags(in: inputText.trimmingCharacters(in: .whitespacesAndNewlines))
         let attachments = pendingAttachments
         guard !text.isEmpty || !attachments.isEmpty else { return }
         let controller = appState.chatRuns.openController(
@@ -709,6 +931,9 @@ struct OttoChatView: View {
 
         inputText = ""
         pendingAttachments = []
+        pendingTags = []
+        mentionActive = false
+        mentionResults = []
         controller.send(text: text, attachments: attachments, appState: appState)
     }
 
@@ -719,6 +944,9 @@ struct OttoChatView: View {
         loadedSessionId = nil
         loadedEntries = []
         inputText = ""
+        pendingTags = []
+        mentionActive = false
+        mentionResults = []
     }
 }
 
@@ -758,11 +986,15 @@ private struct MessageBubble: View {
                     // One NSTextView per bubble so the whole message is a single,
                     // natively-selectable text region (SwiftUI's .textSelection made
                     // every markdown block its own selection island and dropped
-                    // drags inside the scroll view). User messages stay plain;
+                    // drags inside the scroll view). User messages stay plain
+                    // except @-tagged item links, which render as chips;
                     // assistant messages render Claude's markdown so ### and **
                     // don't show as literal characters.
                     if isUser {
-                        SelectableMessageText(attributed: ChatMessageRenderer.plain(text))
+                        SelectableMessageText(
+                            attributed: ChatMessageRenderer.userText(text),
+                            onOttoLink: onOttoLink
+                        )
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
                             .background(
