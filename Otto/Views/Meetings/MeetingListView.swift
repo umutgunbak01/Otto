@@ -72,7 +72,7 @@ struct MeetingListView: View {
             header
             OttoDivider()
 
-            if filteredMeetings.isEmpty {
+            if filteredMeetings.isEmpty && MeetingAnalysisService.shared.pendingTitle == nil {
                 emptyState
             } else {
                 meetingList
@@ -171,6 +171,11 @@ struct MeetingListView: View {
     private var meetingList: some View {
         ScrollView {
             LazyVStack(spacing: 6) {
+                // A just-finished recording being analyzed in the background —
+                // becomes a real Meeting row when the note lands.
+                if searchText.isEmpty, let pendingTitle = MeetingAnalysisService.shared.pendingTitle {
+                    generatingRow(title: pendingTitle)
+                }
                 ForEach(filteredMeetings) { meeting in
                     MeetingRowView(meeting: meeting)
                         .contentShape(Rectangle())
@@ -182,6 +187,42 @@ struct MeetingListView: View {
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
         }
+    }
+
+    private func generatingRow(title: String) -> some View {
+        HStack(alignment: .center, spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.selectTint)
+                    .frame(width: 30, height: 30)
+
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text)
+                    .lineLimit(1)
+
+                Text("Generating meeting note…")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(Theme.Colors.textDim)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.md)
+                .fill(Theme.Colors.bg2)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
+                )
+        )
     }
 
     // MARK: - Empty State

@@ -16,6 +16,8 @@
 	<string>Otto uses your microphone for voice conversations.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Otto captures your screen when you ask it to summarize what you're looking at.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Otto records system audio during meetings you choose to transcribe, so it can capture what the other participants say.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

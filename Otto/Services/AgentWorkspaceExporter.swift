@@ -48,6 +48,8 @@ enum AgentWorkspaceExporter {
         var xFollowers: [XFollower] = []
         var xPosts: [XPost] = []
         var xDirectMessages: [XDirectMessage] = []
+        var customTabs: [CustomTabDefinition] = []
+        var customRecords: [CustomRecord] = []
         var tagNames: [UUID: String] = [:]
         var generatedAt: Date = Date()
     }
@@ -75,6 +77,8 @@ enum AgentWorkspaceExporter {
         s.xFollowers = appState.xFollowers
         s.xPosts = appState.xPosts
         s.xDirectMessages = appState.xDirectMessages
+        s.customTabs = appState.customTabs
+        s.customRecords = appState.customRecords
         s.tagNames = Dictionary(appState.domainTags.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         s.generatedAt = Date()
         return s
@@ -397,6 +401,25 @@ enum AgentWorkspaceExporter {
                 ]))
             }
             return rows.joined(separator: "\n")
+        }
+
+        // One table per user-defined custom tab — columns from its schema.
+        for tab in snap.customTabs {
+            let records = snap.customRecords.filter { $0.tabId == tab.id }
+            let keys = tab.fieldKeys()
+            let columnNames = keys.map { $0.key }
+            add("custom_\(tab.slug).csv", records.count,
+                "id," + columnNames.joined(separator: ",") + ",updated (user-defined \"\(tab.name)\" tab)") {
+                var rows = [csvRow(["id"] + columnNames + ["updated"])]
+                for r in records.sorted(by: { $0.updatedAt > $1.updatedAt }) {
+                    rows.append(csvRow(
+                        [r.id.uuidString]
+                        + keys.map { col in r.values[col.field.id].map { $0.displayString(for: col.field) } ?? "" }
+                        + [iso(r.updatedAt)]
+                    ))
+                }
+                return rows.joined(separator: "\n")
+            }
         }
 
         add("x_followers.csv", snap.xFollowers.count,

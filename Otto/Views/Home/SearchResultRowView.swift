@@ -84,13 +84,21 @@ struct SearchResultRowView: View {
                     archivedBadge
                 }
             }
+
+            if !isSelectionMode {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .opacity(isHovered ? 1 : 0)
+            }
         }
-        .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, Theme.Spacing.md)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.08) : (isHovered ? Theme.Colors.borderSubtle.opacity(0.5) : Color.clear))
+                .fill(isSelected ? Theme.Colors.selectTint : (isHovered ? Theme.Colors.hoverTint : Color.clear))
         )
+        .padding(.horizontal, Theme.Spacing.md)
         .contentShape(Rectangle())
         #if os(macOS)
         .onHover { hovering in

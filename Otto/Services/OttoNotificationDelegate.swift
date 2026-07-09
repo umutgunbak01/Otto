@@ -42,7 +42,25 @@ final class OttoNotificationDelegate: NSObject, UNUserNotificationCenterDelegate
             }
             return
         }
+        if let raw = info["meetingId"] as? String, let id = UUID(uuidString: raw) {
+            Task { @MainActor in
+                self.openMeeting(id: id)
+                completionHandler()
+            }
+            return
+        }
         completionHandler()
+    }
+
+    @MainActor
+    private func openMeeting(id: UUID) {
+        guard let state = appState else { return }
+        guard let meeting = state.meetings.first(where: { $0.id == id }) else { return }
+        state.selectedTab = .meeting
+        state.selectedMeeting = meeting
+        #if os(macOS)
+        WindowActivator.bringToFront()
+        #endif
     }
 
     @MainActor

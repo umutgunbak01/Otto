@@ -14,6 +14,7 @@ struct OttoApp: App {
     /// replaces the floating HUD that used to live here.
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
+    @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
 
     #if os(macOS)
     /// Sparkle auto-update controller. Polls the appcast at SUFeedURL
@@ -38,12 +39,17 @@ struct OttoApp: App {
                     configureNotifications()
                     appState.meetingPrep.start()
                     #if os(macOS)
+                    appState.meetingTranscription.configure(appState: appState)
+                    syncMeetingDetection()
                     syncMenuBar()
                     #endif
                 }
             #if os(macOS)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                     guard wakeWordEnabled else { return }
+                    // A meeting recording owns the mic — don't contend with it;
+                    // MeetingRecorder restarts the listener when it stops.
+                    guard !appState.meetingTranscription.isRecording else { return }
                     NSLog("[WakeWord] app resigned active — starting listener")
                     appState.wakeWord.start()
                 }
@@ -63,6 +69,7 @@ struct OttoApp: App {
                     if !enabled { appState.wakeWord.stop() }
                 }
                 .onChange(of: menuBarEnabled) { _, _ in syncMenuBar() }
+                .onChange(of: meetingDetectionEnabled) { _, _ in syncMeetingDetection() }
             #endif
         }
         .windowStyle(.hiddenTitleBar)
@@ -92,6 +99,10 @@ struct OttoApp: App {
         } else {
             MenuBarController.shared.uninstall()
         }
+    }
+
+    private func syncMeetingDetection() {
+        appState.meetingTranscription.setEnabled(meetingDetectionEnabled)
     }
     #endif
 

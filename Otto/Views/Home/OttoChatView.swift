@@ -78,8 +78,7 @@ struct OttoChatView: View {
     }()
 
     var body: some View {
-        @Bindable var appState = appState
-        return VStack(spacing: 0) {
+        VStack(spacing: 0) {
             if displayedEntries.isEmpty {
                 emptyState
             } else {
@@ -113,13 +112,10 @@ struct OttoChatView: View {
 
             inputBar
         }
-        .overlay {
-            if appState.showVoiceOverlay {
-                VoiceOverlayView(isPresented: $appState.showVoiceOverlay)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.18), value: appState.showVoiceOverlay)
+        // NOTE: the voice panel is hosted by MainView's ZStack (it floats over
+        // the whole window while this chat streams the mirrored conversation).
+        // Mounting a second VoiceOverlayView here would run the voice session's
+        // start()/stop() lifecycle twice.
         .sheet(item: $previewDetail) { detail in
             previewDetailSheet(detail)
         }
@@ -414,6 +410,8 @@ struct OttoChatView: View {
             ItemPreviewCard(type: type, itemId: itemId) { detail in
                 previewDetail = detail
             }
+        case .visualization(let spec):
+            VisualizationCard(spec: spec, onOpenItem: openOttoItem)
         case .approvalRequest(let approvalId, let toolName, let argsSummary, let resolved):
             ApprovalPromptView(
                 toolName: toolName,
@@ -448,6 +446,9 @@ struct OttoChatView: View {
         case .result(let result):
             SearchResultDetailPopup(result: result, onClose: {
                 previewDetail = nil
+            }, onLocate: {
+                previewDetail = nil
+                appState.locate(type: result.contentType, id: result.id)
             })
             .environment(appState)
         case .network(let entry):
@@ -492,11 +493,24 @@ struct OttoChatView: View {
                     .font(.system(size: 13.5))
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1...6)
+                    // Pin the field to the composer's width and re-measure
+                    // height from it — without these, AppKit keeps wrapping
+                    // against the width the field had at first layout, so
+                    // after the chat column narrows (history sidebar opens)
+                    // typed text runs past the border instead of wrapping.
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .focused($inputFocused)
                     .onKeyPress(.return, phases: .down) { press in
-                        // Shift+Return inserts a newline (let the vertical
-                        // TextField handle it); plain Return submits.
+                        // Shift+Return inserts a newline; plain Return submits.
+                        // The line break has to be typed into the field editor
+                        // by hand — an .ignored Shift+Return falls through to
+                        // NSTextField, which commits and select-alls the text.
                         if press.modifiers.contains(.shift) {
+                            if let editor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                                editor.insertText("\n", replacementRange: editor.selectedRange())
+                                return .handled
+                            }
                             return .ignored
                         }
                         if canSend { sendMessage() }
@@ -1306,6 +1320,21 @@ private struct ItemPreviewCard: View {
 
                 Spacer(minLength: 0)
 
+                // Files get a save-to-disk affordance right on the card —
+                // "send me an xlsx" should end in a Finder-visible file, not
+                // just an in-app preview.
+                if type == .file, let file = appState.files.first(where: { $0.id == itemId }) {
+                    Button {
+                        saveToDisk(file)
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.Colors.textDim)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Save to disk…")
+                }
+
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.Colors.tertiaryText)
@@ -1323,6 +1352,33 @@ private struct ItemPreviewCard: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, Theme.Spacing.lg)
+    }
+
+    /// NSSavePanel copy-out of the stored binary (same flow as HomeView's
+    /// PDF export), then reveal the saved file in Finder.
+    private func saveToDisk(_ file: FileItem) {
+        Task { @MainActor in
+            let srcURL = await FileStorageService.shared.getFileURL(for: file)
+            guard FileManager.default.fileExists(atPath: srcURL.path) else { return }
+
+            let panel = NSSavePanel()
+            if let contentType = UTType(filenameExtension: file.fileExtension) {
+                panel.allowedContentTypes = [contentType]
+            }
+            panel.nameFieldStringValue = "\(file.name).\(file.fileExtension)"
+            panel.canCreateDirectories = true
+            panel.title = "Save \(file.name)"
+
+            if panel.runModal() == .OK, let destURL = panel.url {
+                try? FileManager.default.removeItem(at: destURL)
+                do {
+                    try FileManager.default.copyItem(at: srcURL, to: destURL)
+                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
+                } catch {
+                    NSLog("[Chat] save file failed: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     private func lookupTitle() -> String? {

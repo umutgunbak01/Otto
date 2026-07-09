@@ -1,7 +1,7 @@
 import Foundation
 import AVFoundation
 
-/// Plays a queue of audio blobs (MP3 from ElevenLabs v3) sequentially via AVAudioEngine.
+/// Plays a queue of audio blobs (MP3 from ElevenLabs Turbo v2.5) sequentially via AVAudioEngine.
 ///
 /// Each enqueued chunk is decoded into a PCM buffer and — critically — **converted
 /// to a fixed target format** (44.1 kHz stereo Float32) before being scheduled. The

@@ -9,17 +9,24 @@ import Foundation
 ///
 /// Tuning: emitting too early yields unnatural phrasing ("Hello, … "); too late
 /// yields perceptible silence before TTS starts. 25 chars + clause boundary is
-/// a good sweet spot for conversational prose.
+/// a good sweet spot for conversational prose — except for the FIRST chunk of a
+/// stream, where thresholds are relaxed (12 / 60 chars): time-to-first-audio is
+/// the latency the user actually feels, and the synthesis prefetch pipeline
+/// hides the latency of every later chunk.
 struct SentenceChunker {
     private var buffer: String = ""
 
+    /// True once any chunk has been emitted — switches thresholds from the
+    /// aggressive first-chunk values to the natural-phrasing ones.
+    private var emittedFirstChunk = false
+
     /// Hard fallback — if the model writes this many chars with no punctuation,
     /// break on the last whitespace so we don't balloon memory / block TTS.
-    private let softFlushAt: Int = 120
+    private var softFlushAt: Int { emittedFirstChunk ? 120 : 60 }
 
     /// Minimum buffered chars before we accept a clause-boundary emit.
     /// Stops us from speaking "To," or "Hi," on their own.
-    private let minClauseChars: Int = 25
+    private var minClauseChars: Int { emittedFirstChunk ? 25 : 12 }
 
     /// Terminal punctuation — always ends a chunk regardless of length.
     private let sentenceTerminators: Set<Character> = [".", "!", "?"]
@@ -89,7 +96,9 @@ struct SentenceChunker {
         if let b = boundary {
             let chunk = String(chars[0..<b]).trimmingCharacters(in: .whitespacesAndNewlines)
             buffer = String(chars[b..<chars.count])
-            return chunk.isEmpty ? nil : chunk
+            if chunk.isEmpty { return nil }
+            emittedFirstChunk = true
+            return chunk
         }
 
         // Soft flush for run-on text with no punctuation.
@@ -97,7 +106,9 @@ struct SentenceChunker {
            let idx = buffer.lastIndex(where: { $0 == " " || $0 == "\n" }) {
             let chunk = String(buffer[..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
             buffer = String(buffer[buffer.index(after: idx)...])
-            return chunk.isEmpty ? nil : chunk
+            if chunk.isEmpty { return nil }
+            emittedFirstChunk = true
+            return chunk
         }
         return nil
     }

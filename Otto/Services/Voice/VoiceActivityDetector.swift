@@ -17,34 +17,74 @@ import AVFoundation
 /// Thresholds are exposed as `let` constants near the top of the file for easy tuning.
 final class VoiceActivityDetector: @unchecked Sendable {
 
+    // MARK: - Tuning profiles
+
+    /// The gates that differ by use case. Voice mode wants strict gates (it
+    /// fights TTS echo and accidental triggers); meeting capture wants
+    /// permissive ones — the user explicitly started recording, so err on
+    /// transcribing too much rather than dropping quiet speech. The meeting
+    /// profile also compensates for the mic array's raw 3-channel mode
+    /// (active whenever a meeting app holds the device), which runs ~10 dB
+    /// quieter than the processed mono mode voice code was tuned against.
+    struct Tuning {
+        var silenceHangoverMs: Double
+        var minUtteranceMs: Double
+        var speechAboveNoiseDb: Double
+        var minUtteranceRmsDb: Double
+        var absoluteSilenceDb: Double
+
+        /// Close-mic conversation with Otto (voice mode / wake word) —
+        /// the historical constants, unchanged.
+        static let voice = Tuning(
+            silenceHangoverMs: 500,
+            minUtteranceMs: 400,
+            speechAboveNoiseDb: 12,
+            minUtteranceRmsDb: -40,
+            absoluteSilenceDb: -55
+        )
+
+        /// Meeting transcription: capture everything that plausibly is
+        /// speech; Scribe's hallucination filter drops the junk.
+        static let meeting = Tuning(
+            silenceHangoverMs: 700,
+            minUtteranceMs: 250,
+            speechAboveNoiseDb: 5,
+            minUtteranceRmsDb: -55,
+            absoluteSilenceDb: -65
+        )
+    }
+
+    init(tuning: Tuning = .voice) {
+        self.silenceHangoverMs = tuning.silenceHangoverMs
+        self.minUtteranceMs = tuning.minUtteranceMs
+        self.speechAboveNoiseDb = tuning.speechAboveNoiseDb
+        self.minUtteranceRmsDb = tuning.minUtteranceRmsDb
+        self.absoluteSilenceDb = tuning.absoluteSilenceDb
+    }
+
     // MARK: - Tunables
 
     /// End-of-utterance: this much continuous silence after speech → emit utterance.
-    private let silenceHangoverMs: Double = 500
+    private let silenceHangoverMs: Double
     /// Reject very short bursts (coughs, lip smacks, key clicks, echo fragments).
-    /// Was 600ms. Dropped to 400ms so brief answers ("yes", "no") don't get
-    /// silently rejected.
-    private let minUtteranceMs: Double = 400
+    private let minUtteranceMs: Double
     /// How much pre-onset audio to prepend to the captured segment (don't clip first syllable).
     private let preRollMs: Double = 250
     /// Hard cap to avoid memory runaway if the user speaks for a very long time.
     private let maxUtteranceMs: Double = 30_000
     /// Speech threshold above the rolling noise floor, in dB.
-    /// Was 16 dB; relaxed to 12 dB so noisy rooms don't starve speech detection.
-    /// (TTS-echo is now filtered by the barge-in absolute floor, not this gate.)
-    private let speechAboveNoiseDb: Double = 12
+    private let speechAboveNoiseDb: Double
     /// Hard ceiling on the adaptive noise floor. Without this, continuous
     /// background noise (fan, AC, ambient chatter) slowly pushes the EMA up
     /// until speech needs to be impossibly loud to register — and the VAD
     /// silently stops ever seeing speech. Cap keeps detection reachable.
     private let noiseFloorCeilingDb: Double = -32
     /// Absolute floor so we never trigger on total silence + numeric noise.
-    private let absoluteSilenceDb: Double = -55
+    private let absoluteSilenceDb: Double
     /// Absolute minimum RMS that must be reached during an utterance for it to
     /// be considered real speech (regardless of adaptive noise floor). Prevents
     /// adaptive floor from drifting so low that whisper-level echo triggers.
-    /// Was -35dB; relaxed to -40dB so quieter / farther-from-mic speech passes.
-    private let minUtteranceRmsDb: Double = -40
+    private let minUtteranceRmsDb: Double
     /// EMA smoothing factor for noise-floor adaptation (low = slow adaptation).
     private let noiseAlpha: Double = 0.02
     /// Barge-in: continuous speech for this long while TTS is playing → fire barge-in.
@@ -106,6 +146,13 @@ final class VoiceActivityDetector: @unchecked Sendable {
     private var currentTTSLevel: Float = 0
 
     func setCurrentTTSLevel(_ level: Float) { currentTTSLevel = level }
+
+    /// True while the detector is inside a (potential) utterance — speech or
+    /// its tail-silence window. Used by VoiceSessionManager to hold off
+    /// committing a merged turn while the user is mid-speech. Racy read from
+    /// another thread, but a stale value only shifts the commit poll by one
+    /// 300ms cycle.
+    var isCapturingSpeech: Bool { phase != .silent }
 
     // MARK: - API
 

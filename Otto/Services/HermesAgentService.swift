@@ -244,9 +244,12 @@ actor HermesAgentService {
         if let existing = acpSessions[key] { return (existing, false) }
         // Google MCP servers are injected per session with a freshly
         // refreshed Bearer token, so later-created sessions don't inherit a
-        // stale token from connect time.
+        // stale token from connect time. Custom servers are read per session
+        // too, so an Integrations change applies to the next conversation
+        // without restarting Hermes.
         let googleServers = await Self.buildGoogleMcpServers()
-        let sessionId = try await performSessionNew(extraMcpServers: googleServers)
+        let customServers = await Self.buildCustomMcpServers()
+        let sessionId = try await performSessionNew(extraMcpServers: googleServers + customServers)
         acpSessions[key] = sessionId
         return (sessionId, true)
     }
@@ -593,6 +596,20 @@ actor HermesAgentService {
             ))
         }
         return servers
+    }
+
+    /// User-added custom MCP servers, expressed as ACP `mcpServers` entries.
+    /// Secrets (env values / headers) resolve from Keychain at session-create
+    /// time, and `.oauth` servers get a freshly minted Bearer token —
+    /// mirroring how the Google servers refresh theirs above. Servers whose
+    /// token can't be produced (needs sign-in) are skipped for this session.
+    private static func buildCustomMcpServers() async -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for server in CustomMCPServersStore.shared.enabledServers() {
+            guard let secrets = await CustomMCPServersStore.shared.effectiveSecrets(for: server) else { continue }
+            out.append(CustomMCPServersStore.acpEntry(for: server, secrets: secrets))
+        }
+        return out
     }
 
     // MARK: - Reader loop

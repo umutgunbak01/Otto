@@ -92,6 +92,23 @@ actor NotificationService {
         return notificationId
     }
 
+    /// Immediate notification announcing a finished meeting analysis. Tapping
+    /// it routes through `OttoNotificationDelegate` to open the Meeting.
+    @discardableResult
+    func notifyMeetingReady(meetingId: UUID, title: String, body: String) async throws -> String {
+        if await quietAt(Date()) { return "" }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["meetingId": meetingId.uuidString]
+
+        let notificationId = UUID().uuidString
+        let request = UNNotificationRequest(identifier: notificationId, content: content, trigger: nil)
+        try await UNUserNotificationCenter.current().add(request)
+        return notificationId
+    }
+
     func cancelReminder(notificationId: String) {
         UNUserNotificationCenter.current()
             .removePendingNotificationRequests(withIdentifiers: [notificationId])

@@ -38,11 +38,21 @@ final class MicCapture: @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat?
+    /// Mono at the hardware rate — the converter's input when the device runs
+    /// multi-channel; `handleTap` downmixes into this before rate conversion.
+    private var monoHwFormat: AVAudioFormat?
 
     /// Called on an arbitrary queue for every ~20ms frame of 16kHz mono Float32 audio.
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private(set) var isRunning: Bool = false
+
+    // Capture diagnostics — raw-vs-converted peaks logged every ~3 s, plus
+    // cumulative converter failure counters. Splits "the HAL feeds us zeros"
+    // from "the converter zeroes a live signal".
+    private var lastDiagLog = Date.distantPast
+    private var convErrorCount = 0
+    private var convEmptyCount = 0
 
     // MARK: - Permissions
 
@@ -75,6 +85,10 @@ final class MicCapture: @unchecked Sendable {
         // above threshold — phase stayed in .listening forever. Echo feedback is
         // handled instead by tightening the barge-in detector in VoiceActivityDetector.
         let hwFormat = input.outputFormat(forBus: 0)
+        NSLog("[MicCapture] hw format: %.0f Hz, %d ch", hwFormat.sampleRate, hwFormat.channelCount)
+        convErrorCount = 0
+        convEmptyCount = 0
+        lastDiagLog = Date.distantPast
 
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -84,7 +98,29 @@ final class MicCapture: @unchecked Sendable {
         ) else { throw MicError.converterSetupFailed }
         self.targetFormat = target
 
-        guard let conv = AVAudioConverter(from: hwFormat, to: target) else {
+        // While a meeting app (Safari/Meet, Zoom) holds the mic, macOS runs
+        // the MacBook mic array in raw 3-channel mode. AVAudioConverter's
+        // default channel map for 3ch→mono resolves to silence (live input,
+        // all-zero output, no error), and any single raw channel is ~10 dB
+        // quieter than the processed mono mode. So: downmix all channels
+        // ourselves in handleTap (coherent speech sums, noise doesn't) and
+        // give the converter a mono input at the hardware rate.
+        let converterInput: AVAudioFormat
+        if hwFormat.channelCount > 1 {
+            guard let monoHw = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: hwFormat.sampleRate,
+                channels: 1,
+                interleaved: false
+            ) else { throw MicError.converterSetupFailed }
+            self.monoHwFormat = monoHw
+            converterInput = monoHw
+        } else {
+            self.monoHwFormat = nil
+            converterInput = hwFormat
+        }
+
+        guard let conv = AVAudioConverter(from: converterInput, to: target) else {
             throw MicError.converterSetupFailed
         }
         self.converter = conv
@@ -122,13 +158,15 @@ final class MicCapture: @unchecked Sendable {
         engine = nil
         converter = nil
         targetFormat = nil
+        monoHwFormat = nil
         isRunning = false
     }
 
     // MARK: - Conversion
 
-    private func handleTap(buffer: AVAudioPCMBuffer) {
+    private func handleTap(buffer rawBuffer: AVAudioPCMBuffer) {
         guard let converter = converter, let target = targetFormat else { return }
+        guard let buffer = downmixIfNeeded(rawBuffer) else { return }
 
         // Estimate output capacity based on sample-rate ratio.
         let ratio = target.sampleRate / buffer.format.sampleRate
@@ -150,9 +188,56 @@ final class MicCapture: @unchecked Sendable {
             return buffer
         }
 
+        if error != nil { convErrorCount += 1 }
+        if outBuf.frameLength == 0 { convEmptyCount += 1 }
+
+        let now = Date()
+        if now.timeIntervalSince(lastDiagLog) >= 3 {
+            lastDiagLog = now
+            NSLog("[MicCapture] raw peak=%.1fdB (%.0fHz/%dch %d frames) → converted peak=%.1fdB (%d frames), convErrors=%d, convEmpties=%d",
+                  Self.peakDb(rawBuffer), rawBuffer.format.sampleRate, rawBuffer.format.channelCount, rawBuffer.frameLength,
+                  Self.peakDb(outBuf), outBuf.frameLength, convErrorCount, convEmptyCount)
+        }
+
         if error != nil { return }
         if outBuf.frameLength == 0 { return }
 
         onBuffer?(outBuf)
+    }
+
+    /// Sum a multi-channel buffer into mono, scaled by 1/√N: coherent speech
+    /// picked up by all array channels gains ~+4.8 dB (3ch) over any single
+    /// channel while incoherent noise doesn't — partial recovery of the level
+    /// the processed mono mode would have delivered. Single-channel buffers
+    /// pass through untouched.
+    private func downmixIfNeeded(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard buffer.format.channelCount > 1 else { return buffer }
+        guard let monoHw = monoHwFormat,
+              let mixed = AVAudioPCMBuffer(pcmFormat: monoHw, frameCapacity: buffer.frameLength),
+              let src = buffer.floatChannelData,
+              let dst = mixed.floatChannelData
+        else { return nil }
+
+        let frames = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
+        let out = dst[0]
+        let first = src[0]
+        for i in 0..<frames { out[i] = first[i] }
+        for c in 1..<channels {
+            let ch = src[c]
+            for i in 0..<frames { out[i] += ch[i] }
+        }
+        let scale = 1.0 / Float(channels).squareRoot()
+        for i in 0..<frames { out[i] *= scale }
+        mixed.frameLength = buffer.frameLength
+        return mixed
+    }
+
+    private static func peakDb(_ buffer: AVAudioPCMBuffer) -> Double {
+        guard let data = buffer.floatChannelData, buffer.frameLength > 0 else { return -120 }
+        let ch = data[0]
+        var maxAbs: Float = 0
+        for i in 0..<Int(buffer.frameLength) { maxAbs = max(maxAbs, abs(ch[i])) }
+        return 20 * log10(Double(max(maxAbs, 1e-6)))
     }
 }

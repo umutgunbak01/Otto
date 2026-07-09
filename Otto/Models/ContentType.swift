@@ -21,6 +21,27 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Types covered by universal search, in section/display order.
+    static let searchable: [ContentType] = [
+        .todo, .note, .idea, .reminder, .bookmark, .meeting, .email, .connection, .file
+    ]
+
+    /// Short plural label for search chips, tiles, and section headers.
+    var searchGroupName: String {
+        switch self {
+        case .todo: return "To-dos"
+        case .note: return "Notes"
+        case .idea: return "Ideas"
+        case .reminder: return "Reminders"
+        case .bookmark: return "Bookmarks"
+        case .meeting: return "Meetings"
+        case .email: return "Emails"
+        case .connection: return "LinkedIn"
+        case .file: return "Files"
+        default: return displayName
+        }
+    }
+
     var displayName: String {
         switch self {
         case .todo: return "To-Do"

@@ -61,7 +61,11 @@ final class MenuBarController: NSObject {
     /// app can poke it after a Calendar sync to reduce staleness.
     func refresh() {
         guard let state = appState, let button = statusItem?.button else { return }
-        button.title = Self.makeTitle(now: Date(), events: state.calendarEvents)
+        var title = Self.makeTitle(now: Date(), events: state.calendarEvents)
+        if state.meetingTranscription.isRecording {
+            title = "🔴 " + title
+        }
+        button.title = title
     }
 
     private func startTimer() {

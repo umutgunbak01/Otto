@@ -18,6 +18,7 @@ struct MeetingDetailView: View {
     @State private var showingDeleteAlert = false
     @State private var selectedMobileTab: MobileTab = .summary
     @State private var transcriptSentences: [FirefliesSentence] = []
+    @State private var localTranscriptLines: [LocalTranscriptLine] = []
     @State private var isLoadingTranscript = false
     @State private var transcriptError: String?
 
@@ -375,6 +376,17 @@ struct MeetingDetailView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(Theme.Spacing.lg)
+            } else if !localTranscriptLines.isEmpty {
+                // Transcript captured by Otto's own meeting recorder —
+                // stored on the Meeting, no Fireflies fetch involved.
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        ForEach(localTranscriptLines) { line in
+                            localTranscriptLineView(line)
+                        }
+                    }
+                    .padding(Theme.Spacing.lg)
+                }
             } else if transcriptSentences.isEmpty {
                 VStack(spacing: Theme.Spacing.md) {
                     Image(systemName: "text.quote")
@@ -395,6 +407,65 @@ struct MeetingDetailView: View {
                     .padding(Theme.Spacing.lg)
                 }
             }
+        }
+    }
+
+    // MARK: - Local (Otto-recorded) transcript
+
+    private struct LocalTranscriptLine: Identifiable {
+        let id = UUID()
+        let time: String
+        let speaker: String
+        let text: String
+    }
+
+    private func localTranscriptLineView(_ line: LocalTranscriptLine) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+            Text(line.time)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .frame(width: 54, alignment: .trailing)
+
+            VStack(alignment: .leading, spacing: 2) {
+                if !line.speaker.isEmpty {
+                    Text(line.speaker)
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.work)
+                        .fontWeight(.semibold)
+                }
+                Text(line.text)
+                    .font(Theme.Typography.body)
+                    .foregroundStyle(Theme.Colors.text)
+            }
+        }
+        .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    /// Parse "[HH:mm:ss] Speaker: text" lines from `Meeting.transcript`.
+    /// Lines that don't match still render, just without time/speaker.
+    private static func parseLocalTranscript(_ raw: String) -> [LocalTranscriptLine] {
+        raw.split(separator: "\n").compactMap { rawLine in
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { return nil }
+
+            var time = ""
+            var rest = line
+            if rest.hasPrefix("["), let close = rest.firstIndex(of: "]") {
+                time = String(rest[rest.index(after: rest.startIndex)..<close])
+                rest = String(rest[rest.index(after: close)...]).trimmingCharacters(in: .whitespaces)
+            }
+
+            var speaker = ""
+            if let colon = rest.firstIndex(of: ":") {
+                let candidate = String(rest[..<colon])
+                // Speaker labels are short ("Me" / "Them"); don't eat prose colons.
+                if candidate.count <= 12 && !candidate.contains(" ") {
+                    speaker = candidate
+                    rest = String(rest[rest.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+
+            return LocalTranscriptLine(time: time, speaker: speaker, text: rest)
         }
     }
 
@@ -427,6 +498,12 @@ struct MeetingDetailView: View {
     // MARK: - Load Transcript
 
     private func loadTranscript() async {
+        // Otto-recorded meetings carry their transcript inline — no fetch.
+        if let local = meeting.transcript, !local.isEmpty {
+            localTranscriptLines = Self.parseLocalTranscript(local)
+            return
+        }
+
         guard let firefliesId = meeting.firefliesId, !firefliesId.isEmpty else {
             // No Fireflies ID — no transcript to fetch
             return

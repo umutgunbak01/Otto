@@ -16,6 +16,8 @@ struct OttoDataStore: Codable {
     var companies: [Company]
     var events: [Event]
     var communities: [Community]
+    var customTabs: [CustomTabDefinition]
+    var customRecords: [CustomRecord]
     var domainTags: [DomainTag]
     var importedMeetings: [ImportedMeeting]
     var xPosts: [XPost]
@@ -36,6 +38,7 @@ struct OttoDataStore: Codable {
         case connectionCustomFields
         case networkEntries
         case companies, events, communities
+        case customTabs, customRecords
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
@@ -57,6 +60,8 @@ struct OttoDataStore: Codable {
         companies: [Company] = [],
         events: [Event] = [],
         communities: [Community] = [],
+        customTabs: [CustomTabDefinition] = [],
+        customRecords: [CustomRecord] = [],
         xPosts: [XPost] = [],
         xFollowers: [XFollower] = [],
         xDirectMessages: [XDirectMessage] = [],
@@ -86,6 +91,8 @@ struct OttoDataStore: Codable {
         self.companies = companies
         self.events = events
         self.communities = communities
+        self.customTabs = customTabs
+        self.customRecords = customRecords
         self.xPosts = xPosts
         self.xFollowers = xFollowers
         self.xDirectMessages = xDirectMessages
@@ -127,6 +134,9 @@ struct OttoDataStore: Codable {
         companies = (try? container.decode([Company].self, forKey: .companies)) ?? []
         events = (try? container.decode([Event].self, forKey: .events)) ?? []
         communities = (try? container.decode([Community].self, forKey: .communities)) ?? []
+        // User-defined custom tabs + their records — fall back to empty for older stores.
+        customTabs = (try? container.decode([CustomTabDefinition].self, forKey: .customTabs)) ?? []
+        customRecords = (try? container.decode([CustomRecord].self, forKey: .customRecords)) ?? []
         // X data may not exist in old data
         xPosts = (try? container.decode([XPost].self, forKey: .xPosts)) ?? []
         xFollowers = (try? container.decode([XFollower].self, forKey: .xFollowers)) ?? []
@@ -333,6 +343,18 @@ actor PersistenceService {
     func updateCommunities(_ communities: [Community]) async throws {
         var store = try await load()
         store.communities = communities
+        try await save(store)
+    }
+
+    func updateCustomTabs(_ tabs: [CustomTabDefinition]) async throws {
+        var store = try await load()
+        store.customTabs = tabs
+        try await save(store)
+    }
+
+    func updateCustomRecords(_ records: [CustomRecord]) async throws {
+        var store = try await load()
+        store.customRecords = records
         try await save(store)
     }
 
