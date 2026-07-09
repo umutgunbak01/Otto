@@ -104,6 +104,53 @@ enum ChatMessageRenderer {
         ])
     }
 
+    /// User-message rendering: everything the user typed stays verbatim
+    /// (no markdown interpretation — literal ** should show as **), EXCEPT
+    /// inline item links `[Title](otto://<type>/<id>)` produced by composer
+    /// @-tagging, which render as the same accent chips assistant messages
+    /// use.
+    static func userText(_ text: String) -> NSAttributedString {
+        let style = paragraphStyle()
+        let base: [NSAttributedString.Key: Any] = [
+            .font: bodyFont,
+            .foregroundColor: textColor,
+            .paragraphStyle: style,
+        ]
+
+        let pattern = /\[([^\[\]]+)\]\((otto:\/\/[^)\s]+)\)/
+        let matches = text.matches(of: pattern)
+        guard !matches.isEmpty else { return plain(text) }
+
+        let result = NSMutableAttributedString()
+        var cursor = text.startIndex
+        for match in matches {
+            if match.range.lowerBound > cursor {
+                result.append(NSAttributedString(
+                    string: String(text[cursor..<match.range.lowerBound]),
+                    attributes: base
+                ))
+            }
+            let title = String(match.1)
+            if let url = URL(string: String(match.2)) {
+                // Same chip styling as assistant `otto://` links: accent
+                // pill, NBSP padding so the highlight hugs the title.
+                var attrs = base
+                attrs[.link] = url
+                attrs[.font] = mediumWeight(bodyFont)
+                attrs[.foregroundColor] = NSColor(Theme.Colors.accent)
+                attrs[.backgroundColor] = NSColor(Theme.Colors.accent).withAlphaComponent(0.14)
+                result.append(NSAttributedString(string: "\u{00A0}\(title)\u{00A0}", attributes: attrs))
+            } else {
+                result.append(NSAttributedString(string: String(text[match.range]), attributes: base))
+            }
+            cursor = match.range.upperBound
+        }
+        if cursor < text.endIndex {
+            result.append(NSAttributedString(string: String(text[cursor...]), attributes: base))
+        }
+        return result
+    }
+
     /// Markdown rendered block-by-block — used for assistant messages.
     static func markdown(_ text: String) -> NSAttributedString {
         let result = NSMutableAttributedString()
