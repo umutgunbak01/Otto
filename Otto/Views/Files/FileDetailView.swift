@@ -18,6 +18,11 @@ struct FileDetailView: View {
     @State private var showingQuickLook: Bool = false
     @State private var previewURL: URL?
 
+    // Parsed .xlsx workbook for the inline table preview. nil + finished =
+    // unparseable → Quick Look fallback block.
+    @State private var xlsxSheets: [XLSXReader.Sheet]?
+    @State private var xlsxLoadFinished = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
@@ -58,6 +63,9 @@ struct FileDetailView: View {
             editingNotes = file.notes
             editingTags = file.tags.joined(separator: ", ")
             loadPreviewURL()
+        }
+        .task(id: file.id) {
+            await loadWorkbook()
         }
         #if os(macOS)
         .sheet(isPresented: $showingQuickLook) {
@@ -228,7 +236,7 @@ struct FileDetailView: View {
                 case .excel:
                     excelPreview
                 case .text:
-                    csvPreview  // Plain text uses the same scrollable text viewer.
+                    textPreview
                 case .video, .audio:
                     mediaUnsupportedPreview
                 }
@@ -287,9 +295,27 @@ struct FileDetailView: View {
     private var csvPreview: some View {
         Group {
             if let text = csvContent, !text.isEmpty {
-                CSVTableView(csvText: text)
+                // Read-only here — the full-width popup is the editor surface.
+                CSVTableEditor(csvText: text)
             } else {
                 placeholderPreview(icon: "tablecells", message: "Unable to load CSV content")
+            }
+        }
+    }
+
+    private var textPreview: some View {
+        Group {
+            if let text = csvContent, !text.isEmpty {
+                ScrollView {
+                    Text(text)
+                        .font(Theme.Typography.monoBody)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Spacing.md)
+                }
+            } else {
+                placeholderPreview(icon: "doc.text", message: "Unable to load text content")
             }
         }
     }
@@ -307,7 +333,25 @@ struct FileDetailView: View {
         return try? String(contentsOf: url, encoding: .isoLatin1)
     }
 
+    /// Inline table of the first sheet (read-only — the full-width popup is
+    /// the richer surface, with a sheet switcher). Unparseable files fall
+    /// back to the Quick Look block.
     private var excelPreview: some View {
+        Group {
+            if let sheets = xlsxSheets, let first = sheets.first {
+                CSVTableEditor(csvText: XLSXReader.csv(for: first))
+                    .id(file.id)
+            } else if xlsxLoadFinished {
+                excelFallback
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var excelFallback: some View {
         VStack(spacing: Theme.Spacing.lg) {
             Image(systemName: "tablecells.fill")
                 .font(.system(size: 40, weight: .thin))
@@ -340,6 +384,19 @@ struct FileDetailView: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Parse the workbook off the main thread (pure CPU: unzip + XML).
+    private func loadWorkbook() async {
+        guard file.fileType == .excel else { return }
+        xlsxLoadFinished = false
+        xlsxSheets = nil
+        let url = await FileStorageService.shared.getFileURL(for: file)
+        let sheets = await Task.detached(priority: .userInitiated) {
+            try? XLSXReader.read(url: url)
+        }.value
+        xlsxSheets = sheets
+        xlsxLoadFinished = true
     }
 
     /// Preview for video/audio (typically genmedia outputs). We don't ship an
@@ -626,110 +683,6 @@ struct QuickLookPreview: NSViewRepresentable {
     }
 }
 #endif
-
-// MARK: - CSV Table View
-
-struct CSVTableView: View {
-    let csvText: String
-
-    private var parsedData: [[String]] {
-        let lines = csvText.components(separatedBy: .newlines)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-
-        return lines.map { line in
-            parseCSVLine(line)
-        }
-    }
-
-    private func parseCSVLine(_ line: String) -> [String] {
-        var result: [String] = []
-        var current = ""
-        var inQuotes = false
-
-        for char in line {
-            if char == "\"" {
-                inQuotes.toggle()
-            } else if char == "," && !inQuotes {
-                result.append(current.trimmingCharacters(in: .whitespaces))
-                current = ""
-            } else {
-                current.append(char)
-            }
-        }
-        result.append(current.trimmingCharacters(in: .whitespaces))
-        return result
-    }
-
-    private var headers: [String] {
-        parsedData.first ?? []
-    }
-
-    private var rows: [[String]] {
-        Array(parsedData.dropFirst())
-    }
-
-    private var columnCount: Int {
-        parsedData.map { $0.count }.max() ?? 0
-    }
-
-    var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                // Header row
-                if !headers.isEmpty {
-                    HStack(spacing: 0) {
-                        ForEach(0..<columnCount, id: \.self) { colIndex in
-                            Text(colIndex < headers.count ? headers[colIndex] : "")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Theme.Colors.text)
-                                .lineLimit(1)
-                                .frame(minWidth: 80, maxWidth: 150, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
-                                .background(Theme.Colors.accent.opacity(0.1))
-                        }
-                    }
-
-                    OttoDivider()
-                }
-
-                // Data rows (limit to first 50 for performance)
-                ForEach(Array(rows.prefix(50).enumerated()), id: \.offset) { rowIndex, row in
-                    HStack(spacing: 0) {
-                        ForEach(0..<columnCount, id: \.self) { colIndex in
-                            Text(colIndex < row.count ? row[colIndex] : "")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.Colors.text)
-                                .lineLimit(2)
-                                .frame(minWidth: 80, maxWidth: 150, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(rowIndex % 2 == 0 ? Color.clear : Theme.Colors.secondaryBackground.opacity(0.5))
-                        }
-                    }
-
-                    if rowIndex < rows.prefix(50).count - 1 {
-                        OttoDivider()
-                            .opacity(0.5)
-                    }
-                }
-
-                // Show indicator if truncated
-                if rows.count > 50 {
-                    HStack {
-                        Spacer()
-                        Text("Showing 50 of \(rows.count) rows")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .padding(Theme.Spacing.sm)
-                        Spacer()
-                    }
-                }
-            }
-        }
-        .padding(Theme.Spacing.sm)
-    }
-}
 
 #Preview {
     FileDetailView(

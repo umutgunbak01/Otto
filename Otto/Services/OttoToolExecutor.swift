@@ -21,6 +21,17 @@ final class OttoToolExecutor {
 
     func execute(name: String, input: [String: Any]) async -> ToolResult {
         guard let tool = OttoTools.Name(rawValue: name) else {
+            // Generated per-tab tools (create_<slug> / update_<slug>) aren't
+            // compile-time Name cases — route them by the owning custom tab.
+            if let (action, tab) = OttoTools.customTabTool(named: name, tabs: appState.customTabs) {
+                let result: ToolResult
+                switch action {
+                case .create: result = await createCustomTabRecord(tab: tab, input)
+                case .update: result = await updateCustomTabRecord(tab: tab, input)
+                }
+                if !result.isError { Sounds.play(.taskComplete) }
+                return result
+            }
             return err("Unknown tool: \(name)", summary: "Unknown tool \(name)")
         }
         let result: ToolResult
@@ -53,6 +64,7 @@ final class OttoToolExecutor {
         case .grep_data:        result = grepData(input)
         case .get_item:         result = getItem(input)
         case .attach_item_preview: result = attachItemPreview(input)
+        case .visualize:        result = renderVisualization(input)
         case .open_url:         result = openURLTool(input)
         case .create_habit:     result = await createHabit(input)
         case .update_habit:     result = await updateHabitTool(input)
@@ -60,6 +72,7 @@ final class OttoToolExecutor {
         case .complete_habit:   result = await completeHabitTool(input)
         case .list_habits:      result = listHabitsTool(input)
         case .read_file:        result = await readFile(input)
+        case .create_file:      result = await createFile(input)
         case .genmedia_search_models:     result = await genmediaSearchModels(input)
         case .genmedia_get_model_schema:  result = await genmediaGetModelSchema(input)
         case .genmedia_run:               result = await genmediaRun(input)
@@ -86,7 +99,9 @@ final class OttoToolExecutor {
         .create_habit, .update_habit, .log_habit_entry, .complete_habit,
         // A successful genmedia_run lands a real artifact in the Files tab,
         // so it earns the same "thing happened" chime as the create_* tools.
-        .genmedia_run
+        .genmedia_run,
+        // Same rationale — create_file delivers a downloadable artifact.
+        .create_file
     ]
 
     // MARK: - Grep data (workspace tables over MCP)
@@ -179,6 +194,27 @@ final class OttoToolExecutor {
             "Attached preview: \(type) \(id.uuidString) — \(title)",
             summary: "Preview: \(title)"
         )
+    }
+
+    // MARK: - Visualize
+
+    /// Validates the spec and returns a sentinel. Like attach_item_preview,
+    /// no UI object is created here — the chat UI renders the card straight
+    /// from the tool call's input, and saved sessions rebuild it from the
+    /// persisted `.toolUse` block.
+    private func renderVisualization(_ input: [String: Any]) -> ToolResult {
+        do {
+            let spec = try VisualizationSpec.parse(input)
+            let label = spec.title ?? spec.kind.displayName
+            return ok(
+                "Rendered \(spec.kind.rawValue) visualization — \(label). It is displayed inline in the chat; don't repeat its data in prose.",
+                summary: "Visualization: \(label)"
+            )
+        } catch let e as VisualizationSpec.ParseError {
+            return err("Invalid visualization: \(e.message)", summary: "Visualization failed")
+        } catch {
+            return err("Invalid visualization payload.", summary: "Visualization failed")
+        }
     }
 
     // MARK: - Create
@@ -767,8 +803,78 @@ final class OttoToolExecutor {
             await appState.deleteCommunity(cm)
             return ok("Deleted community \(id.uuidString).", summary: "Deleted community: \(cm.name)")
         default:
+            if let tab = appState.customTabs.first(where: { $0.slug == type }) {
+                guard let record = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id }) else {
+                    return err("No \(tab.name) record with id \(id.uuidString).", summary: "Delete failed")
+                }
+                let title = record.displayTitle(in: tab)
+                await appState.deleteCustomRecord(record)
+                return ok("Deleted \(tab.name) record \(id.uuidString).", summary: "Deleted from \(tab.name): \(title)")
+            }
             return err("Unsupported delete type: \(type).", summary: "Delete failed")
         }
+    }
+
+    // MARK: - Custom-tab records (generated create_<slug> / update_<slug> tools)
+
+    private func createCustomTabRecord(tab: CustomTabDefinition, _ input: [String: Any]) async -> ToolResult {
+        let values: [UUID: CustomFieldValue]
+        do {
+            values = try parseCustomFieldValues(tab: tab, input: input).compactMapValues { $0 }
+        } catch let e as CustomFieldInputError {
+            return err(e.message, summary: "Add to \(tab.name) failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Add to \(tab.name) failed")
+        }
+        guard !values.isEmpty else {
+            return err("Provide at least one field value. Columns: \(tab.fieldKeys().map { $0.key }.joined(separator: ", ")).",
+                       summary: "Add to \(tab.name) failed")
+        }
+        let record = CustomRecord(tabId: tab.id, values: values)
+        await appState.addCustomRecord(record)
+        return ok("Created \(tab.name) record \(record.id.uuidString).",
+                  summary: "Added to \(tab.name): \(record.displayTitle(in: tab))")
+    }
+
+    private func updateCustomTabRecord(tab: CustomTabDefinition, _ input: [String: Any]) async -> ToolResult {
+        guard let id = parseUUID(string(input, "id")) else {
+            return err("Missing or invalid 'id'.", summary: "Update \(tab.name) failed")
+        }
+        guard var record = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id }) else {
+            return err("No \(tab.name) record with id \(id.uuidString).", summary: "Update \(tab.name) failed")
+        }
+        let parsed: [UUID: CustomFieldValue?]
+        do {
+            parsed = try parseCustomFieldValues(tab: tab, input: input)
+        } catch let e as CustomFieldInputError {
+            return err(e.message, summary: "Update \(tab.name) failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update \(tab.name) failed")
+        }
+        guard !parsed.isEmpty else {
+            return err("No fields provided to update.", summary: "Update \(tab.name) failed")
+        }
+        for (fieldId, value) in parsed {
+            if let value, !value.isEmpty {
+                record.values[fieldId] = value
+            } else {
+                record.values.removeValue(forKey: fieldId)
+            }
+        }
+        await appState.updateCustomRecord(record)
+        return ok("Updated \(tab.name) record \(record.id.uuidString).",
+                  summary: "Updated \(tab.name): \(record.displayTitle(in: tab))")
+    }
+
+    /// Parse every provided field key in `input` against the tab's schema.
+    /// nil values mean "explicitly cleared" (empty string / array / unchecked).
+    private func parseCustomFieldValues(tab: CustomTabDefinition, input: [String: Any]) throws -> [UUID: CustomFieldValue?] {
+        var out: [UUID: CustomFieldValue?] = [:]
+        for (key, field) in tab.fieldKeys() {
+            guard let raw = input[key], !(raw is NSNull) else { continue }
+            out[field.id] = try CustomFieldValue.fromToolInput(raw, field: field)
+        }
+        return out
     }
 
     // MARK: - Search / get
@@ -782,7 +888,9 @@ final class OttoToolExecutor {
         }()
         let types: Set<String> = {
             if let arr = input["types"] as? [String], !arr.isEmpty { return Set(arr.map { $0.lowercased() }) }
-            return ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "file", "x_post", "x_follower", "x_dm"]
+            var defaults: Set<String> = ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "file", "x_post", "x_follower", "x_dm"]
+            defaults.formUnion(appState.customTabs.map(\.slug))
+            return defaults
         }()
         let limit = max(1, min((input["limit"] as? Int) ?? 20, 100))
         let sortKey = (string(input, "sort") ?? "recent").lowercased()
@@ -946,6 +1054,18 @@ final class OttoToolExecutor {
                 matches.append(.init(id: dm.id, type: "x_dm", title: title,
                                      snippet: String(dm.text.prefix(140)),
                                      date: dm.createdAt, dueDate: nil))
+            }
+        }
+        for tab in appState.customTabs where types.contains(tab.slug) {
+            for r in appState.customRecords where r.tabId == tab.id {
+                if !textMatches([r.searchableText(in: tab)]) { continue }
+                // Snippet: the non-title columns as "Name: value" pairs.
+                let snippet = tab.sortedFields.dropFirst()
+                    .compactMap { f in r.values[f.id].map { "\(f.name): \($0.displayString(for: f))" } }
+                    .joined(separator: " · ")
+                matches.append(.init(id: r.id, type: tab.slug, title: r.displayTitle(in: tab),
+                                     snippet: String(snippet.prefix(140)),
+                                     date: r.updatedAt, dueDate: nil))
             }
         }
 
@@ -1247,7 +1367,21 @@ final class OttoToolExecutor {
                 ]
             }
         default:
-            return err("Unsupported type: \(type).", summary: "Fetch failed")
+            guard let tab = appState.customTabs.first(where: { $0.slug == type }) else {
+                return err("Unsupported type: \(type).", summary: "Fetch failed")
+            }
+            if let r = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id }) {
+                var out: [String: Any] = [
+                    "id": r.id.uuidString, "type": tab.slug,
+                    "title": r.displayTitle(in: tab),
+                    "created_at": df.string(from: r.createdAt),
+                    "updated_at": df.string(from: r.updatedAt)
+                ]
+                for (key, field) in tab.fieldKeys() {
+                    out[key] = r.values[field.id].map { $0.toolOutputValue(for: field) } ?? NSNull()
+                }
+                payload = out
+            }
         }
         guard let payload else {
             return err("No \(type) with id \(id.uuidString).", summary: "Fetch failed")
@@ -1270,7 +1404,7 @@ final class OttoToolExecutor {
         guard let id = parseUUID(string(input, "id")) else {
             return err("Missing or invalid 'id'.", summary: "read_file failed")
         }
-        guard let file = appState.files.first(where: { $0.id == id }) else {
+        guard var file = appState.files.first(where: { $0.id == id }) else {
             return err("No file with id \(id.uuidString). Use `search_items` with type=\"file\" to discover ids.",
                        summary: "File not found")
         }
@@ -1281,6 +1415,15 @@ final class OttoToolExecutor {
 
         let fileURL = await FileStorageService.shared.getFileURL(for: file)
         let exists = FileManager.default.fileExists(atPath: fileURL.path)
+
+        // Lazy backfill: spreadsheets imported before native xlsx extraction
+        // existed carry no stored text — extract now and persist so this and
+        // every future read (and search) sees the cells.
+        if file.fileType == .excel, (file.extractedText ?? "").isEmpty, exists,
+           let text = XLSXReader.csvText(from: fileURL) {
+            file.extractedText = text
+            await appState.updateFile(file)
+        }
         let textBody: String = {
             guard let extracted = file.extractedText, !extracted.isEmpty else { return "" }
             if extracted.count <= maxChars { return extracted }
@@ -1292,7 +1435,7 @@ final class OttoToolExecutor {
         case .image:
             hint = "Image OCR text shown above. For finer visual detail, call the built-in `Read` tool with the absolute path — Claude Code's Read is multimodal and can analyse the image natively."
         case .excel:
-            hint = "Excel text extraction is not supported natively. Use the built-in `Read` tool with the absolute path if you need the binary; otherwise ask the user to export as CSV."
+            hint = "Spreadsheet cells extracted as CSV text above (multi-sheet workbooks get a '# Sheet:' header per sheet; date cells show as raw serial numbers). Legacy .xls files can't be extracted — for those, ask the user to re-export as .xlsx or CSV."
         case .pdf:
             hint = "PDF text shown above. For layout-sensitive content, call the built-in `Read` tool with the absolute path."
         case .csv, .text:
@@ -1320,6 +1463,121 @@ final class OttoToolExecutor {
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
         let text = String(data: data, encoding: .utf8) ?? "{}"
         return ok(text, summary: "Read file: \(file.name)")
+    }
+
+    // MARK: - Create file (downloadable deliverables)
+
+    /// Extensions written verbatim from the `content` string. Everything here
+    /// must also be importable by `FileType.from(extension:)`.
+    private static let createFileTextExtensions: Set<String> = [
+        "csv", "txt", "md", "markdown", "json", "yaml", "yml", "html", "xml", "log"
+    ]
+
+    /// Keeps a runaway agent from staging something enormous through the
+    /// chat pipeline — 20 MB covers any plausible deliverable.
+    private static let createFileMaxBytes = 20 * 1024 * 1024
+
+    /// Build a real file from the agent's spec (text passthrough, xlsx from
+    /// rows, pdf from markdown), import it into Otto's Files tab, and return
+    /// a result line the chat layer parses to auto-attach a downloadable
+    /// file card (see `OttoTools.parseCreatedFileResult`).
+    private func createFile(_ input: [String: Any]) async -> ToolResult {
+        guard let rawName = string(input, "filename")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawName.isEmpty else {
+            return err("Missing required 'filename' (including extension, e.g. report.xlsx).",
+                       summary: "Create file failed")
+        }
+        // Strip any path components and characters macOS filenames can't hold.
+        let filename = (rawName as NSString).lastPathComponent
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:"))
+            .joined(separator: "_")
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let supported = Self.createFileTextExtensions.sorted().joined(separator: ", ")
+        guard !ext.isEmpty else {
+            return err("'filename' needs an extension. Supported: \(supported), xlsx, pdf.",
+                       summary: "Create file failed")
+        }
+
+        let data: Data
+        switch ext {
+        case _ where Self.createFileTextExtensions.contains(ext):
+            guard let content = string(input, "content"), !content.isEmpty else {
+                return err("A .\(ext) file needs its text in 'content'.", summary: "Create file failed")
+            }
+            data = Data(content.utf8)
+        case "xlsx":
+            // Preferred shape: `sheets` — one tab per logical section.
+            // `rows` (+ optional `sheet_name`) stays as single-sheet shorthand.
+            var sheets: [(name: String, rows: [[Any]])] = []
+            if let rawSheets = input["sheets"] as? [[String: Any]], !rawSheets.isEmpty {
+                for (i, raw) in rawSheets.enumerated() {
+                    guard let rows = raw["rows"] as? [[Any]], !rows.isEmpty else {
+                        return err("Sheet \(i + 1) needs a non-empty 'rows' array of arrays of cell values.",
+                                   summary: "Create file failed")
+                    }
+                    let name = (raw["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    sheets.append((name.isEmpty ? "Sheet\(i + 1)" : name, rows))
+                }
+            } else if let rows = input["rows"] as? [[Any]], !rows.isEmpty {
+                sheets = [(string(input, "sheet_name") ?? "Sheet1", rows)]
+            } else {
+                return err("A .xlsx file needs 'sheets' (array of {name, rows}) or 'rows' (array of arrays of cell values, e.g. rows=[[\"Name\",\"Amount\"],[\"Acme\",1200]]).",
+                           summary: "Create file failed")
+            }
+            do {
+                data = try AgentFileCreation.xlsxData(sheets: sheets)
+            } catch {
+                return err("xlsx build failed: \(error.localizedDescription)", summary: "Create file failed")
+            }
+        case "pdf":
+            guard let content = string(input, "content"), !content.isEmpty else {
+                return err("A .pdf file needs its body text in 'content' (markdown-ish: # headings, - bullets, **bold**).",
+                           summary: "Create file failed")
+            }
+            do {
+                data = try AgentFileCreation.pdfData(markdown: content)
+            } catch {
+                return err("PDF rendering failed: \(error.localizedDescription)", summary: "Create file failed")
+            }
+        default:
+            return err("Unsupported extension '.\(ext)'. Supported: \(supported), xlsx, pdf.",
+                       summary: "Create file failed")
+        }
+
+        guard data.count <= Self.createFileMaxBytes else {
+            return err("File would be \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)) — the limit is 20 MB. Produce something smaller.",
+                       summary: "Create file failed")
+        }
+
+        // Stage under the exact filename (import derives name + type from the
+        // URL), then hand it to the shared Files pipeline.
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("otto-createfile-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let staged = scratch.appendingPathComponent(filename)
+        do {
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            try data.write(to: staged)
+        } catch {
+            return err("Couldn't stage the file: \(error.localizedDescription)", summary: "Create file failed")
+        }
+
+        do {
+            var file = try await appState.importFile(from: staged)
+            let notes = string(input, "notes") ?? ""
+            file.notes = notes.isEmpty ? "Created by Otto in chat" : notes
+            file.tags = ["agent-created"]
+            await appState.updateFile(file)
+            return ok(
+                """
+                Created file: \(file.id.uuidString) — \(filename) (\(file.formattedSize))
+                Saved to Otto's Files tab. A downloadable file card was attached to your reply automatically — do NOT call attach_item_preview for this file, and don't repeat its full contents in prose. You can reference it inline as [\(filename)](otto://file/\(file.id.uuidString)).
+                """,
+                summary: "Created \(filename) (\(file.formattedSize))"
+            )
+        } catch {
+            return err("Import failed: \(error.localizedDescription)", summary: "Create file failed")
+        }
     }
 
     // MARK: - GenMedia (fal.ai)

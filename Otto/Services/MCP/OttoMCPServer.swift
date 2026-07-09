@@ -208,13 +208,36 @@ final class OttoMCPServer: @unchecked Sendable {
     /// `input_schema` → `inputSchema`. Everything else (name, description, JSON
     /// schema body) maps 1:1, so we just reshape.
     private func mcpToolList() -> [[String: Any]] {
-        return OttoTools.all.map { brainTool -> [String: Any] in
+        return catalogSync().map { brainTool -> [String: Any] in
             var out: [String: Any] = [:]
             if let n = brainTool["name"] { out["name"] = n }
             if let d = brainTool["description"] { out["description"] = d }
             if let s = brainTool["input_schema"] { out["inputSchema"] = s }
             return out
         }
+    }
+
+    /// Build the tool catalogue including the user's custom-tab tools. AppState
+    /// is MainActor-bound, so hop over and wait — same pattern as
+    /// `executeToolSync`. Each `tools/list` rebuilds fresh, so tabs created
+    /// mid-run appear on the CLI's next session without an app restart.
+    private func catalogSync() -> [[String: Any]] {
+        guard let state = appState else { return OttoTools.catalog(customTabs: []) }
+        let sem = DispatchSemaphore(value: 0)
+        let box = CatalogBox()
+        Task { @MainActor in
+            box.value = OttoTools.catalog(customTabs: state.customTabs)
+            sem.signal()
+        }
+        let waitResult = sem.wait(timeout: .now() + 10)
+        guard waitResult == .success, let tools = box.value else {
+            return OttoTools.catalog(customTabs: [])
+        }
+        return tools
+    }
+
+    private final class CatalogBox: @unchecked Sendable {
+        var value: [[String: Any]]?
     }
 
     /// Hop to MainActor, run the tool via `OttoToolExecutor`, wait for result.

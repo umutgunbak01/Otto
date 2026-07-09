@@ -138,6 +138,61 @@ struct ChatSession: Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Plain-text transcript flattening
+
+/// Flattens turn logs into role-prefixed text for backends that re-feed
+/// conversation history as prompt text: every Claude / Codex CLI run, and
+/// the history replay that seeds a fresh Hermes ACP session after an app
+/// restart.
+///
+/// Tool-use inputs and tool results ride along in compact bracketed form —
+/// truncated, but present. Much of a conversation's substance lives only in
+/// tool payloads (a `visualize` table, a `search_items` result), so a
+/// text-only flatten made reopened conversations forget their own content.
+enum ChatTranscript {
+    /// Per-block caps keep one giant tool payload from eating the budget.
+    private static let toolInputCap = 2_000
+    private static let toolResultCap = 800
+
+    /// Every turn, role-prefixed, blank-line separated. Empty turns dropped.
+    static func flatten(_ turns: [ChatTurn]) -> String {
+        turns.compactMap(flattenTurn).joined(separator: "\n\n")
+    }
+
+    /// One turn → "User: …" / "Assistant: …", or nil if it has no content.
+    static func flattenTurn(_ turn: ChatTurn) -> String? {
+        var pieces: [String] = []
+        for block in turn.blocks {
+            switch block {
+            case .text(let s):
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { pieces.append(trimmed) }
+            case .toolUse(_, let name, let input):
+                pieces.append("[called \(name) with \(clip(compactJSON(input), toolInputCap))]")
+            case .toolResult(_, let content, let isError):
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { continue }
+                pieces.append("[\(isError ? "tool error" : "tool result"): \(clip(trimmed, toolResultCap))]")
+            }
+        }
+        guard !pieces.isEmpty else { return nil }
+        let role = turn.role == "assistant" ? "Assistant" : "User"
+        return "\(role): \(pieces.joined(separator: "\n"))"
+    }
+
+    private static func clip(_ s: String, _ limit: Int) -> String {
+        s.count <= limit ? s : String(s.prefix(limit)) + "…"
+    }
+
+    private static func compactJSON(_ value: JSONValue) -> String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: value.anyValue,
+            options: [.sortedKeys, .fragmentsAllowed]
+        ), let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
+    }
+}
+
 // MARK: - Tool-calling chat types
 
 /// A full conversational turn — one role speaking once, potentially multiple content blocks

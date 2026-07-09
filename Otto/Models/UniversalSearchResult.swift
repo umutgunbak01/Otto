@@ -234,7 +234,7 @@ struct UniversalSearchResult: Identifiable, Equatable {
 struct SearchOptions {
     var includeContent: Bool = false
     var includeArchived: Bool = false
-    var contentTypes: Set<ContentType> = Set(ContentType.allCases)
+    var contentTypes: Set<ContentType> = Set(ContentType.searchable)
     var dateFilter: DateFilterOption = .anytime
     var customStartDate: Date?
     var customEndDate: Date?

@@ -12,6 +12,11 @@ struct Meeting: Identifiable, Codable {
     var meetingDate: Date
     var domainTagIds: [UUID]
     var firefliesId: String? // Link to Fireflies transcript ID
+    /// Locally-captured transcript ("[HH:mm:ss] Me: …" lines) for meetings
+    /// recorded by Otto itself. Fireflies meetings leave this nil and fetch
+    /// their transcript live via `firefliesId`. Optional so meetings saved
+    /// before this field existed keep decoding.
+    var transcript: String?
     var createdAt: Date
     var updatedAt: Date
 
@@ -27,6 +32,7 @@ struct Meeting: Identifiable, Codable {
         meetingDate: Date = Date(),
         domainTagIds: [UUID] = [],
         firefliesId: String? = nil,
+        transcript: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -41,6 +47,7 @@ struct Meeting: Identifiable, Codable {
         self.meetingDate = meetingDate
         self.domainTagIds = domainTagIds
         self.firefliesId = firefliesId
+        self.transcript = transcript
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

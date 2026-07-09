@@ -18,6 +18,8 @@ struct OttoSidebar: View {
     @AppStorage(AgentService.Codex.modelIdDefaultsKey) private var storedCodexModelId: String = AgentService.Codex.defaultModelId
     @AppStorage(AgentBackend.defaultsKey) private var rawBackend: String = AgentBackend.claude.rawValue
 
+    @State private var showingNewTabEditor = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Scrollable nav list — when the window is short, this scrolls so
@@ -55,6 +57,18 @@ struct OttoSidebar: View {
                     ForEach(xTypes, id: \.self) { type in
                         navItem(type)
                     }
+
+                    sectionHeader("Tabs")
+                    ForEach(appState.customTabs) { tab in
+                        customTabItem(tab)
+                    }
+                    OttoNavItem(
+                        systemImage: "plus",
+                        label: "New tab",
+                        count: nil,
+                        isActive: false,
+                        action: { showingNewTabEditor = true }
+                    )
                 }
                 .padding(.bottom, 12)
             }
@@ -102,6 +116,14 @@ struct OttoSidebar: View {
                 .frame(width: 1)
                 .frame(maxHeight: .infinity)
         }
+        .sheet(isPresented: $showingNewTabEditor) {
+            CustomTabEditorSheet(existing: nil) { tab in
+                // Jump straight into the freshly created tab.
+                showingHome = false
+                showingMap = false
+                appState.selectedCustomTabId = tab.id
+            }
+        }
     }
 
     // MARK: - Pieces
@@ -121,11 +143,27 @@ struct OttoSidebar: View {
             systemImage: type.icon,
             label: type.label,
             count: type.count(appState),
-            isActive: !showingHome && !showingMap && appState.selectedTab == type.tab,
+            isActive: !showingHome && !showingMap
+                && appState.selectedCustomTabId == nil
+                && appState.selectedTab == type.tab,
             action: {
                 showingHome = false
                 showingMap = false
                 appState.selectedTab = type.tab
+            }
+        )
+    }
+
+    private func customTabItem(_ tab: CustomTabDefinition) -> some View {
+        OttoNavItem(
+            systemImage: tab.icon,
+            label: tab.name,
+            count: appState.customRecords.filter { $0.tabId == tab.id }.count,
+            isActive: !showingHome && !showingMap && appState.selectedCustomTabId == tab.id,
+            action: {
+                showingHome = false
+                showingMap = false
+                appState.selectedCustomTabId = tab.id
             }
         )
     }

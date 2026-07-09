@@ -90,10 +90,27 @@ struct MainView: View {
         .sheet(isPresented: $showingIntegrations) {
             IntegrationsView()
         }
+        .onChange(of: appState.locateItemId) { _, itemId in
+            // A locate request targets a list view — leave Home/Map so the
+            // destination tab (already set by AppState.locate) is visible.
+            if itemId != nil {
+                showingHome = false
+                showingMap = false
+            }
+        }
         .onChange(of: appState.pendingChatPrompt) { _, prompt in
             // Prompts can arrive from the menu bar / voice path — make sure
             // the chat (Home) is on screen so OttoChatView consumes them.
             if prompt != nil {
+                showingHome = true
+                showingMap = false
+            }
+        }
+        .onChange(of: appState.showVoiceOverlay) { _, shown in
+            // Voice mode mirrors its conversation into the chat — bring the
+            // chat (Home) on screen so the user sees it stream behind the
+            // floating voice panel.
+            if shown {
                 showingHome = true
                 showingMap = false
             }
@@ -151,6 +168,17 @@ struct MainView: View {
 
     @ViewBuilder
     private var listContent: some View {
+        // A selected custom tab wins over the built-in switch; assigning
+        // `selectedTab` clears the custom selection (didSet in AppState).
+        if let customTab = appState.customTabs.first(where: { $0.id == appState.selectedCustomTabId }) {
+            CustomTabListView(tab: customTab)
+        } else {
+            builtInListContent
+        }
+    }
+
+    @ViewBuilder
+    private var builtInListContent: some View {
         switch appState.selectedTab {
         case .todo:       TodoListView()
         case .note:       NoteListView()

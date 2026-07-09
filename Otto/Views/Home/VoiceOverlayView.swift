@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Full-screen voice-mode overlay presented over OttoChatView.
+/// Compact voice-mode panel floating at the bottom of the window. The regular
+/// chat interface stays visible (and interactive) behind it — the voice
+/// session mirrors its turns into a chat conversation, so text, tool chips,
+/// and preview cards stream into the chat while Otto speaks.
 /// Starts the voice session on appear and tears it down on dismiss.
 struct VoiceOverlayView: View {
     @Environment(AppState.self) private var appState
@@ -12,53 +15,12 @@ struct VoiceOverlayView: View {
     @State private var pulsePhase: Double = 0
 
     var body: some View {
-        ZStack {
-            // Dimmed background with a faint radial glow.
-            Rectangle()
-                .fill(Theme.Colors.background)
-                .ignoresSafeArea()
-                .overlay(
-                    RadialGradient(
-                        colors: [orbColor.opacity(0.15), .clear],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 400
-                    )
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-                )
-
-            VStack(spacing: Theme.Spacing.xl) {
-                HStack {
-                    Spacer()
-                    Button {
-                        appState.voice.stop()
-                        isPresented = false
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.Colors.secondaryBackground)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                }
-                .padding(.horizontal, Theme.Spacing.xl)
-                .padding(.top, Theme.Spacing.lg)
-
-                Spacer()
-
-                orb
-
-                phaseLabel
-
-                transcriptView
-
-                Spacer()
-            }
+        VStack {
+            Spacer()
+            panel
+                .padding(.bottom, 24)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await appState.voice.start(appState: appState)
             updatePulseAnimation(for: appState.voice.phase)
@@ -69,6 +31,67 @@ struct VoiceOverlayView: View {
         .onDisappear {
             appState.voice.stop()
         }
+    }
+
+    // MARK: - Panel
+
+    private var panel: some View {
+        HStack(spacing: Theme.Spacing.md) {
+            orb
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(phaseText)
+                    .font(Theme.Typography.headline)
+                    .foregroundStyle(orbColor)
+                Text(phaseHint)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 340, alignment: .leading)
+
+            if canInterrupt {
+                Button {
+                    appState.voice.interrupt()
+                } label: {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(orbColor)
+                        .frame(width: 26, height: 26)
+                        .background(orbColor.opacity(0.15))
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(orbColor.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .help("Interrupt Otto — back to listening")
+            }
+
+            Button {
+                appState.voice.stop()
+                isPresented = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .frame(width: 26, height: 26)
+                    .background(Theme.Colors.secondaryBackground)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .help("End voice mode")
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                .fill(Theme.Colors.panel)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                        .strokeBorder(orbColor.opacity(0.25), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 8)
+        )
     }
 
     private func updatePulseAnimation(for phase: VoiceSessionManager.Phase) {
@@ -88,49 +111,43 @@ struct VoiceOverlayView: View {
 
     private var orb: some View {
         let level = CGFloat(currentLevel)
-        let passiveScale = 1.0 + 0.03 * pulsePhase
-        let activeScale = 1.0 + 0.35 * level
+        let passiveScale = 1.0 + 0.04 * pulsePhase
+        let activeScale = 1.0 + 0.30 * level
         let scale = max(passiveScale, activeScale)
 
         return ZStack {
-            // Outer bloom.
             Circle()
-                .fill(orbColor.opacity(0.18))
-                .frame(width: 260, height: 260)
-                .blur(radius: 40)
+                .fill(orbColor.opacity(0.20))
+                .frame(width: 52, height: 52)
+                .blur(radius: 8)
 
-            // Mid ring.
-            Circle()
-                .stroke(orbColor.opacity(0.35), lineWidth: 1)
-                .frame(width: 200, height: 200)
-
-            // Core gradient.
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [orbColor.opacity(0.95), orbColor.opacity(0.25), .clear],
+                        colors: [orbColor.opacity(0.95), orbColor.opacity(0.30), .clear],
                         center: .center,
-                        startRadius: 10,
-                        endRadius: 110
+                        startRadius: 3,
+                        endRadius: 26
                     )
                 )
-                .frame(width: 180, height: 180)
+                .frame(width: 42, height: 42)
                 .overlay(
                     Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [orbColor.opacity(0.8), orbColor.opacity(0.3)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.5
-                        )
+                        .stroke(orbColor.opacity(0.6), lineWidth: 1)
                 )
-                .shadow(color: orbColor.opacity(0.55), radius: 20, x: 0, y: 0)
-                .shadow(color: orbColor.opacity(0.30), radius: 50, x: 0, y: 0)
+                .shadow(color: orbColor.opacity(0.5), radius: 8, x: 0, y: 0)
         }
+        .frame(width: 52, height: 52)
         .scaleEffect(scale)
         .animation(.easeOut(duration: 0.12), value: level)
+    }
+
+    /// Interrupt is only meaningful while a turn is in flight.
+    private var canInterrupt: Bool {
+        switch appState.voice.phase {
+        case .thinking, .speaking: return true
+        default: return false
+        }
     }
 
     private var currentLevel: Float {
@@ -151,20 +168,6 @@ struct VoiceOverlayView: View {
 
     // MARK: - Phase label
 
-    private var phaseLabel: some View {
-        VStack(spacing: Theme.Spacing.xs) {
-            Text(phaseText)
-                .font(Theme.Typography.headline)
-                .foregroundStyle(orbColor)
-
-            Text(phaseHint)
-                .font(Theme.Typography.caption)
-                .foregroundStyle(Theme.Colors.secondaryText)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-        }
-    }
-
     private var phaseText: String {
         switch appState.voice.phase {
         case .idle: return "Starting…"
@@ -181,50 +184,9 @@ struct VoiceOverlayView: View {
         case .idle: return "Waking up the mic…"
         case .listening: return "Just start talking — Otto will reply when you pause."
         case .transcribing: return "Catching what you said…"
-        case .thinking: return "Working on your request…"
-        case .speaking: return "Start talking anytime to interrupt."
+        case .thinking: return "Working on your request — hit stop to cancel."
+        case .speaking: return "Hit stop to interrupt."
         case .error(let msg): return msg
         }
-    }
-
-    // MARK: - Transcript
-
-    @ViewBuilder
-    private var transcriptView: some View {
-        let user = appState.voice.liveTranscript
-        let assistant = appState.voice.lastResponse
-
-        VStack(spacing: Theme.Spacing.md) {
-            if !user.isEmpty {
-                transcriptBubble(label: "You", text: user, color: Theme.Colors.accent)
-            }
-            if !assistant.isEmpty {
-                transcriptBubble(label: "Otto", text: assistant, color: Theme.Colors.aiAccent)
-            }
-        }
-        .frame(maxWidth: 520)
-        .padding(.horizontal, Theme.Spacing.xl)
-    }
-
-    private func transcriptBubble(label: String, text: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(label.uppercased())
-                .font(Theme.Typography.small)
-                .foregroundStyle(color.opacity(0.8))
-            Text(text)
-                .font(Theme.Typography.body)
-                .foregroundStyle(Theme.Colors.text)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(Theme.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(Theme.Colors.secondaryBackground)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                        .strokeBorder(color.opacity(0.2), lineWidth: 0.5)
-                )
-        )
     }
 }

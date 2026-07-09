@@ -89,6 +89,10 @@ final class AppState {
     var companies: [Company] = []
     var events: [Event] = []
     var communities: [Community] = []
+
+    // User-defined custom tabs + their records.
+    var customTabs: [CustomTabDefinition] = []
+    var customRecords: [CustomRecord] = []
     /// Cached city → coordinate map, hydrated from CityGeocoder so map pins
     /// render instantly and re-render as new cities resolve.
     var cityCoordinates: [String: CityCoordinate] = [:]
@@ -104,7 +108,14 @@ final class AppState {
 
 
     // UI State
-    var selectedTab: ContentType = .todo
+    // Assigning a built-in tab always leaves custom-tab mode — every existing
+    // navigation path (sidebar, notifications, chat deep links) sets this.
+    var selectedTab: ContentType = .todo {
+        didSet { selectedCustomTabId = nil }
+    }
+    /// Non-nil when a user-defined custom tab is the active list view; wins
+    /// over `selectedTab` in MainView's content switch.
+    var selectedCustomTabId: UUID?
     var isLoading: Bool = false
     var isProcessingInput: Bool = false
     var errorMessage: String?
@@ -150,6 +161,16 @@ final class AppState {
     // Locate item (used by Home search to scroll to and select an item)
     var locateItemId: UUID?
 
+    /// Navigate to an item's home tab and ask that tab's list view to open /
+    /// highlight it. List views watch `locateItemId`; MainView watches it too
+    /// so a locate issued from Home (chat cards, universal search) leaves the
+    /// Home view and lands on the list.
+    @MainActor
+    func locate(type: ContentType, id: UUID) {
+        selectedTab = type
+        locateItemId = id
+    }
+
     /// When the app launched. Drives the UPTIME counter in the Otto top bar.
     let launchDate: Date = .now
 
@@ -164,6 +185,7 @@ final class AppState {
     let voice = VoiceSessionManager()
     let wakeWord = WakeWordService()
     let meetingPrep = MeetingPrepService()
+    let meetingTranscription = MeetingTranscriptionCoordinator()
     private let notifications = NotificationService.shared
     private let fireflies = FirefliesService.shared
     private let gmail = GmailService.shared
@@ -285,6 +307,8 @@ final class AppState {
             companies = store.companies
             events = store.events
             communities = store.communities
+            customTabs = store.customTabs.sorted { $0.sortIndex < $1.sortIndex }
+            customRecords = store.customRecords
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -304,9 +328,40 @@ final class AppState {
         // Backfill OG metadata for bookmarks that don't have it yet
         fetchMissingBookmarkMetadata()
 
+        // Backfill spreadsheet text for .xlsx files imported before native
+        // extraction existed — makes them searchable (and shows the
+        // "Searchable" badge in the Files tab).
+        backfillSpreadsheetText()
+
         // One-shot last-contact backfill on launch — picks up activity that
         // arrived in emails/calendar/X while the indexer logic was new.
         await recomputeConnectionActivity()
+    }
+
+    /// Launch backfill: .xlsx files imported before `XLSXReader` existed
+    /// carry no `extractedText`, so search skips them and the Files tab shows
+    /// no "Searchable" badge. Parse each one off the main thread and persist.
+    /// Re-runs are cheap — only files still missing text are attempted.
+    /// Legacy .xls (pre-2007 binary format) can't be parsed and is skipped.
+    private func backfillSpreadsheetText() {
+        let candidates = files.filter { file in
+            file.fileType == .excel
+                && file.fileExtension.lowercased() == "xlsx"
+                && (file.extractedText ?? "").isEmpty
+        }
+        guard !candidates.isEmpty else { return }
+        Task {
+            for var file in candidates {
+                let url = await FileStorageService.shared.getFileURL(for: file)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let text = await Task.detached(priority: .utility) {
+                    XLSXReader.csvText(from: url)
+                }.value
+                guard let text, !text.isEmpty else { continue }
+                file.extractedText = text
+                await updateFile(file)
+            }
+        }
     }
 
     // MARK: - Launch / Foreground Auto-Sync
@@ -1014,6 +1069,97 @@ final class AppState {
         }
         communities.removeAll { $0.id == community.id }
         try? await persistence.updateCommunities(communities)
+    }
+
+    // MARK: - Custom Tabs
+
+    @MainActor
+    func addCustomTab(name: String, icon: String, fields: [CustomFieldDefinition]) async -> CustomTabDefinition {
+        let tab = CustomTabDefinition(
+            name: name,
+            slug: CustomTabSlug.make(from: name, existing: customTabs),
+            icon: icon,
+            fields: fields,
+            sortIndex: (customTabs.map { $0.sortIndex }.max() ?? -1) + 1
+        )
+        customTabs.append(tab)
+        try? await persistence.updateCustomTabs(customTabs)
+        return tab
+    }
+
+    @MainActor
+    func updateCustomTab(_ tab: CustomTabDefinition) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        customTabs[index] = tab
+        // Drop record values whose field definition no longer exists.
+        let validFieldIds = Set(tab.fields.map { $0.id })
+        var recordsChanged = false
+        for i in customRecords.indices where customRecords[i].tabId == tab.id {
+            let orphaned = customRecords[i].values.keys.filter { !validFieldIds.contains($0) }
+            guard !orphaned.isEmpty else { continue }
+            for key in orphaned { customRecords[i].values.removeValue(forKey: key) }
+            recordsChanged = true
+        }
+        try? await persistence.updateCustomTabs(customTabs)
+        if recordsChanged { try? await persistence.updateCustomRecords(customRecords) }
+    }
+
+    @MainActor
+    func deleteCustomTab(_ tab: CustomTabDefinition) async {
+        let capturedTab = tab
+        let capturedRecords = customRecords.filter { $0.tabId == tab.id }
+        undoService.pushUndo(label: "Tab deleted") { [self] in
+            customTabs.append(capturedTab)
+            customTabs.sort { $0.sortIndex < $1.sortIndex }
+            customRecords.append(contentsOf: capturedRecords)
+            try? await persistence.updateCustomTabs(customTabs)
+            try? await persistence.updateCustomRecords(customRecords)
+        }
+        if selectedCustomTabId == tab.id { selectedCustomTabId = nil }
+        customTabs.removeAll { $0.id == tab.id }
+        customRecords.removeAll { $0.tabId == tab.id }
+        try? await persistence.updateCustomTabs(customTabs)
+        try? await persistence.updateCustomRecords(customRecords)
+    }
+
+    // MARK: - Custom Records
+
+    @MainActor
+    func addCustomRecord(_ record: CustomRecord) async {
+        customRecords.insert(record, at: 0)
+        try? await persistence.updateCustomRecords(customRecords)
+    }
+
+    @MainActor
+    func updateCustomRecord(_ record: CustomRecord) async {
+        guard let index = customRecords.firstIndex(where: { $0.id == record.id }) else { return }
+        var updated = record
+        updated.updatedAt = Date()
+        customRecords[index] = updated
+        try? await persistence.updateCustomRecords(customRecords)
+    }
+
+    @MainActor
+    func deleteCustomRecord(_ record: CustomRecord) async {
+        let captured = record
+        undoService.pushUndo(label: "Record deleted") { [self] in
+            await self.addCustomRecord(captured)
+        }
+        customRecords.removeAll { $0.id == record.id }
+        try? await persistence.updateCustomRecords(customRecords)
+    }
+
+    /// Inline-cell commit: set (or clear, when nil/empty) one field value.
+    @MainActor
+    func setCustomRecordValue(on recordId: UUID, fieldId: UUID, value: CustomFieldValue?) async {
+        guard let index = customRecords.firstIndex(where: { $0.id == recordId }) else { return }
+        if let value, !value.isEmpty {
+            customRecords[index].values[fieldId] = value
+        } else {
+            customRecords[index].values.removeValue(forKey: fieldId)
+        }
+        customRecords[index].updatedAt = Date()
+        try? await persistence.updateCustomRecords(customRecords)
     }
 
     // MARK: - City Geocoding

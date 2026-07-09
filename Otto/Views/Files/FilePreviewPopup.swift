@@ -13,7 +13,14 @@ struct FilePreviewPopup: View {
     var onClose: (() -> Void)?
 
     @State private var previewURL: URL?
-    @State private var isFullScreen: Bool = false
+    @State private var loadedText: String?
+    @State private var textLoadFinished = false
+
+    // Parsed .xlsx workbook (agent-created or imported). nil while loading;
+    // `xlsxLoadFinished` + nil = unparseable → icon/open-externally fallback.
+    @State private var xlsxSheets: [XLSXReader.Sheet]?
+    @State private var xlsxLoadFinished = false
+    @State private var selectedSheet = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,19 +33,15 @@ struct FilePreviewPopup: View {
             previewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(
-            minWidth: isFullScreen ? 900 : 500,
-            idealWidth: isFullScreen ? 1200 : 650,
-            maxWidth: .infinity,
-            minHeight: isFullScreen ? 700 : 400,
-            idealHeight: isFullScreen ? 900 : 600,
-            maxHeight: .infinity
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.Colors.background)
         .onAppear {
             loadPreviewURL()
         }
-        .animation(.easeInOut(duration: 0.2), value: isFullScreen)
+        .task(id: file.id) {
+            await loadTextContent()
+            await loadWorkbook()
+        }
     }
 
     // MARK: - Header
@@ -76,19 +79,6 @@ struct FilePreviewPopup: View {
                 .help("Open in Finder")
                 #endif
 
-                // Full screen toggle
-                Button {
-                    isFullScreen.toggle()
-                } label: {
-                    Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
-                .buttonStyle(.plain)
-                #if os(macOS)
-                .help(isFullScreen ? "Exit Full Screen" : "Full Screen")
-                #endif
-
                 // Delete — closes the popup, then removes the file. Mirrors
                 // the row-level trash button (NoteRowView-style) so the
                 // affordance is discoverable from both surfaces.
@@ -118,6 +108,7 @@ struct FilePreviewPopup: View {
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
             }
         }
         .padding(.horizontal, Theme.Spacing.lg)
@@ -171,7 +162,7 @@ struct FilePreviewPopup: View {
             case .excel:
                 excelPreview
             case .text:
-                csvPreview  // Plain text renders fine through the CSV viewer (it's just a text scroll view)
+                textPreview
             case .video, .audio:
                 // No in-app player — point users at Quick Look. Hover popup
                 // stays compact; the full FileDetailView has a dedicated
@@ -233,26 +224,123 @@ struct FilePreviewPopup: View {
 
     private var csvPreview: some View {
         Group {
-            if let text = csvContent, !text.isEmpty {
-                CSVTableView(csvText: text)
-            } else {
+            if let text = loadedText, !text.isEmpty {
+                // The editor snapshots the text into @State on init, so it
+                // must only appear once the real content is loaded — and be
+                // keyed to it — or it would edit a stale copy.
+                CSVTableEditor(csvText: text) { updatedText in
+                    saveEditedText(updatedText)
+                }
+                .id(file.id)
+            } else if textLoadFinished {
                 placeholderView(icon: "tablecells", message: "Unable to load CSV content")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
 
-    private var csvContent: String? {
-        if let text = file.extractedText, !text.isEmpty {
-            return text
+    private var textPreview: some View {
+        Group {
+            if let text = loadedText, !text.isEmpty {
+                ScrollView {
+                    Text(text)
+                        .font(Theme.Typography.monoBody)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Spacing.lg)
+                }
+            } else if textLoadFinished {
+                placeholderView(icon: "doc.text", message: "Unable to load text content")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        guard let url = previewURL else { return nil }
-        if let utf8Content = try? String(contentsOf: url, encoding: .utf8) {
-            return utf8Content
-        }
-        return try? String(contentsOf: url, encoding: .isoLatin1)
     }
 
+    /// Disk is the source of truth (this popup edits the file); the stored
+    /// `extractedText` is only an import-time search snapshot and may be
+    /// stale, so it's the fallback rather than the preferred source.
+    private func loadTextContent() async {
+        guard file.fileType == .csv || file.fileType == .text else { return }
+        let url = await FileStorageService.shared.getFileURL(for: file)
+        if let utf8Content = try? String(contentsOf: url, encoding: .utf8) {
+            loadedText = utf8Content
+        } else if let latin1 = try? String(contentsOf: url, encoding: .isoLatin1) {
+            loadedText = latin1
+        } else {
+            loadedText = file.extractedText
+        }
+        textLoadFinished = true
+    }
+
+    /// Persist an edited CSV: overwrite the stored file, then refresh the
+    /// FileItem's extractedText/fileSize so search and future previews see
+    /// the new content.
+    private func saveEditedText(_ text: String) {
+        var updated = file
+        updated.extractedText = text
+        updated.fileSize = Int64(text.utf8.count)
+        Task {
+            try? await FileStorageService.shared.writeText(text, for: file)
+            await appState.updateFile(updated)
+        }
+    }
+
+    /// Parsed table view (same grid the CSV preview uses, read-only) with a
+    /// sheet switcher for multi-sheet workbooks. Files XLSXReader can't parse
+    /// (.xls, encrypted, corrupt) fall back to the open-externally block.
     private var excelPreview: some View {
+        Group {
+            if let sheets = xlsxSheets, !sheets.isEmpty {
+                VStack(spacing: 0) {
+                    if sheets.count > 1 {
+                        sheetPicker(sheets)
+                        OttoDivider()
+                    }
+                    let idx = min(selectedSheet, sheets.count - 1)
+                    CSVTableEditor(csvText: XLSXReader.csv(for: sheets[idx]))
+                        .id("\(file.id)-\(idx)")
+                }
+            } else if xlsxLoadFinished {
+                excelFallback
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func sheetPicker(_ sheets: [XLSXReader.Sheet]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.Spacing.xs) {
+                ForEach(sheets.indices, id: \.self) { idx in
+                    Button {
+                        selectedSheet = idx
+                    } label: {
+                        Text(sheets[idx].name)
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(idx == selectedSheet ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                            .padding(.horizontal, Theme.Spacing.sm)
+                            .padding(.vertical, 4)
+                            .background(idx == selectedSheet ? Theme.Colors.bg1 : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.xs)
+        }
+    }
+
+    private var excelFallback: some View {
         VStack(spacing: Theme.Spacing.lg) {
             Spacer()
 
@@ -289,6 +377,21 @@ struct FilePreviewPopup: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Parse the workbook off the main thread — XLSXReader is pure CPU
+    /// (unzip + XML) and a big sheet shouldn't hitch the popup animation.
+    private func loadWorkbook() async {
+        guard file.fileType == .excel else { return }
+        xlsxLoadFinished = false
+        xlsxSheets = nil
+        selectedSheet = 0
+        let url = await FileStorageService.shared.getFileURL(for: file)
+        let sheets = await Task.detached(priority: .userInitiated) {
+            try? XLSXReader.read(url: url)
+        }.value
+        xlsxSheets = sheets
+        xlsxLoadFinished = true
     }
 
     private func placeholderView(icon: String, message: String) -> some View {

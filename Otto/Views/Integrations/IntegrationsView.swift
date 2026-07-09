@@ -5,7 +5,20 @@ import AppKit
 struct IntegrationsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
-    @State private var expandedIntegration: IntegrationType?
+    /// Non-nil while the detail page for an integration replaces the grid.
+    @State private var detailIntegration: IntegrationType?
+    @State private var searchText = ""
+    @State private var selectedCategory: IntegrationCategory = .all
+    @State private var hoveredIntegration: IntegrationType?
+
+    enum IntegrationCategory: String, CaseIterable {
+        case all = "All"
+        case google = "Google"
+        case productivity = "Productivity"
+        case social = "Social"
+        case developer = "Developer"
+        case media = "Media"
+    }
 
     enum IntegrationType: String, CaseIterable {
         case fireflies = "Fireflies"
@@ -20,6 +33,7 @@ struct IntegrationsView: View {
         case twitter = "X (Twitter)"
         case supabase = "Custom Database"
         case genmedia = "GenMedia (fal.ai)"
+        case customMCP = "Custom MCP Servers"
 
         var icon: String {
             switch self {
@@ -35,6 +49,7 @@ struct IntegrationsView: View {
             case .twitter: return "text.bubble"
             case .supabase: return "externaldrive.connected.to.line.below"
             case .genmedia: return "wand.and.stars"
+            case .customMCP: return "server.rack"
             }
         }
 
@@ -52,28 +67,51 @@ struct IntegrationsView: View {
             case .twitter: return "Import tweets, DMs, followers, and bookmarks"
             case .supabase: return "Read/write your own Supabase projects via the official MCP server"
             case .genmedia: return "Generate images, video, audio, and music with fal.ai models"
+            case .customMCP: return "Connect any MCP server — local commands or remote URLs — to give the agent new tools"
+            }
+        }
+
+        var category: IntegrationCategory {
+            switch self {
+            case .gmail, .googleCalendar, .googleCalendarLive, .googleDrive: return .google
+            case .fireflies, .todoist, .notion, .tally: return .productivity
+            case .linkedin, .twitter: return .social
+            case .supabase, .customMCP: return .developer
+            case .genmedia: return .media
             }
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            header
+            if let integration = detailIntegration {
+                detailHeader(integration)
 
-            Divider()
+                Divider()
 
-            // Integration List
-            ScrollView {
-                VStack(spacing: Theme.Spacing.md) {
-                    ForEach(IntegrationType.allCases, id: \.self) { integration in
-                        integrationRow(integration)
+                ScrollView {
+                    Group {
+                        if isConnected(integration) {
+                            expandedContent(for: integration)
+                        } else {
+                            disconnectedDetail(integration)
+                        }
                     }
+                    .padding(Theme.Spacing.xl)
                 }
-                .padding(Theme.Spacing.xl)
+            } else {
+                header
+
+                searchField
+                    .padding(.horizontal, Theme.Spacing.xl)
+
+                categoryPills
+                    .padding(.vertical, Theme.Spacing.lg)
+
+                integrationsGrid
             }
         }
-        .frame(width: 600, height: 500)
+        .frame(width: 720, height: 620)
         .background(Theme.Colors.background)
         .sheet(isPresented: $showingTodoistTokenInput) {
             todoistTokenInputSheet
@@ -98,6 +136,9 @@ struct IntegrationsView: View {
         }
         .sheet(isPresented: $showingTallyKeyInput) {
             tallyKeyInputSheet
+        }
+        .sheet(isPresented: $showingCustomMCPInput) {
+            customMCPInputSheet
         }
     }
 
@@ -215,6 +256,28 @@ struct IntegrationsView: View {
             Spacer()
 
             Button {
+                syncAllRecent()
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    if isAnyRecentSyncRunning {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 12))
+                    }
+                    Text(isAnyRecentSyncRunning ? "Syncing…" : "Sync recent")
+                }
+                .font(Theme.Typography.caption)
+            }
+            .buttonStyle(GhostButtonStyle())
+            .disabled(isAnyRecentSyncRunning)
+            #if os(macOS)
+            .help("Sync recent items from every connected integration at once")
+            #endif
+
+            Button {
                 dismiss()
             } label: {
                 Image(systemName: "xmark")
@@ -229,107 +292,313 @@ struct IntegrationsView: View {
         .padding(Theme.Spacing.xl)
     }
 
-    // MARK: - Integration Row
+    // MARK: - Sync All Recent
 
-    private func integrationRow(_ integration: IntegrationType) -> some View {
-        VStack(spacing: 0) {
-            // Main Row
-            HStack(spacing: Theme.Spacing.lg) {
-                // Icon
-                Image(systemName: integration.icon)
-                    .font(.system(size: 24))
-                    .foregroundStyle(integrationColor(integration))
-                    .frame(width: 44, height: 44)
-                    .background(integrationColor(integration).opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+    /// True while any of the fan-out syncs is running — also lights up when
+    /// a sync was started from an individual card, so the header button
+    /// can't stack a second pull on top of it.
+    private var isAnyRecentSyncRunning: Bool {
+        appState.isLoadingFireflies || appState.isLoadingGmail
+            || appState.isLoadingCalendar || appState.isLoadingTodoist
+            || appState.isLoadingNotion || appState.isLoadingX
+    }
 
-                // Info
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Text(integration.rawValue)
-                            .font(Theme.Typography.headline)
+    /// Fan out the lightest "recent" sync every connected integration
+    /// offers — the same calls the per-card buttons make, fired as parallel
+    /// tasks so they all run at once. Each card's own spinner and error row
+    /// report per-integration progress; integrations mid-sync or awaiting
+    /// Google re-auth are skipped.
+    private func syncAllRecent() {
+        if isConnected(.fireflies), !appState.isLoadingFireflies {
+            Task { await appState.syncFirefliesNow() }
+        }
+        if appState.isGmailConnected, !appState.needsGoogleReauth, !appState.isLoadingGmail {
+            Task { await appState.syncGmailEmails() }
+        }
+        if appState.isCalendarConnected, !appState.needsGoogleReauth, !appState.isLoadingCalendar {
+            Task { await appState.syncCalendarEvents() }
+        }
+        if appState.isTodoistConnected, !appState.isLoadingTodoist {
+            Task { await appState.syncTodoistTasks() }
+        }
+        if appState.isNotionConnected, !appState.isLoadingNotion {
+            Task { await appState.syncNotionPages() }
+        }
+        if appState.isXConnected, !appState.isLoadingX {
+            Task { await appState.syncX() }
+        }
+    }
 
-                        if isConnected(integration) {
-                            if appState.needsGoogleReauth && (integration == .gmail || integration == .googleCalendar) {
-                                Text("Session Expired")
-                                    .font(Theme.Typography.small)
-                                    .foregroundStyle(Theme.Colors.amber)
-                                    .padding(.horizontal, Theme.Spacing.sm)
-                                    .padding(.vertical, 2)
-                                    .background(Theme.Colors.amber.opacity(0.1))
-                                    .clipShape(Capsule())
-                            } else {
-                                Text("Connected")
-                                    .font(Theme.Typography.small)
-                                    .foregroundStyle(Theme.Colors.green)
-                                    .padding(.horizontal, Theme.Spacing.sm)
-                                    .padding(.vertical, 2)
-                                    .background(Theme.Colors.green.opacity(0.1))
-                                    .clipShape(Capsule())
-                            }
-                        }
-                    }
+    // MARK: - Search & Category Filters
 
-                    Text(integration.description)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
+    private var searchField: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.Colors.tertiaryText)
 
-                Spacer()
+            TextField("Search apps…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(Theme.Typography.body)
 
-                // Status / Actions
-                if isConnected(integration) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            if expandedIntegration == integration {
-                                expandedIntegration = nil
-                            } else {
-                                expandedIntegration = integration
-                            }
-                        }
-                    } label: {
-                        Image(systemName: expandedIntegration == integration ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                    }
-                    .buttonStyle(.plain)
-                } else if canConnect(integration) {
-                    Button {
-                        connectIntegration(integration)
-                    } label: {
-                        Text("Connect")
-                            .font(Theme.Typography.caption)
-                            .padding(.horizontal, Theme.Spacing.md)
-                            .padding(.vertical, Theme.Spacing.xs)
-                            .background(Theme.Colors.accent)
-                            .foregroundStyle(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Text("Coming Soon")
-                        .font(Theme.Typography.small)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
-            }
-            .padding(Theme.Spacing.lg)
-
-            // Expanded Content
-            if expandedIntegration == integration && isConnected(integration) {
-                Divider()
-                    .padding(.horizontal, Theme.Spacing.lg)
-
-                expandedContent(for: integration)
-                    .padding(Theme.Spacing.lg)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                .buttonStyle(.plain)
             }
         }
-        .background(Theme.Colors.background)
+        .padding(.horizontal, Theme.Spacing.md)
+        .frame(height: 38)
+        .background(Theme.Colors.bgInput)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
         .overlay(
             RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
         )
+    }
+
+    private var categoryPills: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Theme.Spacing.sm) {
+                ForEach(IntegrationCategory.allCases, id: \.self) { category in
+                    categoryPill(category)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+        }
+    }
+
+    private func categoryPill(_ category: IntegrationCategory) -> some View {
+        let isSelected = selectedCategory == category
+        return Button {
+            selectedCategory = category
+        } label: {
+            Text(category.rawValue)
+                .font(Theme.Typography.caption.weight(.medium))
+                .foregroundStyle(isSelected ? Theme.Colors.bg0 : Theme.Colors.textDim)
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(isSelected ? Theme.Colors.text : Color.clear)
+                )
+                .overlay(
+                    Capsule().strokeBorder(isSelected ? Color.clear : Theme.Colors.borderStrong, lineWidth: 1)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var filteredIntegrations: [IntegrationType] {
+        IntegrationType.allCases.filter { integration in
+            guard selectedCategory == .all || integration.category == selectedCategory else {
+                return false
+            }
+            let query = searchText.trimmingCharacters(in: .whitespaces)
+            guard !query.isEmpty else { return true }
+            return integration.rawValue.localizedCaseInsensitiveContains(query)
+                || integration.description.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    // MARK: - Integration Grid
+
+    private var integrationsGrid: some View {
+        ScrollView {
+            if filteredIntegrations.isEmpty {
+                VStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("No apps match \"\(searchText)\"")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.textDim)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Spacing.xxl * 2)
+            } else {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: Theme.Spacing.md),
+                        GridItem(.flexible(), spacing: Theme.Spacing.md),
+                    ],
+                    spacing: Theme.Spacing.md
+                ) {
+                    ForEach(filteredIntegrations, id: \.self) { integration in
+                        integrationCard(integration)
+                    }
+                }
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.xl)
+            }
+        }
+    }
+
+    private func integrationCard(_ integration: IntegrationType) -> some View {
+        let connected = isConnected(integration)
+        let needsReauth = appState.needsGoogleReauth
+            && (integration == .gmail || integration == .googleCalendar)
+        let hovered = hoveredIntegration == integration
+
+        return Button {
+            if connected {
+                detailIntegration = integration
+            } else if canConnect(integration) {
+                connectIntegration(integration)
+            }
+        } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: integration.icon)
+                    .font(.system(size: 17))
+                    .foregroundStyle(integrationColor(integration))
+                    .frame(width: 40, height: 40)
+                    .background(integrationColor(integration).opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(integration.rawValue)
+                        .font(Theme.Typography.headline)
+                        .foregroundStyle(Theme.Colors.text)
+                        .lineLimit(1)
+
+                    Text(integration.description)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                Spacer(minLength: 0)
+
+                if connected {
+                    Image(systemName: needsReauth ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(needsReauth ? Theme.Colors.amber : Theme.Colors.green)
+                }
+            }
+            .padding(Theme.Spacing.lg)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                    .fill(hovered ? Theme.Colors.elevatedSurface : Theme.Colors.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                    .strokeBorder(hovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.xl))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering in
+            if isHovering {
+                hoveredIntegration = integration
+            } else if hoveredIntegration == integration {
+                hoveredIntegration = nil
+            }
+        }
+        .animation(.easeInOut(duration: 0.12), value: hovered)
+    }
+
+    // MARK: - Detail Page
+
+    private func detailHeader(_ integration: IntegrationType) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Button {
+                detailIntegration = nil
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .frame(width: 24, height: 24)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Image(systemName: integration.icon)
+                .font(.system(size: 15))
+                .foregroundStyle(integrationColor(integration))
+                .frame(width: 32, height: 32)
+                .background(integrationColor(integration).opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(integration.rawValue)
+                        .font(Theme.Typography.title)
+
+                    if isConnected(integration) {
+                        if appState.needsGoogleReauth && (integration == .gmail || integration == .googleCalendar) {
+                            Text("Session Expired")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.amber)
+                                .padding(.horizontal, Theme.Spacing.sm)
+                                .padding(.vertical, 2)
+                                .background(Theme.Colors.amber.opacity(0.1))
+                                .clipShape(Capsule())
+                        } else {
+                            Text("Connected")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.green)
+                                .padding(.horizontal, Theme.Spacing.sm)
+                                .padding(.vertical, 2)
+                                .background(Theme.Colors.green.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+
+                Text(integration.description)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .frame(width: 24, height: 24)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(Theme.Spacing.xl)
+    }
+
+    /// Shown when the detail page's integration loses its connection (e.g.
+    /// the user disconnects from inside the expanded content).
+    private func disconnectedDetail(_ integration: IntegrationType) -> some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            Text("\(integration.rawValue) is not connected.")
+                .font(Theme.Typography.body)
+                .foregroundStyle(Theme.Colors.textDim)
+
+            Button {
+                connectIntegration(integration)
+            } label: {
+                Text("Connect")
+                    .font(Theme.Typography.headline)
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .background(Theme.Colors.accent)
+                    .foregroundStyle(Theme.Colors.onAccent)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, Theme.Spacing.xxl)
     }
 
     private func integrationColor(_ integration: IntegrationType) -> Color {
@@ -346,6 +615,7 @@ struct IntegrationsView: View {
         case .twitter: return Theme.Colors.text
         case .supabase: return Theme.Colors.green
         case .genmedia: return Theme.Colors.hobby
+        case .customMCP: return Theme.Colors.violet
         }
     }
 
@@ -388,6 +658,11 @@ struct IntegrationsView: View {
             return !SupabaseProjectsService.shared.allProjects().isEmpty
         case .genmedia:
             return FalAIService.shared.hasAPIKey() && GenMediaService.shared.isInstalled()
+        case .customMCP:
+            // Revision counter forces re-evaluation after add/toggle/remove —
+            // the store persists via UserDefaults, which SwiftUI can't observe.
+            let _ = customMCPRevision
+            return !CustomMCPServersStore.shared.allServers().isEmpty
         }
     }
 
@@ -417,6 +692,8 @@ struct IntegrationsView: View {
             return true // PAT-based, one or more projects
         case .genmedia:
             return true // Existing fal key + CLI install detection
+        case .customMCP:
+            return true // Manual entry or JSON paste, no auth handshake
         }
     }
 
@@ -502,6 +779,11 @@ struct IntegrationsView: View {
             // controlled by external state (fal key + binary presence). Show
             // the install instructions sheet so the user knows what to do.
             showingGenmediaSetup = true
+        case .customMCP:
+            // Open the add-server sheet fresh. Existing servers are managed
+            // inline via the expanded content (`customMCPExpandedContent`).
+            resetCustomMCPInputs()
+            showingCustomMCPInput = true
         }
     }
 
@@ -534,6 +816,8 @@ struct IntegrationsView: View {
             supabaseExpandedContent
         case .genmedia:
             genmediaExpandedContent
+        case .customMCP:
+            customMCPExpandedContent
         }
     }
 
@@ -705,6 +989,80 @@ struct IntegrationsView: View {
     @State private var genmediaTestMessage: String? = nil
     @State private var genmediaTestIsError = false
     @State private var isRunningGenmediaTest = false
+
+    // MARK: - Custom MCP Server State
+
+    /// Which pane of the Add MCP Server sheet is active. Remote-first —
+    /// same as the add-connector flow on Claude/ChatGPT, where a URL is all
+    /// most users type; local commands and raw JSON are power-user paths.
+    private enum CustomMCPAddMode: String, CaseIterable, Identifiable {
+        case remote, local, json
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .remote: return "Remote server"
+            case .local:  return "Local command"
+            case .json:   return "Paste JSON"
+            }
+        }
+    }
+
+    /// Auth selection in the sheet's Advanced section. `.auto` (the default)
+    /// probes the server on Connect and picks OAuth or no-auth itself, so
+    /// the user never has to know which one their server speaks.
+    private enum CustomMCPAuthChoice: String, CaseIterable, Identifiable {
+        case auto, headers, oauth
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .auto:    return "Auto-detect (recommended)"
+            case .headers: return "API key / custom headers"
+            case .oauth:   return "OAuth (browser sign-in)"
+            }
+        }
+    }
+
+    @State private var showingCustomMCPInput = false
+    @State private var customMCPAddMode: CustomMCPAddMode = .remote
+    @State private var customMCPJSONInput = ""
+    @State private var customMCPNameInput = ""
+    @State private var customMCPCommandInput = ""
+    @State private var customMCPArgsInput = ""     // one argument per line
+    @State private var customMCPEnvInput = ""      // KEY=VALUE per line
+    @State private var customMCPURLInput = ""
+    @State private var customMCPHeadersInput = ""  // Name: Value per line
+    @State private var customMCPAuthChoice: CustomMCPAuthChoice = .auto
+    @State private var customMCPUseSSE = false
+    @State private var customMCPShowAdvanced = false
+    @State private var customMCPClientIdInput = ""
+    @State private var customMCPClientSecretInput = ""
+    /// Remote connect in flight — the auto-detect probe runs before saving,
+    /// so the button shows progress and can't double-fire.
+    @State private var customMCPConnecting = false
+    @State private var customMCPError: String?
+    /// Server IDs with a browser sign-in currently running — disables the
+    /// row's Sign in button so a double-click can't stack two sessions.
+    @State private var customMCPSigningIn: Set<UUID> = []
+    /// Re-render trigger after add/toggle/remove — same pattern as
+    /// `supabaseProjectsRevision` below.
+    @State private var customMCPRevision = 0
+
+    private func resetCustomMCPInputs() {
+        customMCPAddMode = .remote
+        customMCPJSONInput = ""
+        customMCPNameInput = ""
+        customMCPCommandInput = ""
+        customMCPArgsInput = ""
+        customMCPEnvInput = ""
+        customMCPURLInput = ""
+        customMCPHeadersInput = ""
+        customMCPAuthChoice = .auto
+        customMCPUseSSE = false
+        customMCPShowAdvanced = false
+        customMCPClientIdInput = ""
+        customMCPClientSecretInput = ""
+        customMCPError = nil
+    }
 
     private func resetSupabaseInputs() {
         supabaseNameInput = ""
@@ -2380,6 +2738,575 @@ struct IntegrationsView: View {
         !supabaseNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !supabaseRefInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !supabasePatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // MARK: - Custom MCP Servers Expanded Content
+
+    private var customMCPExpandedContent: some View {
+        // Read servers fresh — the revision counter is referenced just to
+        // make SwiftUI re-evaluate this view after mutations.
+        let _ = customMCPRevision
+        let servers = CustomMCPServersStore.shared.allServers()
+        return VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            if servers.isEmpty {
+                Text("Connect any MCP server and the agent picks up its tools next turn. Pick a popular connector or paste a server URL — Otto opens your browser to sign in when the server needs an account.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("\(servers.count) server\(servers.count == 1 ? "" : "s") configured. Tools show up under the server's name; new tools default to ask-before-run.")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                VStack(spacing: Theme.Spacing.sm) {
+                    ForEach(servers) { server in
+                        customMCPServerRow(server)
+                    }
+                }
+            }
+
+            // Sign-in failures land here after the add sheet has closed.
+            if !showingCustomMCPInput, let customMCPError {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.amber)
+                    Text(customMCPError)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.amber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Button {
+                resetCustomMCPInputs()
+                showingCustomMCPInput = true
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "plus.circle")
+                        .font(.system(size: 13))
+                    Text(servers.isEmpty ? "Add your first MCP server" : "Add another server")
+                        .font(Theme.Typography.body)
+                }
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.sm)
+                .background(Theme.Colors.accent.opacity(0.1))
+                .foregroundStyle(Theme.Colors.accent)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func customMCPServerRow(_ server: CustomMCPServer) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(server.name)
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(server.enabled ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                    if server.usesOAuth {
+                        let connected = CustomMCPOAuthService.shared.status(for: server) == .connected
+                        Text(connected ? "Connected" : "Needs sign-in")
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(connected ? Theme.Colors.green : Theme.Colors.amber)
+                            .padding(.horizontal, Theme.Spacing.sm)
+                            .padding(.vertical, 1)
+                            .background((connected ? Theme.Colors.green : Theme.Colors.amber).opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+                }
+                Text("\(server.transport.displayName) · MCP: \(server.slug)")
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .lineLimit(1)
+                Text(server.endpointSummary)
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            if server.usesOAuth, CustomMCPOAuthService.shared.status(for: server) == .needsSignIn {
+                Button {
+                    signInCustomMCPServer(server)
+                } label: {
+                    Text(customMCPSigningIn.contains(server.id) ? "Signing in…" : "Sign in")
+                        .font(Theme.Typography.caption)
+                        .padding(.horizontal, Theme.Spacing.md)
+                        .padding(.vertical, Theme.Spacing.xs)
+                        .background(Theme.Colors.accent)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                }
+                .buttonStyle(.plain)
+                .disabled(customMCPSigningIn.contains(server.id))
+            }
+            Toggle("", isOn: Binding(
+                get: { server.enabled },
+                set: { newValue in
+                    CustomMCPServersStore.shared.setEnabled(newValue, for: server.id)
+                    customMCPRevision &+= 1
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .labelsHidden()
+            #if os(macOS)
+            .help(server.enabled ? "Disable for new turns" : "Enable for new turns")
+            #endif
+            Button(role: .destructive) {
+                CustomMCPServersStore.shared.deleteServer(server.id)
+                customMCPRevision &+= 1
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.red)
+            }
+            .buttonStyle(.plain)
+            #if os(macOS)
+            .help("Remove server")
+            #endif
+        }
+        .padding(Theme.Spacing.md)
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+    }
+
+    // MARK: - Custom MCP Server Input Sheet
+
+    private var customMCPInputSheet: some View {
+        VStack(spacing: Theme.Spacing.lg) {
+            HStack {
+                Text("Add MCP Server")
+                    .font(Theme.Typography.title)
+                Spacer()
+                Button {
+                    showingCustomMCPInput = false
+                    resetCustomMCPInputs()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Picker("", selection: $customMCPAddMode) {
+                ForEach(CustomMCPAddMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                    switch customMCPAddMode {
+                    case .remote:
+                        customMCPRemoteFields
+                    case .local:
+                        customMCPLocalFields
+                    case .json:
+                        customMCPImportFields
+                    }
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "exclamationmark.shield")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.amber)
+                Text(customMCPWarningText)
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let customMCPError {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.amber)
+                    Text(customMCPError)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.amber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button {
+                saveCustomMCPServer()
+            } label: {
+                HStack(spacing: Theme.Spacing.sm) {
+                    if customMCPConnecting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                    }
+                    Text(customMCPPrimaryButtonTitle)
+                        .font(Theme.Typography.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, Theme.Spacing.md)
+                .background(customMCPSaveEnabled ? Theme.Colors.accent : Theme.Colors.textDim.opacity(0.3))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+            .buttonStyle(.plain)
+            .disabled(!customMCPSaveEnabled)
+        }
+        .padding(Theme.Spacing.xl)
+        .frame(width: 520, height: 640)
+        .background(Theme.Colors.background)
+    }
+
+    private var customMCPPrimaryButtonTitle: String {
+        switch customMCPAddMode {
+        case .remote: return customMCPConnecting ? "Connecting…" : "Connect"
+        case .local:  return "Save"
+        case .json:   return "Import"
+        }
+    }
+
+    private var customMCPWarningText: String {
+        switch customMCPAddMode {
+        case .remote:
+            return "Remote servers see whatever the agent sends them. Only connect to services you trust."
+        case .local:
+            return "Local command servers run on your Mac with your full user permissions. Only add commands you trust."
+        case .json:
+            return "Imported servers run with your full user permissions (local commands) or see what the agent sends (remote). Only import config you trust."
+        }
+    }
+
+    private var customMCPImportFields: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text("Paste the standard MCP config snippet from the server's README — the same JSON used for Claude Desktop or Claude Code. Multiple servers import at once.")
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            TextEditor(text: $customMCPJSONInput)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(height: 220)
+                .padding(Theme.Spacing.sm)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                )
+
+            Text("Example: {\"mcpServers\": {\"github\": {\"command\": \"npx\", \"args\": [\"-y\", \"@modelcontextprotocol/server-github\"], \"env\": {\"GITHUB_TOKEN\": \"…\"}}}}")
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Remote-first pane: pick a popular connector or paste a URL. Auth is
+    /// auto-detected on Connect, so the default path is two fields, no
+    /// transport or auth vocabulary.
+    private var customMCPRemoteFields: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Pick a connector or paste a server URL. Otto checks the server when you connect and opens your browser to sign in if it needs an account.")
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            customMCPPresetGrid
+
+            customMCPTextField("Name (e.g. Linear)", text: $customMCPNameInput)
+            customMCPTextField("Server URL (https://…/mcp)", text: $customMCPURLInput)
+
+            DisclosureGroup(isExpanded: $customMCPShowAdvanced) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    Picker("Authentication", selection: $customMCPAuthChoice) {
+                        ForEach(CustomMCPAuthChoice.allCases) { choice in
+                            Text(choice.label).tag(choice)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    if customMCPAuthChoice == .headers {
+                        customMCPMultilineField(
+                            title: "Headers — Name: Value per line (values stored in Keychain)",
+                            text: $customMCPHeadersInput,
+                            height: 70
+                        )
+                    } else if customMCPAuthChoice == .oauth {
+                        Text("Leave these blank unless the server requires a pre-registered OAuth client — most register Otto automatically.")
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                        customMCPTextField("OAuth Client ID (optional)", text: $customMCPClientIdInput)
+                        customMCPSecureField("OAuth Client Secret (optional)", text: $customMCPClientSecretInput)
+                    }
+
+                    Toggle(isOn: $customMCPUseSSE) {
+                        Text("Legacy SSE transport (older servers only)")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(Theme.Colors.secondaryText)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .padding(.top, Theme.Spacing.sm)
+            } label: {
+                Text("Advanced")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.secondaryText)
+            }
+        }
+    }
+
+    /// One-tap connector gallery. Tapping fills the fields below — the URL
+    /// stays visible and editable, and Connect does the rest.
+    private var customMCPPresetGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: Theme.Spacing.sm)],
+                  spacing: Theme.Spacing.sm) {
+            ForEach(CustomMCPPreset.catalog) { preset in
+                let selected = customMCPURLInput == preset.url
+                Button {
+                    customMCPNameInput = preset.name
+                    customMCPURLInput = preset.url
+                    customMCPUseSSE = preset.legacySSE
+                    customMCPAuthChoice = .auto
+                    customMCPError = nil
+                } label: {
+                    Text(preset.name)
+                        .font(Theme.Typography.caption)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, Theme.Spacing.sm)
+                        .background(selected ? Theme.Colors.accent.opacity(0.15) : Color.primary.opacity(0.04))
+                        .foregroundStyle(selected ? Theme.Colors.accent : Theme.Colors.text)
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                                .stroke(selected ? Theme.Colors.accent.opacity(0.5) : Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var customMCPLocalFields: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            Text("Runs an MCP server as a command on your Mac — for servers installed via npx, uvx, or a local binary.")
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            customMCPTextField("Name (e.g. GitHub)", text: $customMCPNameInput)
+            customMCPTextField("Command (e.g. npx, uvx, or an absolute path)", text: $customMCPCommandInput)
+
+            customMCPMultilineField(
+                title: "Arguments — one per line",
+                text: $customMCPArgsInput,
+                height: 70
+            )
+            customMCPMultilineField(
+                title: "Environment variables — KEY=VALUE per line (values stored in Keychain)",
+                text: $customMCPEnvInput,
+                height: 70
+            )
+        }
+    }
+
+    private func customMCPTextField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(Theme.Typography.body)
+            .padding(Theme.Spacing.md)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+            )
+    }
+
+    private func customMCPSecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        SecureField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(Theme.Typography.body)
+            .padding(Theme.Spacing.md)
+            .background(Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+            )
+    }
+
+    private func customMCPMultilineField(title: String, text: Binding<String>, height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(Theme.Typography.small)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+            TextEditor(text: text)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(height: height)
+                .padding(Theme.Spacing.sm)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                )
+        }
+    }
+
+    private var customMCPSaveEnabled: Bool {
+        guard !customMCPConnecting else { return false }
+        switch customMCPAddMode {
+        case .json:
+            return !customMCPJSONInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .local:
+            return !customMCPNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !customMCPCommandInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .remote:
+            return !customMCPNameInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !customMCPURLInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private func saveCustomMCPServer() {
+        customMCPError = nil
+        switch customMCPAddMode {
+        case .json:
+            do {
+                try CustomMCPServersStore.shared.importServers(fromJSON: customMCPJSONInput)
+                finishCustomMCPAdd()
+            } catch {
+                customMCPError = error.localizedDescription
+            }
+        case .local:
+            do {
+                var secrets = CustomMCPServerSecrets()
+                secrets.env = Self.parseKeyValueLines(customMCPEnvInput, separator: "=")
+                _ = try CustomMCPServersStore.shared.addServer(
+                    name: customMCPNameInput,
+                    transport: .stdio,
+                    command: customMCPCommandInput,
+                    args: Self.parseArgLines(customMCPArgsInput),
+                    secrets: secrets
+                )
+                finishCustomMCPAdd()
+            } catch {
+                customMCPError = error.localizedDescription
+            }
+        case .remote:
+            connectRemoteCustomMCPServer()
+        }
+    }
+
+    /// Remote connect: resolve auth (probing the server on auto-detect),
+    /// save, then roll straight into the browser consent screen for OAuth
+    /// servers — the same one-click feel as adding a Claude/ChatGPT
+    /// connector.
+    private func connectRemoteCustomMCPServer() {
+        guard !customMCPConnecting else { return }
+        customMCPConnecting = true
+        Task { @MainActor in
+            defer { customMCPConnecting = false }
+
+            let auth: CustomMCPAuth
+            switch customMCPAuthChoice {
+            case .headers:
+                auth = .headers
+            case .oauth:
+                auth = .oauth
+            case .auto:
+                let trimmed = customMCPURLInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard CustomMCPServersStore.isAcceptableURL(trimmed), let url = URL(string: trimmed) else {
+                    customMCPError = CustomMCPServersError.invalidURL.localizedDescription
+                    return
+                }
+                auth = await CustomMCPOAuthService.requiresOAuth(mcpURL: url) ? .oauth : .headers
+            }
+
+            var secrets = CustomMCPServerSecrets()
+            if customMCPAuthChoice == .headers {
+                secrets.headers = Self.parseKeyValueLines(customMCPHeadersInput, separator: ":")
+            }
+            if auth == .oauth {
+                let secret = customMCPClientSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                secrets.oauthClientSecret = secret.isEmpty ? nil : secret
+            }
+
+            do {
+                let server = try CustomMCPServersStore.shared.addServer(
+                    name: customMCPNameInput,
+                    transport: customMCPUseSSE ? .sse : .http,
+                    url: customMCPURLInput,
+                    secrets: secrets,
+                    auth: auth,
+                    oauthClientId: customMCPClientIdInput
+                )
+                finishCustomMCPAdd()
+                if server.usesOAuth {
+                    signInCustomMCPServer(server)
+                }
+            } catch {
+                customMCPError = error.localizedDescription
+            }
+        }
+    }
+
+    private func finishCustomMCPAdd() {
+        customMCPRevision &+= 1
+        showingCustomMCPInput = false
+        resetCustomMCPInputs()
+    }
+
+    /// Kick off (or retry) the browser OAuth flow for a server; row status
+    /// flips to Connected via the revision bump when it lands.
+    private func signInCustomMCPServer(_ server: CustomMCPServer) {
+        guard !customMCPSigningIn.contains(server.id) else { return }
+        customMCPSigningIn.insert(server.id)
+        Task { @MainActor in
+            defer {
+                customMCPSigningIn.remove(server.id)
+                customMCPRevision &+= 1
+            }
+            do {
+                try await CustomMCPOAuthService.shared.authorize(server: server)
+            } catch {
+                NSLog("[CustomMCP] OAuth sign-in failed for %@: %@", server.slug, error.localizedDescription)
+                customMCPError = error.localizedDescription
+            }
+        }
+    }
+
+    /// One argument per line; surrounding whitespace trimmed, blank lines
+    /// dropped. No shell-style quoting — a line is one argv entry, spaces
+    /// and all.
+    private static func parseArgLines(_ raw: String) -> [String] {
+        return raw.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// `KEY=VALUE` / `Name: Value` lines → dict. Splits on the first
+    /// separator only, so values may contain the separator character.
+    private static func parseKeyValueLines(_ raw: String, separator: Character) -> [String: String] {
+        var out: [String: String] = [:]
+        for line in raw.split(whereSeparator: \.isNewline) {
+            guard let idx = line.firstIndex(of: separator) else { continue }
+            let key = line[..<idx].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: idx)...].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, !value.isEmpty else { continue }
+            out[key] = value
+        }
+        return out
     }
 
     // MARK: - GenMedia Expanded Content

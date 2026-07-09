@@ -15,7 +15,8 @@ struct HomeView: View {
     @State private var searchOptions = SearchOptions()
     @State private var selectedResult: UniversalSearchResult?
     @State private var cachedSearchResults: [UniversalSearchResult] = []
-    @State private var showFilters: Bool = false
+    @State private var expandedSections: Set<ContentType> = []
+    @State private var recentItems: [UniversalSearchResult] = []
 
     // Selection mode state
     @State private var isSelectionMode: Bool = false
@@ -27,7 +28,6 @@ struct HomeView: View {
     @FocusState private var isSearchFieldFocused: Bool
 
     // Callback for "Locate" functionality
-    var onLocateItem: ((UniversalSearchResult) -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -174,7 +174,7 @@ struct HomeView: View {
             // Selection toolbar (shown when in selection mode)
             selectionToolbar
 
-            Divider()
+            OttoDivider()
 
             // Search Results or Welcome State
             if searchText.isEmpty && !hasActiveFilters {
@@ -185,6 +185,17 @@ struct HomeView: View {
                 searchResultsList
             }
         }
+        #if os(macOS)
+        .onExitCommand {
+            if !searchText.isEmpty {
+                searchText = ""
+            } else {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isSearchMode = false
+                }
+            }
+        }
+        #endif
         .onChange(of: searchText) { _, _ in
             updateSearchResults()
         }
@@ -209,306 +220,289 @@ struct HomeView: View {
     }
 
     private func updateSearchResults() {
+        expandedSections.removeAll()
         cachedSearchResults = computeFilteredResults()
     }
 
     private var searchBar: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(spacing: Theme.Spacing.md) {
-                HStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
+            searchField
+                .padding(.horizontal, Theme.Spacing.xl)
+                .padding(.top, Theme.Spacing.lg)
 
-                    TextField("Search across all categories...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Typography.body)
-                        .focused($isSearchFieldFocused)
+            categoryChipsRow
+                .padding(.horizontal, Theme.Spacing.xl)
 
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 14))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(Theme.Spacing.md)
-                .background(Theme.Colors.background)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                )
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.lg)
-
-            // Search Options
-            searchOptionsBar
+            searchOptionsRow
                 .padding(.horizontal, Theme.Spacing.xl)
                 .padding(.bottom, Theme.Spacing.md)
         }
     }
 
-    // MARK: - Search Options Bar
+    private var searchField: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isSearchFieldFocused ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
 
-    private var searchOptionsBar: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.lg) {
-                // Include Content Toggle
-                Toggle(isOn: $searchOptions.includeContent) {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "doc.text.magnifyingglass")
-                            .font(.system(size: 11))
-                        Text("Search content")
-                            .font(Theme.Typography.caption)
-                    }
-                }
-                #if os(macOS)
-                .toggleStyle(.checkbox)
-                #endif
+            TextField("Search todos, notes, meetings, emails…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($isSearchFieldFocused)
 
-                // Include Archived Toggle
-                Toggle(isOn: $searchOptions.includeArchived) {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "archivebox")
-                            .font(.system(size: 11))
-                        Text("Include archived")
-                            .font(Theme.Typography.caption)
-                    }
-                }
-                #if os(macOS)
-                .toggleStyle(.checkbox)
-                #endif
-
-                // Filters toggle
+            if !searchText.isEmpty {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showFilters.toggle()
-                    }
+                    searchText = ""
                 } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 12))
-                        Text("Filters")
-                            .font(Theme.Typography.caption)
-                        if hasActiveFilters {
-                            Circle()
-                                .fill(Theme.Colors.accent)
-                                .frame(width: 6, height: 6)
-                        }
-                        Image(systemName: showFilters ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 8))
-                    }
-                    .foregroundStyle(showFilters || hasActiveFilters ? Theme.Colors.accent : Theme.Colors.secondaryText)
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                // Results count
-                if !searchText.isEmpty {
-                    Text("\(cachedSearchResults.count) results")
-                        .font(Theme.Typography.caption)
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
-
-                // Selection mode toggle
-                Button {
-                    isSelectionMode.toggle()
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: isSelectionMode ? "checkmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 12))
-                        Text(isSelectionMode ? "Done" : "Select")
-                            .font(Theme.Typography.caption)
-                    }
-                    .foregroundStyle(isSelectionMode ? Theme.Colors.accent : Theme.Colors.secondaryText)
-                }
                 .buttonStyle(.plain)
+                .help("Clear search")
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .background(Theme.Colors.bgInput)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.xl))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                .strokeBorder(
+                    isSearchFieldFocused ? Theme.Colors.accent.opacity(0.45) : Theme.Colors.border,
+                    lineWidth: 1
+                )
+        )
+        .animation(.easeInOut(duration: 0.15), value: isSearchFieldFocused)
+    }
+
+    // MARK: - Category Chips
+
+    private var allCategoriesSelected: Bool {
+        searchOptions.contentTypes == Set(ContentType.searchable)
+    }
+
+    private var categoryChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                scopeChip(
+                    label: "All",
+                    icon: nil,
+                    isSelected: allCategoriesSelected,
+                    tint: Theme.Colors.accentText
+                ) {
+                    searchOptions.contentTypes = Set(ContentType.searchable)
+                }
+
+                ForEach(ContentType.searchable) { type in
+                    scopeChip(
+                        label: type.searchGroupName,
+                        icon: type.iconName,
+                        isSelected: !allCategoriesSelected && searchOptions.contentTypes.contains(type),
+                        tint: type.color
+                    ) {
+                        toggleCategory(type)
+                    }
+                }
+            }
+        }
+    }
+
+    private func scopeChip(
+        label: String,
+        icon: String?,
+        isSelected: Bool,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if let icon {
+                    Image(systemName: icon)
+                        .font(.system(size: 10))
+                }
+                Text(label)
+                    .font(Theme.Typography.caption)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(isSelected ? tint.opacity(0.14) : Theme.Colors.panel))
+            .overlay(Capsule().strokeBorder(isSelected ? tint.opacity(0.45) : Theme.Colors.border, lineWidth: 1))
+            .foregroundStyle(isSelected ? tint : Theme.Colors.textDim)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleCategory(_ type: ContentType) {
+        let all = Set(ContentType.searchable)
+        if searchOptions.contentTypes == all {
+            // From "everything" state, clicking a chip focuses on it.
+            searchOptions.contentTypes = [type]
+        } else if searchOptions.contentTypes.contains(type) {
+            searchOptions.contentTypes.remove(type)
+            if searchOptions.contentTypes.isEmpty {
+                searchOptions.contentTypes = all
+            }
+        } else {
+            searchOptions.contentTypes.insert(type)
+        }
+    }
+
+    // MARK: - Search Options Row
+
+    private var searchOptionsRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            optionChip(
+                icon: "doc.text.magnifyingglass",
+                label: "Search content",
+                isOn: $searchOptions.includeContent,
+                help: "Also match inside item contents, not just titles"
+            )
+
+            optionChip(
+                icon: "archivebox",
+                label: "Include archived",
+                isOn: $searchOptions.includeArchived,
+                help: "Include completed, read, and archived items"
+            )
+
+            dateFilterChip
+
+            if searchOptions.dateFilter == .custom {
+                customDateRangePickers
             }
 
-            // Expanded filters section
-            if showFilters {
-                filterSection
+            Spacer()
+
+            if !searchText.isEmpty || hasActiveFilters {
+                Text("\(cachedSearchResults.count) result\(cachedSearchResults.count == 1 ? "" : "s")")
+                    .font(Theme.Typography.monoCaption)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
             }
+
+            // Selection mode toggle
+            Button {
+                isSelectionMode.toggle()
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: isSelectionMode ? "checkmark.circle.fill" : "checkmark.circle")
+                        .font(.system(size: 12))
+                    Text(isSelectionMode ? "Done" : "Select")
+                        .font(Theme.Typography.caption)
+                }
+                .foregroundStyle(isSelectionMode ? Theme.Colors.accentText : Theme.Colors.textDim)
+            }
+            .buttonStyle(.plain)
+            .help("Select items to export")
+        }
+    }
+
+    private func optionChip(icon: String, label: String, isOn: Binding<Bool>, help: String) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                Text(label)
+                    .font(Theme.Typography.caption)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(isOn.wrappedValue ? Theme.Colors.selectTint : Color.clear))
+            .overlay(
+                Capsule().strokeBorder(
+                    isOn.wrappedValue ? Theme.Colors.accent.opacity(0.45) : Theme.Colors.border,
+                    lineWidth: 1
+                )
+            )
+            .foregroundStyle(isOn.wrappedValue ? Theme.Colors.accentText : Theme.Colors.textDim)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private var dateFilterChip: some View {
+        Menu {
+            ForEach(DateFilterOption.allCases, id: \.self) { option in
+                Button {
+                    searchOptions.dateFilter = option
+                    if option == .custom {
+                        // Set default custom range to last 7 days
+                        let now = Date()
+                        searchOptions.customEndDate = now
+                        searchOptions.customStartDate = Calendar.current.date(byAdding: .day, value: -7, to: now)
+                    } else {
+                        searchOptions.customStartDate = nil
+                        searchOptions.customEndDate = nil
+                    }
+                } label: {
+                    HStack {
+                        Text(option.rawValue)
+                        if searchOptions.dateFilter == option {
+                            Spacer()
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 10))
+                Text(searchOptions.dateFilter.rawValue)
+                    .font(Theme.Typography.caption)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(searchOptions.dateFilter != .anytime ? Theme.Colors.selectTint : Color.clear))
+            .overlay(
+                Capsule().strokeBorder(
+                    searchOptions.dateFilter != .anytime ? Theme.Colors.accent.opacity(0.45) : Theme.Colors.border,
+                    lineWidth: 1
+                )
+            )
+            .foregroundStyle(searchOptions.dateFilter != .anytime ? Theme.Colors.accentText : Theme.Colors.textDim)
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Filter by date")
+    }
+
+    private var customDateRangePickers: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            DatePicker("", selection: Binding(
+                get: { searchOptions.customStartDate ?? Date() },
+                set: { searchOptions.customStartDate = $0 }
+            ), displayedComponents: .date)
+            .labelsHidden()
+            .frame(width: 100)
+
+            Text("to")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.secondaryText)
+
+            DatePicker("", selection: Binding(
+                get: { searchOptions.customEndDate ?? Date() },
+                set: { searchOptions.customEndDate = $0 }
+            ), displayedComponents: .date)
+            .labelsHidden()
+            .frame(width: 100)
         }
     }
 
     private var hasActiveFilters: Bool {
-        searchOptions.dateFilter != .anytime ||
-        searchOptions.contentTypes.count != ContentType.allCases.count
+        searchOptions.dateFilter != .anytime || !allCategoriesSelected
     }
 
-    private var filterSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Divider()
-
-            // Category filter
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                HStack {
-                    Text("Categories")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-
-                    Spacer()
-
-                    if searchOptions.contentTypes.count != ContentType.allCases.count {
-                        Button("Reset") {
-                            searchOptions.contentTypes = Set(ContentType.allCases)
-                        }
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(Theme.Colors.accent)
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                FlowLayout(spacing: Theme.Spacing.xs) {
-                    ForEach(ContentType.allCases, id: \.self) { type in
-                        categoryFilterChip(type)
-                    }
-                }
-            }
-
-            // Date filter
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                HStack {
-                    Text("Date")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-
-                    Spacer()
-
-                    if searchOptions.dateFilter != .anytime {
-                        Button("Reset") {
-                            searchOptions.dateFilter = .anytime
-                            searchOptions.customStartDate = nil
-                            searchOptions.customEndDate = nil
-                        }
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(Theme.Colors.accent)
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                HStack(spacing: Theme.Spacing.xs) {
-                    Menu {
-                        ForEach(DateFilterOption.allCases, id: \.self) { option in
-                            Button {
-                                searchOptions.dateFilter = option
-                                if option == .custom {
-                                    // Set default custom range to last 7 days
-                                    let now = Date()
-                                    searchOptions.customEndDate = now
-                                    searchOptions.customStartDate = Calendar.current.date(byAdding: .day, value: -7, to: now)
-                                }
-                            } label: {
-                                HStack {
-                                    Text(option.rawValue)
-                                    if searchOptions.dateFilter == option {
-                                        Spacer()
-                                        Image(systemName: "checkmark")
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: Theme.Spacing.xs) {
-                            Image(systemName: "calendar")
-                                .font(.system(size: 11))
-                            Text(searchOptions.dateFilter.rawValue)
-                                .font(Theme.Typography.caption)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 8))
-                        }
-                        .padding(.horizontal, Theme.Spacing.sm)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(searchOptions.dateFilter != .anytime ? Theme.Colors.accent.opacity(0.1) : Color.primary.opacity(0.05))
-                        .foregroundStyle(searchOptions.dateFilter != .anytime ? Theme.Colors.accent : Theme.Colors.text)
-                        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                    }
-                    .buttonStyle(.plain)
-
-                    // Custom date pickers
-                    if searchOptions.dateFilter == .custom {
-                        HStack(spacing: Theme.Spacing.xs) {
-                            DatePicker("", selection: Binding(
-                                get: { searchOptions.customStartDate ?? Date() },
-                                set: { searchOptions.customStartDate = $0 }
-                            ), displayedComponents: .date)
-                            .labelsHidden()
-                            .frame(width: 100)
-
-                            Text("to")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.secondaryText)
-
-                            DatePicker("", selection: Binding(
-                                get: { searchOptions.customEndDate ?? Date() },
-                                set: { searchOptions.customEndDate = $0 }
-                            ), displayedComponents: .date)
-                            .labelsHidden()
-                            .frame(width: 100)
-                        }
-                    }
-                }
-            }
-
-            // Clear all filters button
-            if hasActiveFilters {
-                HStack {
-                    Spacer()
-                    Button {
-                        searchOptions.contentTypes = Set(ContentType.allCases)
-                        searchOptions.dateFilter = .anytime
-                        searchOptions.customStartDate = nil
-                        searchOptions.customEndDate = nil
-                    } label: {
-                        HStack(spacing: Theme.Spacing.xs) {
-                            Image(systemName: "xmark.circle")
-                                .font(.system(size: 11))
-                            Text("Clear All Filters")
-                                .font(Theme.Typography.caption)
-                        }
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .padding(.top, Theme.Spacing.sm)
-    }
-
-    private func categoryFilterChip(_ type: ContentType) -> some View {
-        let isSelected = searchOptions.contentTypes.contains(type)
-
-        return Button {
-            if isSelected {
-                // Don't allow deselecting all
-                if searchOptions.contentTypes.count > 1 {
-                    searchOptions.contentTypes.remove(type)
-                }
-            } else {
-                searchOptions.contentTypes.insert(type)
-            }
-        } label: {
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: type.iconName)
-                    .font(.system(size: 10))
-                Text(type.displayName)
-                    .font(Theme.Typography.small)
-            }
-            .padding(.horizontal, Theme.Spacing.sm)
-            .padding(.vertical, Theme.Spacing.xs)
-            .background(isSelected ? type.color.opacity(0.15) : Color.primary.opacity(0.05))
-            .foregroundStyle(isSelected ? type.color : Theme.Colors.secondaryText)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-        }
-        .buttonStyle(.plain)
+    private func clearAllFilters() {
+        searchOptions.contentTypes = Set(ContentType.searchable)
+        searchOptions.dateFilter = .anytime
+        searchOptions.customStartDate = nil
+        searchOptions.customEndDate = nil
     }
 
     // MARK: - Selection Toolbar
@@ -743,8 +737,12 @@ struct HomeView: View {
             }
         }
 
-        // Sort by date (most recent first)
-        return results.sorted { $0.date > $1.date }
+        // Order by category section, most recent first within each. Keeping
+        // the flat array in visual order keeps shift-click range selection sane.
+        let grouped = Dictionary(grouping: results, by: \.contentType)
+        return ContentType.searchable
+            .compactMap { grouped[$0] }
+            .flatMap { $0.sorted { $0.date > $1.date } }
     }
 
     private func matchesQuery(title: String, content: String?, query: String) -> Bool {
@@ -757,56 +755,131 @@ struct HomeView: View {
         return false
     }
 
+    /// Rows visible per section before "Show all" kicks in.
+    private static let sectionRowCap = 6
+
+    private var groupedResults: [(type: ContentType, items: [UniversalSearchResult])] {
+        let grouped = Dictionary(grouping: cachedSearchResults, by: \.contentType)
+        return ContentType.searchable.compactMap { type in
+            grouped[type].map { (type, $0) }
+        }
+    }
+
     private var searchResultsList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(cachedSearchResults) { result in
-                    SearchResultRowView(
-                        result: result,
-                        searchQuery: searchText,
-                        isSelectionMode: isSelectionMode,
-                        isSelected: selectedSearchResults.contains(result.id),
-                        onSelect: {
-                            selectedResult = result
-                        },
-                        onToggleSelection: { withShift in
-                            toggleSelection(result.id, withShift: withShift)
-                        }
-                    )
-                    .contextMenu {
-                        Button {
-                            selectedResult = result
-                        } label: {
-                            Label("Open Details", systemImage: "doc.text")
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                let groups = groupedResults
+                ForEach(groups, id: \.type) { group in
+                    Section {
+                        let items = visibleItems(for: group, isOnlySection: groups.count == 1)
+                        ForEach(items) { result in
+                            searchResultRow(result)
                         }
 
-                        Button {
-                            locateItem(result)
-                        } label: {
-                            Label("Locate in Category", systemImage: "arrow.right.circle")
+                        if items.count < group.items.count {
+                            showAllButton(type: group.type, total: group.items.count)
                         }
-
-                        if isSelectionMode {
-                            Divider()
-                            Button {
-                                toggleSelection(result.id, withShift: false)
-                            } label: {
-                                if selectedSearchResults.contains(result.id) {
-                                    Label("Deselect", systemImage: "checkmark.circle")
-                                } else {
-                                    Label("Select", systemImage: "circle")
-                                }
-                            }
-                        }
-                    }
-
-                    if result.id != cachedSearchResults.last?.id {
-                        Divider()
-                            .padding(.horizontal, Theme.Spacing.xl)
+                    } header: {
+                        sectionHeader(type: group.type, count: group.items.count)
                     }
                 }
             }
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.bottom, Theme.Spacing.lg)
+        }
+    }
+
+    private func visibleItems(
+        for group: (type: ContentType, items: [UniversalSearchResult]),
+        isOnlySection: Bool
+    ) -> [UniversalSearchResult] {
+        // Selection mode shows everything so shift-click ranges match what's visible.
+        if isSelectionMode || isOnlySection || expandedSections.contains(group.type) {
+            return group.items
+        }
+        return Array(group.items.prefix(Self.sectionRowCap))
+    }
+
+    private func sectionHeader(type: ContentType, count: Int) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: type.iconName)
+                .font(.system(size: 10))
+                .foregroundStyle(type.color)
+
+            Text(type.searchGroupName)
+                .hudLabel()
+
+            Text("\(count)")
+                .font(Theme.Typography.monoSmall)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+
+            Rectangle()
+                .fill(Theme.Colors.gridLine)
+                .frame(height: 1)
+        }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, Theme.Spacing.md)
+        .padding(.bottom, Theme.Spacing.sm)
+        .background(Theme.Colors.background)
+    }
+
+    private func showAllButton(type: ContentType, total: Int) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                _ = expandedSections.insert(type)
+            }
+        } label: {
+            HStack(spacing: Theme.Spacing.xs) {
+                Text("Show all \(total) \(type.searchGroupName.lowercased())")
+                    .font(Theme.Typography.caption)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .semibold))
+            }
+            .foregroundStyle(Theme.Colors.accentText)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, Theme.Spacing.sm)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, Theme.Spacing.lg)
+    }
+
+    private func searchResultRow(_ result: UniversalSearchResult) -> some View {
+        SearchResultRowView(
+            result: result,
+            searchQuery: searchText,
+            isSelectionMode: isSelectionMode,
+            isSelected: selectedSearchResults.contains(result.id),
+            onSelect: {
+                selectedResult = result
+            },
+            onToggleSelection: { withShift in
+                toggleSelection(result.id, withShift: withShift)
+            }
+        )
+        .contextMenu {
+            Button {
+                selectedResult = result
+            } label: {
+                Label("Open Details", systemImage: "doc.text")
+            }
+
+            Button {
+                locateItem(result)
+            } label: {
+                Label("Locate in Category", systemImage: "arrow.right.circle")
+            }
+
+            if isSelectionMode {
+                Divider()
+                Button {
+                    toggleSelection(result.id, withShift: false)
+                } label: {
+                    if selectedSearchResults.contains(result.id) {
+                        Label("Deselect", systemImage: "checkmark.circle")
+                    } else {
+                        Label("Select", systemImage: "circle")
+                    }
+                }
+            }
         }
     }
 
@@ -849,62 +922,125 @@ struct HomeView: View {
     // MARK: - Search Welcome State
 
     private var searchWelcomeState: some View {
-        VStack(spacing: Theme.Spacing.xl) {
-            Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                VStack(spacing: Theme.Spacing.xs) {
+                    Text("Search Your Otto")
+                        .font(Theme.Typography.title)
 
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("Find anything across your library — or browse a category below.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Spacing.xxl)
 
-            VStack(spacing: Theme.Spacing.sm) {
-                Text("Search Your Otto")
-                    .font(Theme.Typography.title)
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    Text("Browse")
+                        .hudLabel()
+                        .padding(.horizontal, Theme.Spacing.xl)
 
-                Text("Find anything across todos, notes, ideas, reminders, bookmarks, meetings, and emails.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 400)
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150), spacing: Theme.Spacing.sm)],
+                        spacing: Theme.Spacing.sm
+                    ) {
+                        ForEach(ContentType.searchable) { type in
+                            categoryTile(type)
+                        }
+                    }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                }
+
+                if !recentItems.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        Text("Recently updated")
+                            .hudLabel()
+                            .padding(.horizontal, Theme.Spacing.xl)
+
+                        ForEach(recentItems) { result in
+                            searchResultRow(result)
+                        }
+                    }
+                }
             }
-
-            // Quick stats
-            HStack(spacing: Theme.Spacing.xl) {
-                statBadge(count: appState.todos.count, label: "Todos", contentType: .todo)
-                statBadge(count: appState.notes.count, label: "Notes", contentType: .note)
-                statBadge(count: appState.ideas.count, label: "Ideas", contentType: .idea)
-                statBadge(count: appState.emails.count, label: "Emails", contentType: .email)
-            }
-            .padding(.top, Theme.Spacing.lg)
-
-            Spacer()
+            .padding(.bottom, Theme.Spacing.xl)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            computeRecentItems()
+        }
     }
 
-    private func statBadge(count: Int, label: String, contentType: ContentType) -> some View {
+    private func categoryTile(_ type: ContentType) -> some View {
         Button {
-            searchOptions.contentTypes = [contentType]
+            searchOptions.contentTypes = [type]
             isSearchFieldFocused = true
         } label: {
-            VStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: contentType.iconName)
-                    .font(.system(size: 20))
-                    .foregroundStyle(contentType.color)
+            HStack(spacing: Theme.Spacing.md) {
+                Image(systemName: type.iconName)
+                    .font(.system(size: 13))
+                    .foregroundStyle(type.color)
+                    .frame(width: 30, height: 30)
+                    .background(type.color.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
 
-                Text("\(count)")
-                    .font(Theme.Typography.headline)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(categoryCount(type).formatted())")
+                        .font(Theme.Typography.monoBody)
+                        .foregroundStyle(Theme.Colors.text)
 
-                Text(label)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text(type.searchGroupName)
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.textDim)
+                }
+
+                Spacer(minLength: 0)
             }
-            .frame(width: 70)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(contentType.color.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .padding(Theme.Spacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardStyle()
         }
         .buttonStyle(.plain)
-        .help("Filter search to \(label)")
+        .help("Browse \(type.searchGroupName)")
+    }
+
+    private func categoryCount(_ type: ContentType) -> Int {
+        switch type {
+        case .todo: return appState.todos.count
+        case .note: return appState.notes.count
+        case .idea: return appState.ideas.count
+        case .reminder: return appState.reminders.count
+        case .bookmark: return appState.bookmarks.count
+        case .meeting: return appState.meetings.count
+        case .email: return appState.emails.count
+        case .connection: return appState.connections.count
+        case .file: return appState.files.count
+        default: return 0
+        }
+    }
+
+    /// Most recently touched items across the user's own content. Emails and
+    /// connections are skipped — they sync in bulk and would drown the list.
+    private func computeRecentItems() {
+        var candidates: [UniversalSearchResult] = []
+        candidates += appState.todos.filter { !$0.isCompleted }.map { .from($0) }
+        candidates += appState.notes.map { .from($0) }
+        candidates += appState.ideas.filter { $0.status != .archived }.map { .from($0) }
+        candidates += appState.reminders.filter { !$0.isCompleted }.map { .from($0) }
+        candidates += appState.bookmarks.map { .from($0) }
+        candidates += appState.meetings.map { .from($0) }
+        candidates += appState.files.map { .from($0) }
+
+        // Cap each type so one busy category can't fill every slot.
+        var picked: [UniversalSearchResult] = []
+        var perType: [ContentType: Int] = [:]
+        for item in candidates.sorted(by: { $0.date > $1.date }) {
+            guard picked.count < 8 else { break }
+            if perType[item.contentType, default: 0] < 3 {
+                perType[item.contentType, default: 0] += 1
+                picked.append(item)
+            }
+        }
+        recentItems = picked
     }
 
     // MARK: - Empty Search State
@@ -914,7 +1050,7 @@ struct HomeView: View {
             Spacer()
 
             Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 48, weight: .thin))
+                .font(.system(size: 40, weight: .thin))
                 .foregroundStyle(Theme.Colors.tertiaryText)
 
             VStack(spacing: Theme.Spacing.sm) {
@@ -922,17 +1058,56 @@ struct HomeView: View {
                     .font(Theme.Typography.headline)
 
                 if hasActiveFilters && searchText.isEmpty {
-                    Text("No items match your current filters. Try adjusting your category or date filters.")
+                    Text("No items match your current filters.")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.secondaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 300)
                 } else {
-                    Text("Try a different search term, enable \"Search content\" to search within item contents, or adjust your filters.")
+                    Text("Try a different search term or broaden your filters.")
                         .font(Theme.Typography.caption)
                         .foregroundStyle(Theme.Colors.secondaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 300)
+                }
+            }
+
+            HStack(spacing: Theme.Spacing.sm) {
+                if !searchOptions.includeContent && !searchText.isEmpty {
+                    Button {
+                        searchOptions.includeContent = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 10))
+                            Text("Search inside content")
+                                .font(Theme.Typography.caption)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Theme.Colors.selectTint))
+                        .overlay(Capsule().strokeBorder(Theme.Colors.accent.opacity(0.45), lineWidth: 1))
+                        .foregroundStyle(Theme.Colors.accentText)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if hasActiveFilters {
+                    Button {
+                        clearAllFilters()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "xmark.circle")
+                                .font(.system(size: 10))
+                            Text("Clear filters")
+                                .font(Theme.Typography.caption)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .overlay(Capsule().strokeBorder(Theme.Colors.border, lineWidth: 1))
+                        .foregroundStyle(Theme.Colors.textDim)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 
@@ -944,7 +1119,7 @@ struct HomeView: View {
     // MARK: - Locate Item
 
     private func locateItem(_ result: UniversalSearchResult) {
-        onLocateItem?(result)
+        appState.locate(type: result.contentType, id: result.id)
     }
 }
 

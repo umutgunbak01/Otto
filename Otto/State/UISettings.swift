@@ -19,6 +19,13 @@ enum WakeWordSettings {
 // active flag controlling it today and no Window scene wired for it
 // in `OttoApp` — macOS has nothing to restore.
 
+enum MeetingDetectionSettings {
+    static let enabledKey = "meeting_detection_enabled"
+    /// Default ON — when another app grabs the microphone (Zoom, Meet in a
+    /// browser, …), Otto offers a floating "Start transcribing" prompt.
+    static let defaultEnabled: Bool = true
+}
+
 enum MenuBarSettings {
     static let enabledKey = "menubar_enabled"
     /// Default ON — gives users the time + next-event surface they

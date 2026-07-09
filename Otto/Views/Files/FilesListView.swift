@@ -62,11 +62,45 @@ struct FilesListView: View {
         } message: {
             Text(importError ?? "Failed to import file")
         }
-        .sheet(item: $previewingFile) { file in
-            FilePreviewPopup(file: file) {
-                previewingFile = nil
+        // Full-area overlay instead of a sheet: sheets size to their ideal
+        // width and can never fill the window, which kept the CSV table
+        // cramped. The overlay gives the preview the whole content area.
+        .overlay {
+            if let file = previewingFile {
+                ZStack {
+                    Color.black.opacity(0.45)
+                        .onTapGesture { previewingFile = nil }
+
+                    FilePreviewPopup(file: file) {
+                        previewingFile = nil
+                    }
+                    .id(file.id)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.lg))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg)
+                            .stroke(Theme.Colors.panelEdge, lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.45), radius: 36, y: 10)
+                    .padding(Theme.Spacing.xl)
+                }
+                .transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.15), value: previewingFile != nil)
+        .onChange(of: appState.locateItemId) { _, newValue in
+            openLocatedFile(newValue)
+        }
+        .onAppear {
+            openLocatedFile(appState.locateItemId)
+        }
+    }
+
+    /// Locate-flow arrival: open the requested file's preview and consume the
+    /// request (same pattern as ConnectionListView).
+    private func openLocatedFile(_ itemId: UUID?) {
+        guard let itemId, let file = appState.files.first(where: { $0.id == itemId }) else { return }
+        previewingFile = file
+        appState.locateItemId = nil
     }
 
     // MARK: - Header

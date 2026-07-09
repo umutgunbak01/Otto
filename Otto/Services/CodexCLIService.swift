@@ -222,6 +222,19 @@ actor CodexCLIService {
             ])
             env[envVarName] = pat
         }
+        // User-added custom MCP servers. `effectiveSecrets` mints a fresh
+        // OAuth Bearer for `.oauth` servers (nil = needs sign-in, skip);
+        // `codexArgs` returns [] for transports Codex can't drive (SSE) —
+        // skip those with a log line rather than failing the turn.
+        for server in CustomMCPServersStore.shared.enabledServers() {
+            guard let secrets = await CustomMCPServersStore.shared.effectiveSecrets(for: server) else { continue }
+            let overrides = CustomMCPServersStore.codexArgs(for: server, secrets: secrets, env: &env)
+            if overrides.isEmpty {
+                NSLog("[CodexCLI] custom MCP server %@ skipped — SSE transport unsupported by Codex", server.slug)
+            } else {
+                args.append(contentsOf: overrides)
+            }
+        }
 
         proc.arguments = args
         env["PATH"] = Self.augmentedPath(inheriting: env["PATH"])

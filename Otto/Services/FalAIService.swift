@@ -1,6 +1,7 @@
 import Foundation
 
-/// fal.ai client — speech-to-text via Wizper, text-to-speech via ElevenLabs v3.
+/// fal.ai client — speech-to-text via Wizper (Whisper large v3), text-to-speech
+/// via ElevenLabs Turbo v2.5 (the low-latency ElevenLabs tier).
 /// Auth: `Authorization: Key <FAL_KEY>` header. Key is stored in UserDefaults
 /// (same simple storage as Fireflies / Todoist); can be overridden via
 /// `FAL_API_KEY` environment variable for development.
@@ -8,9 +9,39 @@ actor FalAIService {
     static let shared = FalAIService()
 
     private let wizperURL = URL(string: "https://fal.run/fal-ai/wizper")!
-    private let scribeURL = URL(string: "https://fal.run/fal-ai/elevenlabs/speech-to-text")!
-    private let ttsURL    = URL(string: "https://fal.run/fal-ai/elevenlabs/tts/eleven-v3")!
-    private let uploadInitiateURL = URL(string: "https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3")!
+    private let ttsURL    = URL(string: "https://fal.run/fal-ai/elevenlabs/tts/turbo-v2.5")!
+
+    /// Dedicated session so voice-mode requests share a warm connection pool to
+    /// fal.run (see `warmUp()`), and so parallel TTS prefetch has connection
+    /// headroom instead of competing with every other client on `.shared`.
+    private let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.httpMaximumConnectionsPerHost = 8
+        cfg.timeoutIntervalForRequest = 60
+        return URLSession(configuration: cfg, delegate: SlowRequestLogger(), delegateQueue: nil)
+    }()
+
+    /// Logs connection-phase timings for any fal request slower than 3s, so a
+    /// slow transcription can be attributed (DNS vs connect vs TLS vs server
+    /// time vs a cold fal worker) from Console instead of guesswork.
+    private final class SlowRequestLogger: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        didFinishCollecting metrics: URLSessionTaskMetrics) {
+            let totalMs = Int(metrics.taskInterval.duration * 1000)
+            guard totalMs > 3000, let t = metrics.transactionMetrics.last else { return }
+            func ms(_ a: Date?, _ b: Date?) -> Int {
+                guard let a, let b else { return -1 }
+                return Int(b.timeIntervalSince(a) * 1000)
+            }
+            NSLog("[FalAI] slow request host=%@ total=%dms dns=%dms connect=%dms tls=%dms ttfb=%dms reusedConn=%@",
+                  t.request.url?.host ?? "?", totalMs,
+                  ms(t.domainLookupStartDate, t.domainLookupEndDate),
+                  ms(t.connectStartDate, t.connectEndDate),
+                  ms(t.secureConnectionStartDate, t.secureConnectionEndDate),
+                  ms(t.requestEndDate, t.responseStartDate),
+                  t.isReusedConnection ? "yes" : "no")
+        }
+    }
 
     /// UserDefaults key for the fal.ai API key.
     static let apiKeyDefaultsKey = "fal_api_key"
@@ -79,77 +110,88 @@ actor FalAIService {
         }
     }
 
-    // MARK: - CDN upload
+    // MARK: - Connection warm-up
 
-    /// Uploads raw bytes to fal's CDN and returns the public URL to use as `*_url`
-    /// input for any model. Two-step flow: POST /storage/upload/initiate → PUT to signed URL.
-    private func uploadToFalCDN(data: Data, fileName: String, contentType: String, key: String) async throws -> String {
-        // Step 1 — initiate.
-        var initReq = URLRequest(url: uploadInitiateURL)
-        initReq.httpMethod = "POST"
-        initReq.setValue("Key \(key)", forHTTPHeaderField: "Authorization")
-        initReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        initReq.httpBody = try JSONSerialization.data(withJSONObject: [
-            "file_name": fileName,
-            "content_type": contentType
+    /// 0.5s of 16 kHz mono 16-bit silence in a WAV container — the cheapest
+    /// possible real Wizper request, used by `warmUp()`.
+    private static let warmUpWav: Data = {
+        let sampleRate = 16_000
+        let dataSize = sampleRate / 2 * 2   // 0.5s × 2 bytes/sample
+        var d = Data(capacity: 44 + dataSize)
+        func u32(_ v: Int) { withUnsafeBytes(of: UInt32(v).littleEndian) { d.append(contentsOf: $0) } }
+        func u16(_ v: Int) { withUnsafeBytes(of: UInt16(v).littleEndian) { d.append(contentsOf: $0) } }
+        d.append(contentsOf: Array("RIFF".utf8)); u32(36 + dataSize)
+        d.append(contentsOf: Array("WAVE".utf8))
+        d.append(contentsOf: Array("fmt ".utf8)); u32(16)
+        u16(1); u16(1); u32(sampleRate); u32(sampleRate * 2); u16(2); u16(16)
+        d.append(contentsOf: Array("data".utf8)); u32(dataSize)
+        d.append(Data(count: dataSize))
+        return d
+    }()
+
+    /// Fires a minimal REAL Wizper request (half a second of silence) when a
+    /// voice session opens. A plain HEAD isn't enough: the 10s+ first-utterance
+    /// stalls seen in the wild come from one-time client costs (proxy/PAC
+    /// evaluation, DNS, TLS, HTTP/2 setup on a fresh URLSession) plus a
+    /// possibly-cold fal worker — a real request pays all of it up front, while
+    /// the user is still speaking. Also pre-connects to the fal CDN host that
+    /// TTS audio downloads come from. Result/status intentionally ignored.
+    func warmUp() async {
+        let key = getAPIKey()
+        guard !key.isEmpty else { return }
+        let started = Date()
+
+        async let cdn: Void = {
+            var req = URLRequest(url: URL(string: "https://v3b.fal.media/")!)
+            req.httpMethod = "HEAD"
+            req.timeoutInterval = 5
+            _ = try? await session.data(for: req)
+        }()
+
+        var req = URLRequest(url: wizperURL)
+        req.httpMethod = "POST"
+        req.setValue("Key \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "audio_url": "data:audio/x-wav;base64,\(Self.warmUpWav.base64EncodedString())",
+            "task": "transcribe",
+            "language": "en",
+            "version": "3"
         ])
-        initReq.timeoutInterval = 30
-
-        let (initData, initResp) = try await URLSession.shared.data(for: initReq)
-        guard let initHTTP = initResp as? HTTPURLResponse else { throw FalAIError.badResponse }
-        guard (200..<300).contains(initHTTP.statusCode) else {
-            let msg = String(data: initData, encoding: .utf8) ?? "no body"
-            throw FalAIError.httpError(initHTTP.statusCode, "upload initiate: \(msg)")
-        }
-        guard let obj = try JSONSerialization.jsonObject(with: initData) as? [String: Any],
-              let fileURL = obj["file_url"] as? String,
-              let uploadURLStr = obj["upload_url"] as? String,
-              let uploadURL = URL(string: uploadURLStr)
-        else { throw FalAIError.badResponse }
-
-        // Step 2 — PUT the bytes to the signed URL. No auth header here; the signature is in the URL.
-        var putReq = URLRequest(url: uploadURL)
-        putReq.httpMethod = "PUT"
-        putReq.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        putReq.timeoutInterval = 60
-        let (putData, putResp) = try await URLSession.shared.upload(for: putReq, from: data)
-        guard let putHTTP = putResp as? HTTPURLResponse else { throw FalAIError.badResponse }
-        guard (200..<300).contains(putHTTP.statusCode) else {
-            let msg = String(data: putData, encoding: .utf8) ?? "no body"
-            throw FalAIError.httpError(putHTTP.statusCode, "upload PUT: \(msg)")
-        }
-
-        return fileURL
+        req.timeoutInterval = 20
+        _ = try? await session.data(for: req)
+        await cdn
+        NSLog(String(format: "[FalAI] warm-up completed in %.0fms",
+                     Date().timeIntervalSince(started) * 1000))
     }
 
-    // MARK: - STT
+    // MARK: - STT (Wizper)
 
-    /// Transcribes 16 kHz mono WAV audio. Uses fal.ai's ElevenLabs Scribe endpoint
-    /// which — unlike Wizper — accepts base64 data URIs directly, saving the
-    /// CDN-upload round-trip. For short utterances this is noticeably faster
-    /// (~400–800ms savings) with similar accuracy on English.
+    /// Transcribes 16 kHz mono WAV audio via fal.ai's Wizper (Whisper large v3).
+    /// The clip is sent inline as a base64 data URI so short utterances skip a
+    /// CDN-upload round-trip entirely. NOTE: the MIME must be `audio/x-wav` —
+    /// Wizper's data-URL allowlist rejects `audio/wav` with a 400
+    /// "Unsupported data URL" (verified empirically 2026-07).
     func transcribeWizper(wavData: Data, language: String = "en") async throws -> String {
         let key = getAPIKey()
         guard !key.isEmpty else { throw FalAIError.missingKey }
 
-        let b64 = wavData.base64EncodedString()
-        let dataURL = "data:audio/wav;base64,\(b64)"
-
+        let started = Date()
         let body: [String: Any] = [
-            "audio_url": dataURL,
-            "language_code": language,
-            "tag_audio_events": false,
-            "diarize": false
+            "audio_url": "data:audio/x-wav;base64,\(wavData.base64EncodedString())",
+            "task": "transcribe",
+            "language": language,
+            "version": "3"
         ]
 
-        var req = URLRequest(url: scribeURL)
+        var req = URLRequest(url: wizperURL)
         req.httpMethod = "POST"
         req.setValue("Key \(key)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 60
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw FalAIError.badResponse }
         guard (200..<300).contains(http.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? "no body"
@@ -159,6 +201,9 @@ actor FalAIService {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = root["text"] as? String
         else { throw FalAIError.badResponse }
+
+        NSLog(String(format: "[FalAI] wizper STT %.0fms (%dKB audio)",
+                     Date().timeIntervalSince(started) * 1000, wavData.count / 1024))
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { throw FalAIError.transcriptionEmpty }
@@ -224,23 +269,31 @@ actor FalAIService {
         return false
     }
 
-    // MARK: - ElevenLabs v3 (TTS)
+    // MARK: - ElevenLabs Turbo v2.5 (TTS)
 
-    /// Synthesizes audio for the given text and returns MP3 bytes.
+    /// Synthesizes speech for the given text and returns MP3 bytes. Turbo v2.5 is
+    /// ElevenLabs' low-latency tier — a few hundred ms for a short sentence vs.
+    /// 1s+ on eleven-v3, which is what makes per-sentence streaming TTS feel live.
+    /// `previousText` carries the already-spoken part of the reply so prosody
+    /// stays continuous across the per-sentence requests of one answer.
     /// fal.ai returns `{"audio": {"url": "..."}}` — we fetch that URL to obtain the binary.
-    func synthesizeElevenV3(text: String, voiceId: String) async throws -> Data {
+    func synthesizeTurboV25(text: String, voiceId: String, previousText: String? = nil) async throws -> Data {
         let key = getAPIKey()
         guard !key.isEmpty else { throw FalAIError.missingKey }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Data() }
 
-        let body: [String: Any] = [
+        let started = Date()
+        var body: [String: Any] = [
             "text": trimmed,
             "voice": voiceId,
             "stability": 0.5,
             "similarity_boost": 0.75
         ]
+        if let previousText, !previousText.isEmpty {
+            body["previous_text"] = previousText
+        }
 
         var req = URLRequest(url: ttsURL)
         req.httpMethod = "POST"
@@ -249,7 +302,7 @@ actor FalAIService {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 60
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw FalAIError.badResponse }
         guard (200..<300).contains(http.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? "no body"
@@ -262,12 +315,15 @@ actor FalAIService {
               let audioURL = URL(string: urlStr)
         else { throw FalAIError.badResponse }
 
-        let (audioBytes, audioResp) = try await URLSession.shared.data(from: audioURL)
+        let (audioBytes, audioResp) = try await session.data(from: audioURL)
         guard let audioHTTP = audioResp as? HTTPURLResponse,
               (200..<300).contains(audioHTTP.statusCode)
         else {
             throw FalAIError.badResponse
         }
+
+        NSLog(String(format: "[FalAI] turbo TTS %.0fms (%d chars)",
+                     Date().timeIntervalSince(started) * 1000, trimmed.count))
         return audioBytes
     }
 }

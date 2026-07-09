@@ -21,6 +21,15 @@ Nothing leaves your device unless you explicitly connect an integration.
   people and companies
 - **Companies, Communities & Events tabs** — with dedicated editors, all
   exposed to the chat agent's tools
+- **Custom tabs** — define your own tables (reading list, job pipeline,
+  wine cellar…) with typed fields; each tab automatically gets its own
+  create/update tools in the chat agent's toolbox
+- **Meeting transcription** — Otto notices when a meeting app (Zoom, Teams,
+  Slack, Webex, FaceTime, browser calls…) starts using your microphone and
+  offers to transcribe. It records both sides — your mic and the system
+  audio of the other participants — transcribes locally-captured audio via
+  fal.ai, then writes up the meeting and files the action items that are
+  yours as todos.
 - **Location map** — locations standardized to canonical cities across your
   network, companies, and events, plotted on a map with an inline-editable
   city table
@@ -36,14 +45,26 @@ Nothing leaves your device unless you explicitly connect an integration.
 - **File import the agent can read** — drop in PDFs, CSVs, Excel sheets,
   images (PNG/JPG/HEIC, OCR'd at import via the Vision framework), and
   plain-text formats (txt/md/json/yaml/log). The chat agent can `search_items`
-  + `read_file` to pull content into its context.
+  + `read_file` to pull content into its context. CSVs open in an editable
+  grid, and Excel sheets get an inline table preview.
+- **Files the agent can create** — ask for a spreadsheet and the agent
+  builds a real one: styled multi-sheet `.xlsx` (frozen filtered headers,
+  banded rows), CSV, Markdown, or plain text, landing in your Files tab
+  ready to open or share
+- **Inline visualizations** — the agent can answer with live charts and
+  tables rendered as cards right in the chat
 - **Custom Supabase project access** — register one or more of your own
   Supabase projects with a Personal Access Token; the agent gets full
   read/write SQL access through Supabase's official MCP server (list_tables,
   execute_sql, apply_migration, deploy_edge_function, and more) — no
   per-schema Swift glue.
+- **Custom MCP servers** — plug any MCP server into the agent from
+  Integrations: local stdio commands or remote HTTP servers, with headers,
+  env vars, and OAuth (dynamic client registration included) handled for
+  you; secrets live in the macOS Keychain
 - **Voice mode** — push-to-talk or wake-word, powered by fal.ai (Wizper for
-  transcription, ElevenLabs v3 for speech)
+  transcription, ElevenLabs Turbo v2.5 for speech), with voice turns
+  mirrored into the chat history
 - **Generative media (fal.ai genmedia)** — the agent can generate images,
   video, audio, music, and speech via fal's model catalog. Outputs land
   straight in your Files tab with the prompt saved on the file.

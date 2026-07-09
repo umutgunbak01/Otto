@@ -203,6 +203,16 @@ actor ClaudeCLIService {
                 "headers": ["Authorization": "Bearer \(pat)"]
             ]
         }
+        // User-added custom MCP servers (Integrations → Custom MCP Servers).
+        // Slugs are validated at add time against the reserved names above;
+        // the guard keeps a stale entry from clobbering a built-in server.
+        // `effectiveSecrets` mints a fresh OAuth Bearer for `.oauth` servers
+        // and returns nil (skip this turn) when sign-in is required.
+        for server in CustomMCPServersStore.shared.enabledServers() {
+            guard mcpServers[server.slug] == nil else { continue }
+            guard let secrets = await CustomMCPServersStore.shared.effectiveSecrets(for: server) else { continue }
+            mcpServers[server.slug] = CustomMCPServersStore.claudeEntry(for: server, secrets: secrets)
+        }
         if !mcpServers.isEmpty {
             let cfg: [String: Any] = ["mcpServers": mcpServers]
             if let cfgData = try? JSONSerialization.data(withJSONObject: cfg) {

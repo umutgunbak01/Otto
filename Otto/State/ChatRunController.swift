@@ -32,6 +32,10 @@ struct ChatUIEntry: Identifiable {
         /// is in flight the icon pulses and `resultLabel` is nil.
         case toolStep(callIcon: String, callLabel: String, resultLabel: String?, isError: Bool, isInFlight: Bool)
         case itemPreview(type: ContentType, itemId: UUID)
+        /// Inline chart/table/stat card from the `visualize` tool. The full
+        /// spec is decoded from the tool call's input, so it renders with no
+        /// AppState dependency and rebuilds from persisted sessions.
+        case visualization(spec: VisualizationSpec)
         /// Hermes (ACP) approval card. `approvalId` is the opaque key
         /// `HermesAgentService` uses to match the user's decision back to
         /// the in-flight `session/request_permission` request. `resolved`
@@ -200,6 +204,63 @@ final class ChatRunController {
         }
     }
 
+    // MARK: - Externally-driven runs (voice mode)
+
+    /// Voice mode drives a conversation through these four methods instead of
+    /// `send` — the agent run itself lives in `VoiceSessionManager` (it needs
+    /// per-token deltas for TTS chunking), but every UI and persistence side
+    /// effect mirrors a typed run: user bubble, streaming text, tool chips,
+    /// preview cards, checkpointing, history.
+    ///
+    /// `displayText` is what the user bubble shows (the raw transcript);
+    /// `turnText` is what actually went to the model (may carry an intent
+    /// context note) — same split `send` makes internally.
+    @MainActor
+    func beginExternalTurn(displayText: String, turnText: String, appState: AppState) {
+        guard !isRunning else { return }
+        error = nil
+        turns.append(ChatTurn(role: "user", blocks: [.text(turnText)]))
+        entries.append(ChatUIEntry(kind: .userText(text: displayText, attachments: [])))
+        isRunning = true
+        // Focus this conversation — a voice turn only happens when the user
+        // just spoke, so it's what they expect to be looking at.
+        appState.activeChatSessionId = sessionId
+        let eagerTurns = turns
+        Task { await persist(turns: eagerTurns, appState: appState) }
+    }
+
+    /// Forward one streamed event from the external run. Rendering is
+    /// identical to a typed run because the backends emit the same events.
+    @MainActor
+    func ingestExternalEvent(_ event: ChatEvent, appState: AppState) {
+        guard isRunning else { return }
+        handleEvent(event, appState: appState)
+    }
+
+    /// The external run completed normally — adopt its canonical turn log and
+    /// persist, exactly like `send`'s success path.
+    @MainActor
+    func completeExternalTurn(canonicalTurns: [ChatTurn], appState: AppState) {
+        guard isRunning else { return }
+        turns = canonicalTurns
+        pendingBlocks = []
+        streamBuffer = ""
+        isRunning = false
+        let flattened = flattenForHistory(canonicalTurns, appState: appState)
+        Task {
+            await self.persist(turns: canonicalTurns, appState: appState)
+            await appState.addToAskHistory(messages: flattened)
+        }
+    }
+
+    /// The external run ended early (barge-in, overlay closed, error) — keep
+    /// whatever streamed in, same as Stop.
+    @MainActor
+    func interruptExternalTurn(appState: AppState) {
+        guard isRunning else { return }
+        finishRunKeepingPartialOutput(appState: appState)
+    }
+
     // MARK: - Stop / abandon
 
     /// Stop this conversation's in-flight agent run. Cancels the Swift task
@@ -316,7 +377,19 @@ final class ChatRunController {
             // upgraded to a card when the result arrives below.
             if OttoTools.isAttachItemPreview(name),
                let preview = Self.parseItemPreview(from: input) {
+                // create_file auto-attaches a card for its output — if the
+                // agent redundantly attaches the same item, don't double-render.
+                if Self.containsPreview(entries, itemId: preview.id) { return }
                 entries.append(ChatUIEntry(toolUseId: id, kind: .itemPreview(type: preview.type, itemId: preview.id)))
+                return
+            }
+            // visualize renders as an inline chart/table card — same pattern
+            // as attach_item_preview: the full spec lives in the tool input.
+            // An unparseable spec falls through to a chip, which the error
+            // result then settles with the executor's message.
+            if OttoTools.isVisualize(name),
+               let spec = try? VisualizationSpec.parse(input) {
+                entries.append(ChatUIEntry(toolUseId: id, kind: .visualization(spec: spec)))
                 return
             }
             let label = OttoToolLabels.describe(name: name, input: input, appState: appState)
@@ -338,6 +411,24 @@ final class ChatRunController {
             let snapshot = snapshotTurns()
             Task { await persist(turns: snapshot, appState: appState) }
 
+            // create_file: a successful call should read as a downloadable
+            // file card, not a bare tool chip. Recover the new file's id from
+            // the executor's "Created file: <uuid> …" line and upgrade the
+            // chip in place (same identity-stability trick as the preview
+            // path below). Errors fall through so the chip settles and shows
+            // the failure line.
+            if OttoTools.isCreateFile(name), !isError,
+               let fileId = OttoTools.parseCreatedFileResult(summary) {
+                if let idx = entries.lastIndex(where: { entry in
+                    entry.toolUseId == id && entry.kind.isToolStep
+                }) {
+                    entries[idx].kind = .itemPreview(type: .file, itemId: fileId)
+                } else {
+                    entries.append(ChatUIEntry(toolUseId: id, kind: .itemPreview(type: .file, itemId: fileId)))
+                }
+                return
+            }
+
             if OttoTools.isAttachItemPreview(name) {
                 // Card already rendered on the toolCall event → the result is
                 // a no-op so we don't show a redundant checkmark chip.
@@ -354,6 +445,9 @@ final class ChatRunController {
                 if !isError,
                    let parsed = OttoTools.parsePreviewResult(summary),
                    let type = OttoTools.previewContentType(parsed.typeString) {
+                    // Same-item card already on screen (e.g. auto-attached by
+                    // create_file) — swallow the duplicate.
+                    if Self.containsPreview(entries, itemId: parsed.id) { return }
                     // Mutate `kind` in place (not a fresh entry) so the row's
                     // identity — and any tool-group expansion state keyed to
                     // it — survives the upgrade.
@@ -366,6 +460,17 @@ final class ChatRunController {
                     }
                     return
                 }
+            }
+
+            if OttoTools.isVisualize(name) {
+                // Card already rendered on the toolCall event → suppress the
+                // redundant result chip. If no card exists (invalid spec), a
+                // plain chip is pulsing and settles below with the error.
+                let cardExists = entries.contains { entry in
+                    if case .visualization = entry.kind { return entry.toolUseId == id }
+                    return false
+                }
+                if cardExists { return }
             }
 
             // Settle the matching in-flight step in place: keep the call line,
@@ -497,6 +602,10 @@ final class ChatRunController {
         // rendered a plain chip and will try to upgrade it to a preview card
         // from the tool result's "Attached preview: <type> <uuid>" line.
         var previewChipIds: Set<String> = []
+        // create_file calls — their chips get upgraded to downloadable file
+        // cards from the result's "Created file: <uuid> …" line, mirroring
+        // the live handleEvent path.
+        var createFileChipIds: Set<String> = []
 
         for turn in turns {
             switch turn.role {
@@ -516,10 +625,23 @@ final class ChatRunController {
                     case .toolUse(let id, let name, let input):
                         if OttoTools.isAttachItemPreview(name),
                            let preview = previewFromInput(input) {
-                            out.append(ChatUIEntry(toolUseId: id, kind: .itemPreview(type: preview.type, itemId: preview.id)))
+                            // Skip cards for items already shown (create_file
+                            // auto-attaches its output, so a redundant
+                            // attach call would double-render).
+                            if !containsPreview(out, itemId: preview.id) {
+                                out.append(ChatUIEntry(toolUseId: id, kind: .itemPreview(type: preview.type, itemId: preview.id)))
+                            }
+                        } else if OttoTools.isVisualize(name),
+                                  let spec = VisualizationSpec.parse(json: input) {
+                            // Not registered in toolIndex, so the matching
+                            // .toolResult block is skipped — card only, no chip.
+                            out.append(ChatUIEntry(toolUseId: id, kind: .visualization(spec: spec)))
                         } else {
                             if OttoTools.isAttachItemPreview(name) {
                                 previewChipIds.insert(id)
+                            }
+                            if OttoTools.isCreateFile(name) {
+                                createFileChipIds.insert(id)
                             }
                             let label = OttoToolLabels.describe(name: name, input: input, appState: appState)
                             let callLabel: String
@@ -545,12 +667,27 @@ final class ChatRunController {
                         if let idx = toolIndex[toolUseId],
                            idx < out.count,
                            case .toolStep(_, let callLabel, _, _, _) = out[idx].kind {
+                            // create_file chip: recover the new file's id from
+                            // the result line and upgrade to a downloadable
+                            // file card, matching the live path.
+                            if createFileChipIds.contains(toolUseId), !isError,
+                               let fileId = OttoTools.parseCreatedFileResult(content) {
+                                out[idx] = ChatUIEntry(
+                                    toolUseId: toolUseId,
+                                    kind: .itemPreview(type: .file, itemId: fileId)
+                                )
+                                continue
+                            }
                             // Preview chip whose call had no usable input:
                             // recover {type, id} from the executor's result
                             // line and upgrade the chip to a real card.
+                            // (When the item is already carded — create_file
+                            // auto-attach — fall through so the chip settles
+                            // as a plain step instead of double-rendering.)
                             if previewChipIds.contains(toolUseId), !isError,
                                let parsed = OttoTools.parsePreviewResult(content),
-                               let type = OttoTools.previewContentType(parsed.typeString) {
+                               let type = OttoTools.previewContentType(parsed.typeString),
+                               !containsPreview(out, itemId: parsed.id) {
                                 out[idx] = ChatUIEntry(
                                     toolUseId: toolUseId,
                                     kind: .itemPreview(type: type, itemId: parsed.id)
@@ -589,6 +726,16 @@ final class ChatRunController {
               let id = UUID(uuidString: idStr)
         else { return nil }
         return (type, id)
+    }
+
+    /// True when an item-preview card for `itemId` is already in the
+    /// transcript — used to keep create_file's auto-attached card and a
+    /// redundant attach_item_preview from rendering the same item twice.
+    private static func containsPreview(_ entries: [ChatUIEntry], itemId: UUID) -> Bool {
+        entries.contains { entry in
+            if case .itemPreview(_, let existingId) = entry.kind { return existingId == itemId }
+            return false
+        }
     }
 
     private static func parseItemPreview(from input: [String: Any]) -> (type: ContentType, id: UUID)? {
@@ -644,6 +791,7 @@ final class ChatRunController {
         case "search_items": return "Searching"
         case "get_item": return "Fetching details"
         case "attach_item_preview": return "Attaching preview"
+        case "create_file": return "Creating file"
         case "open_url": return "Opening website"
         case "create_habit": return "Creating habit"
         case "log_habit_entry": return "Logging habit entry"

@@ -265,6 +265,9 @@ actor AgentService {
         ### Files
         The user can import PDFs, CSVs, Excel sheets, images (PNG/JPG/HEIC — OCR'd at import), and plain-text formats (txt/md/json/yaml/log/html/xml/rtf) via the Files tab. To work with them: call `search_items` with `types=["file"]` (and optionally a `query`) to discover ids and names; call `read_file` with an id to get the extracted text plus an absolute path on disk. For images where OCR'd text isn't enough, or for PDFs with patchy extraction, ALSO call the built-in `Read` tool on the returned path — Claude Code's Read is multimodal and can see the image directly. When the user says "open the spreadsheet I uploaded", "what did the invoice say", "summarize that PDF", "find the file about X" — start with `search_items` (type=file), not WebSearch.
 
+        ### Creating downloadable files
+        When the user asks for a file, export, spreadsheet, report, or anything they can download or send onward ("make me an xlsx of…", "export this as CSV", "put that in a PDF"), call `create_file`. Format follows the filename extension: `.xlsx` takes `sheets` — one worksheet tab per logical section ([{name, rows}], e.g. Summary / By City / Companies as separate tabs) with each sheet's first row as its header row (headers come out bold, frozen, and filterable automatically; column widths auto-size); use plain `rows` only for a single small table, and keep numbers as numbers so the spreadsheet can sum them, `.csv`/`.txt`/`.md`/`.json`/`.yaml`/`.html`/`.xml` take the raw text in `content`, and `.pdf` takes light markdown in `content` (# headings, - bullets, **bold**, | table rows). The file is saved to Otto's Files tab and a clickable download card is attached to your reply AUTOMATICALLY — do NOT also call `attach_item_preview` for it, and don't paste the file's contents into your prose; a one-sentence summary is enough. Pull the data with `search_items` / `grep_data` / `get_item` first if the file is about the user's own items.
+
         ### Habits
         The user tracks habits in the Habits tab. Use `create_habit` when the user describes a routine they want to build ("I want to drink 2.5L of water every day", "track no porn", "log my workouts 3x a week"). Infer the right shape from their words: numeric amounts with units → `kind=quantity` (e.g. 2500 mL water), time-based → `kind=duration` (e.g. 30 min reading), simple done/not-done → `kind=binary`. Use `log_habit_entry` when the user reports doing some amount ("I drank 500ml", "read for 25 min", "did 30 pushups", "ate 80g of protein") — you can pass the habit name and the executor will find it. Use `complete_habit` when they finished a habit with no specific quantity ("done with my workout", "meditated today", "made my bed"). Use `list_habits` for "how am I doing today?" / "what habits did I miss?" before answering.
 
@@ -284,10 +287,33 @@ actor AgentService {
         - For relational / cross-source questions — "who did I talk to about X", "what's pending on topic Y", "what do I know about person Z" — call `search_items` ONCE with `types` spanning multiple sources (typical combo: `["email", "meeting", "note", "connection"]`) and a `query` string. Then synthesize a single-paragraph answer that ties the results together (who said what where, most recent signal, one actionable takeaway) — don't dump a numbered list of hits.
         - Whenever your prose mentions a specific existing item, write its name as an INLINE item link: `[<item title>](otto://<type>/<id>)` — e.g. "Talk to [Arın Özkula](otto://connection/8A6F1D22-…) first, then loop in the [E2vc webinar](otto://meeting/608AAECD-…) notes." These render as clickable highlighted chips inside your sentence that open the item's detail popup. Types: todo, note, idea, reminder, bookmark, meeting, email, connection, network, company, event, community, habit, file, x_post, x_follower, x_dm. Ids come from `search_items` / `get_item` / create-tool results — never invent one. Weave the links into flowing sentences or short bullets; do NOT dump a long plain-text table of names when inline links can carry the same information.
         - `attach_item_preview` adds a LARGE standalone card below your text — reserve it for the 1-3 headline items of your answer (e.g. the single best contact to reach out to). Don't attach a card for an item you already inline-linked, and never repeat a card's title in prose.
+        - Whenever your answer contains structured numbers — comparisons, breakdowns, funnels, time series, headline metrics, or anything you would be tempted to format as a table — call `visualize` and keep your prose to 1-3 sentences of takeaways. Markdown pipe tables and ASCII charts do NOT render in this chat (they show as raw text); NEVER emit them. Pick the type by shape: 'stats' for 2-8 headline numbers, 'table' for detailed listings, 'bar' for category comparisons, 'line' for trends over time, 'pie' for composition. Multiple `visualize` calls per answer are fine (e.g. a stats row + a breakdown table). Don't repeat the visualized data in prose. Inside `visualize` tables, tag items exactly like in prose: a cell naming a specific existing item should be an inline item link `[Title](otto://<type>/<id>)` (real ids only) — it renders as a clickable chip that opens the item, so a column of people/companies becomes navigable. Stat `detail` lines support the same links; chart labels don't (they show the bare title).
         - When the best answer to a request is a live webpage (music to play, a news article, a booking page, a reference URL), call `open_url` with an https URL to open it in the user's default browser. Construct a sensible search URL (youtube.com/results?search_query=…, google.com/search?q=…) if you don't have a specific canonical link. Only call this when the user is clearly asking for something actionable on the web — don't volunteer URLs for every question.
         - For "world status" / news-briefing phrases — "what's going on in the world", "world monitor", "monitor the situation", "brief me", "morning briefing", "catch me up on the news" — this is a MUST-USE-WEB-TOOLS situation. Immediately call WebSearch (e.g. "top world news today") to get current headlines. Pick the 1–2 most important stories. Call `open_url` with the URL of the single most important article so it opens in the user's browser. Then deliver a crisp 2–3 sentence spoken summary covering just those 1–2 stories. Never decline by saying you can't access news — you can.
         - Only create items the user clearly asks for — don't volunteer extras.
         """)
+
+        // Custom tabs — user-defined tables, each with generated CRUD tools.
+        if !appState.customTabs.isEmpty {
+            var section: [String] = []
+            section.append("### Custom tabs (user-defined tables)")
+            section.append("The user created these tabs themselves; each is a table with typed columns. Per tab you have generated tools: `create_<slug>` to add a row, `update_<slug>` to edit one (only include fields you're changing), `delete_item(type=\"<slug>\")` to remove one, and `search_items(types=[\"<slug>\"])` or `grep_data(file: \"custom_<slug>.csv\", …)` to find rows. Custom-tab records do NOT support otto:// inline links or attach_item_preview — reference them by title in plain prose.")
+            for tab in appState.customTabs {
+                let count = appState.customRecords.filter { $0.tabId == tab.id }.count
+                let columns = tab.fieldKeys().map { col -> String in
+                    switch col.field.kind {
+                    case .singleSelect:
+                        return "\(col.key) (one of: \(col.field.options.map(\.label).joined(separator: "|")))"
+                    case .multiSelect:
+                        return "\(col.key) (any of: \(col.field.options.map(\.label).joined(separator: "|")))"
+                    default:
+                        return "\(col.key) (\(col.field.kind.label.lowercased()))"
+                    }
+                }.joined(separator: ", ")
+                section.append("- \"\(tab.name)\" — slug `\(tab.slug)`, \(count) record\(count == 1 ? "" : "s"). Columns: \(columns).")
+            }
+            parts.append("\n" + section.joined(separator: "\n"))
+        }
 
         // Data workspace — the CLI backends run in a local working directory
         // that ClaudeCLIService / CodexCLIService populate with per-tab

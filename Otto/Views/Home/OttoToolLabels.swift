@@ -105,9 +105,26 @@ enum OttoToolLabels {
             return Label(verb: "Listing habits", arg: nil)
         case "attach_item_preview":
             return Label(verb: "Attaching preview:", arg: resolveItemTitle(input: input, appState: appState))
+        case "visualize":
+            return Label(verb: "Rendering:", arg: trim(string(input, "title"))
+                ?? string(input, "type").map { "\($0) visualization" })
         case "read_file":
             return Label(verb: "Reading file:", arg: resolveFileName(input: input, appState: appState))
+        case "create_file":
+            return Label(verb: "Creating file:", arg: trim(string(input, "filename")))
         default:
+            // Generated custom-tab tools: create_<slug> / update_<slug>.
+            if let appState,
+               let (action, tab) = OttoTools.customTabTool(named: name, tabs: appState.customTabs) {
+                let titleArg = tab.fieldKeys().first.flatMap { trim(string(input, $0.key)) }
+                switch action {
+                case .create:
+                    return Label(verb: "Adding to \(tab.name):", arg: titleArg)
+                case .update:
+                    return Label(verb: "Updating \(tab.name):", arg: titleArg
+                        ?? resolveCustomRecordTitle(input: input, appState: appState, tab: tab))
+                }
+            }
             return Label(verb: name.replacingOccurrences(of: "_", with: " ").capitalized, arg: nil)
         }
     }
@@ -204,13 +221,29 @@ enum OttoToolLabels {
     }
 
     @MainActor
+    private static func resolveCustomRecordTitle(input: [String: Any], appState: AppState, tab: CustomTabDefinition) -> String? {
+        guard let idStr = input["id"] as? String,
+              let id = UUID(uuidString: idStr),
+              let record = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id })
+        else { return nil }
+        return trim(record.displayTitle(in: tab))
+    }
+
+    @MainActor
     private static func resolveItemTitle(input: [String: Any], appState: AppState?) -> String? {
         guard let appState = appState,
               let typeStr = input["type"] as? String,
-              let type = OttoTools.previewContentType(typeStr),
               let idStr = input["id"] as? String,
               let id = UUID(uuidString: idStr)
         else { return nil }
+
+        // Custom-tab record? (delete_item / get_item with a custom slug type)
+        if let tab = appState.customTabs.first(where: { $0.slug == typeStr }) {
+            return appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id })
+                .map { trim($0.displayTitle(in: tab)) } ?? nil
+        }
+
+        guard let type = OttoTools.previewContentType(typeStr) else { return nil }
 
         let title: String?
         switch type {

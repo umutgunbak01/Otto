@@ -101,6 +101,13 @@ actor FileStorageService {
         return try Data(contentsOf: url)
     }
 
+    /// Overwrite a stored text-based file (CSV editing writes back through
+    /// here). Callers must also refresh `extractedText`/`fileSize` on the
+    /// FileItem via AppState so search and previews stay in sync.
+    func writeText(_ text: String, for fileItem: FileItem) throws {
+        try text.write(to: getFileURL(for: fileItem), atomically: true, encoding: .utf8)
+    }
+
     // MARK: - File Deletion
 
     /// Delete a file from storage
@@ -123,11 +130,11 @@ actor FileStorageService {
         case .csv:
             return extractTextFromUTF8(url: url)
         case .excel:
-            // .xlsx is a zipped XML bundle; native extraction would need
-            // ZIPFoundation + XML parsing. The agent can still see the
-            // file metadata via list_files, and the binary is staged into
-            // the CLI tmpDir so a future tool can read it.
-            return nil
+            // Native .xlsx extraction via XLSXReader (zip + XML, no deps) —
+            // cell values flattened to CSV text so spreadsheets are
+            // searchable and readable through `read_file`. Legacy .xls
+            // (pre-2007 binary format) isn't parseable and returns nil.
+            return XLSXReader.csvText(from: url)
         case .pdf:
             return extractTextFromPDF(url: url)
         case .image:
