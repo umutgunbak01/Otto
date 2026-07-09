@@ -47,7 +47,9 @@ extension ContentType {
 // MARK: - Search
 
 enum MentionSearch {
-    static let limit = 8
+    /// Panel row cap. The panel floats OVER the transcript above the
+    /// composer, so it's kept short enough to never bury the conversation.
+    static let limit = 6
 
     /// Title-first fuzzy match across every taggable collection. An empty
     /// query (the user just typed "@") surfaces recently touched items so
@@ -274,10 +276,12 @@ enum MentionSearch {
 
 // MARK: - Suggestion Panel
 
-/// The autocomplete panel shown above the composer while an `@token` is
-/// active. Keyboard driven from the TextField (↑↓ move, ↩/⇥ tag, esc
-/// dismiss); rows also respond to hover + click. Results are capped at
-/// `MentionSearch.limit`, so a plain VStack is fine — no scrolling needed.
+/// The autocomplete panel that FLOATS over the transcript just above the
+/// composer while an `@token` is active (an overlay, not part of the input
+/// bar's layout — inline it would push the composer off-screen). Keyboard
+/// driven from the TextField (↑↓ move, ↩/⇥ tag, esc dismiss); rows also
+/// respond to hover + click. Results are capped at `MentionSearch.limit`,
+/// so a plain VStack is fine — no scrolling needed.
 struct MentionSuggestionList: View {
     let results: [MentionItem]
     @Binding var selectedIndex: Int
@@ -318,6 +322,9 @@ struct MentionSuggestionList: View {
             RoundedRectangle(cornerRadius: Theme.Radius.md)
                 .strokeBorder(Theme.Colors.borderStrong, lineWidth: 1)
         )
+        // Floating over the message list — lift it off the page so it reads
+        // as a popover, not a band of the transcript.
+        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
     }
 
     private func row(_ item: MentionItem, isSelected: Bool) -> some View {

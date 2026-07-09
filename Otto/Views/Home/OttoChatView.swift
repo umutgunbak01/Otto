@@ -505,15 +505,6 @@ struct OttoChatView: View {
                 backgroundRunHint(sessionId: backgroundId)
             }
 
-            if mentionPanelVisible {
-                MentionSuggestionList(
-                    results: mentionResults,
-                    selectedIndex: $mentionSelection
-                ) { item in
-                    acceptMention(item)
-                }
-            }
-
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 TextField("Ask or create — todos, notes, ideas, reminders…", text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -653,6 +644,21 @@ struct OttoChatView: View {
             )
             .animation(.easeInOut(duration: 0.15), value: composerHovered || inputFocused)
             .onHover { composerHovered = $0 }
+        }
+        // The @-mention panel FLOATS above the composer (overlapping the
+        // transcript) instead of joining the layout — inline it would push
+        // the composer down and hide what the user is typing. The overlay
+        // is anchored so its bottom edge sits just above the input bar.
+        .overlay(alignment: .top) {
+            if mentionPanelVisible {
+                MentionSuggestionList(
+                    results: mentionResults,
+                    selectedIndex: $mentionSelection
+                ) { item in
+                    acceptMention(item)
+                }
+                .alignmentGuide(.top) { $0[.bottom] + Theme.Spacing.sm }
+            }
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.md)
