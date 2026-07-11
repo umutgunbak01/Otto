@@ -285,7 +285,7 @@ actor ClaudeCLIService {
             stderrBuffer.append(chunk)
         }
 
-        let assistantText = try await parseStreamJSON(
+        let parsed = try await parseStreamJSON(
             stdout: stdoutPipe.fileHandleForReading,
             onDelta: onDelta,
             onEvent: onEvent
@@ -303,18 +303,27 @@ actor ClaudeCLIService {
             throw CLIError.crashed(proc.terminationStatus, msg)
         }
 
-        // OttoChatView renders bubbles from `onEvent(.text(...))` — not from
-        // the returned turns — so the completed assistant message needs to land
-        // there as a single event. Voice mode ignores `onEvent` entirely and
-        // already got its text via `onDelta`, so this is harmless for it.
-        let finalText = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalText.isEmpty {
-            let captured = finalText
+        // Text segments are finalized per `assistant` message event (so tool
+        // chips interleave with bubbles the way Hermes renders them). If the
+        // stream ended with deltas that never got their consolidated
+        // `assistant` event (degenerate stream / old CLI), flush the tail as
+        // a final segment so it isn't lost.
+        var blocks = parsed.blocks
+        let remainder = parsed.unfinalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !remainder.isEmpty {
+            blocks.append(.text(remainder))
+            let captured = remainder
             await MainActor.run { onEvent(.text(captured)) }
+        }
+        if blocks.isEmpty {
+            blocks = [.text(parsed.text)]
         }
 
         var updated = turns
-        updated.append(ChatTurn(role: "assistant", blocks: [.text(assistantText)]))
+        // Persist the full block log (text + toolUse + toolResult) — same as
+        // the Hermes path — so reopened sessions rebuild tool chips, preview
+        // cards, and media previews instead of just the prose.
+        updated.append(ChatTurn(role: "assistant", blocks: blocks))
         return updated
     }
 
@@ -379,34 +388,32 @@ actor ClaudeCLIService {
         return url
     }
 
-    /// Flatten the turn log into a single prompt string. Each turn gets a role
-    /// prefix so Claude can read the back-and-forth. Tool result blocks are
-    /// elided — Phase 1 doesn't execute Otto tools through the CLI path.
+    /// Flatten the turn log into a single prompt string. Uses the shared
+    /// `ChatTranscript` flatten (role prefixes + compact bracketed tool
+    /// calls/results) so follow-up turns keep the substance that lives in
+    /// tool payloads — same replay format the Hermes backend uses.
     private func flattenTurns(_ turns: [ChatTurn]) -> String {
-        var out: [String] = []
-        for turn in turns {
-            var chunks: [String] = []
-            for block in turn.blocks {
-                if case .text(let s) = block,
-                   !s.trimmingCharacters(in: .whitespaces).isEmpty {
-                    chunks.append(s)
-                }
-            }
-            let combined = chunks.joined(separator: "\n\n")
-            if combined.isEmpty { continue }
-            let prefix = turn.role == "assistant" ? "Assistant" : "User"
-            out.append("\(prefix): \(combined)")
-        }
-        return out.joined(separator: "\n\n")
+        ChatTranscript.flatten(turns)
     }
 
-    /// Parse line-delimited JSON events from the CLI and stream text deltas to
-    /// `onDelta`. Returns the complete assistant text once the stream ends.
+    /// Everything one CLI run produced: the concatenated delta text (voice
+    /// TTS + fallback), the ordered canonical blocks (text segments + tool
+    /// calls + tool results, mirroring what Hermes persists), and any delta
+    /// text that never got its consolidated `assistant` event.
+    private struct ParsedTurn {
+        let text: String
+        let blocks: [ChatBlock]
+        let unfinalized: String
+    }
+
+    /// Parse line-delimited JSON events from the CLI, stream text deltas to
+    /// `onDelta`, and mirror tool_use / tool_result blocks as ChatEvents so
+    /// the chat UI renders the same chips/cards it does for Hermes.
     ///
     /// Key event types (from `claude -p --output-format stream-json`):
     ///   - `system` (subtype: init / result) — session metadata
-    ///   - `user` — echoed user message
-    ///   - `assistant` — full assistant message blocks
+    ///   - `user` — echoed user prompt, and tool_result blocks after each call
+    ///   - `assistant` — full assistant message blocks (text + tool_use)
     ///   - `stream_event` (with --include-partial-messages) — raw Anthropic SSE
     ///     events like `content_block_delta` with `delta.text`
     ///   - `result` — terminal event with final result + usage stats
@@ -414,9 +421,17 @@ actor ClaudeCLIService {
         stdout: FileHandle,
         onDelta: @escaping @MainActor (String) -> Void,
         onEvent: @escaping @MainActor (ChatEvent) -> Void
-    ) async throws -> String {
+    ) async throws -> ParsedTurn {
         var textBuffer = ""
         var leftover = ""
+        var blocks: [ChatBlock] = []
+        // Delta text since the last assistant-event finalize. Normally the
+        // consolidated `assistant` event covers it exactly; whatever is left
+        // at stream end becomes a final text segment upstream.
+        var unfinalized = ""
+        // tool_use id → canonical tool name, so the tool_result (which only
+        // carries the id) can be labeled for the UI.
+        var toolNames: [String: String] = [:]
 
         while true {
             let chunk = try await readChunk(from: stdout)
@@ -427,12 +442,15 @@ actor ClaudeCLIService {
                 let line = String(leftover[..<newlineRange.lowerBound])
                 leftover = String(leftover[newlineRange.upperBound...])
                 if line.isEmpty { continue }
-                if let parsed = parseEvent(line) {
+                if let parsed = parseEvent(line, toolNames: &toolNames) {
                     if !parsed.textDelta.isEmpty {
                         textBuffer += parsed.textDelta
+                        unfinalized += parsed.textDelta
                         let captured = parsed.textDelta
                         await MainActor.run { onDelta(captured) }
                     }
+                    blocks.append(contentsOf: parsed.blocks)
+                    if parsed.finalizedSegment { unfinalized = "" }
                     for ev in parsed.events {
                         let captured = ev
                         await MainActor.run { onEvent(captured) }
@@ -440,7 +458,7 @@ actor ClaudeCLIService {
                 }
             }
         }
-        return textBuffer
+        return ParsedTurn(text: textBuffer, blocks: blocks, unfinalized: unfinalized)
     }
 
     private func readChunk(from handle: FileHandle) async throws -> Data {
@@ -455,18 +473,23 @@ actor ClaudeCLIService {
     /// Result of parsing a single NDJSON line from the Claude Code CLI.
     /// `textDelta` is the assistant-text delta (accumulated into the final
     /// reply + forwarded to voice TTS). `events` is the list of ChatEvents
-    /// to surface to the UI for this line — typically a `.partialText` for
-    /// each text delta, a `.thinkingDelta` for each thinking delta, plus
-    /// any tool-related events.
+    /// to surface to the UI for this line. `blocks` are canonical ChatBlocks
+    /// to persist in the assistant turn (text segments, toolUse, toolResult).
+    /// `finalizedSegment` marks that a consolidated text block landed, so
+    /// the accumulated delta tail is accounted for.
     private struct ParsedEvent {
-        let textDelta: String
-        let events: [ChatEvent]
+        var textDelta: String = ""
+        var events: [ChatEvent] = []
+        var blocks: [ChatBlock] = []
+        var finalizedSegment: Bool = false
     }
 
-    /// Extract a text delta and/or ChatEvents from one NDJSON line.
-    /// Handles both `text_delta` content blocks (visible assistant output)
-    /// and `thinking_delta` content blocks (extended-thinking reasoning).
-    private func parseEvent(_ line: String) -> ParsedEvent? {
+    /// Extract deltas, ChatEvents, and canonical blocks from one NDJSON line.
+    /// `stream_event` deltas drive live streaming; consolidated `assistant`
+    /// events are the canonical source for text segments and tool_use blocks
+    /// (mirrored as `.text` / `.toolCall`); `user` events carry tool_result
+    /// blocks (mirrored as `.toolResult`).
+    private func parseEvent(_ line: String, toolNames: inout [String: String]) -> ParsedEvent? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -484,13 +507,13 @@ actor ClaudeCLIService {
                   let eventType = event["type"] as? String,
                   eventType == "content_block_delta",
                   let delta = event["delta"] as? [String: Any]
-            else { return ParsedEvent(textDelta: "", events: []) }
+            else { return ParsedEvent() }
 
             let deltaType = (delta["type"] as? String) ?? ""
 
             if deltaType == "thinking_delta",
                let thinking = delta["thinking"] as? String, !thinking.isEmpty {
-                return ParsedEvent(textDelta: "", events: [.thinkingDelta(thinking)])
+                return ParsedEvent(events: [.thinkingDelta(thinking)])
             }
 
             // Default path covers `text_delta` (and legacy shapes that
@@ -498,19 +521,82 @@ actor ClaudeCLIService {
             if let text = delta["text"] as? String, !text.isEmpty {
                 return ParsedEvent(textDelta: text, events: [.partialText(text)])
             }
-            return ParsedEvent(textDelta: "", events: [])
+            return ParsedEvent()
 
         case "assistant":
-            // Full message blocks — use as a fallback text source when the
-            // CLI isn't running with --include-partial-messages. Returns
-            // nothing here since we already accumulate via stream_event.
-            return ParsedEvent(textDelta: "", events: [])
+            // Consolidated assistant message — one per message segment, so
+            // text finalizes exactly where tool calls interleave (same
+            // rendering shape as Hermes). Sub-agent traffic (non-null
+            // parent_tool_use_id) stays internal.
+            if let parent = obj["parent_tool_use_id"] as? String, !parent.isEmpty {
+                return ParsedEvent()
+            }
+            guard let message = obj["message"] as? [String: Any],
+                  let content = message["content"] as? [[String: Any]]
+            else { return ParsedEvent() }
+            var out = ParsedEvent()
+            for block in content {
+                switch block["type"] as? String ?? "" {
+                case "text":
+                    let text = block["text"] as? String ?? ""
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        out.blocks.append(.text(text))
+                        out.events.append(.text(text))
+                        out.finalizedSegment = true
+                    }
+                case "tool_use":
+                    guard let id = block["id"] as? String,
+                          let rawName = block["name"] as? String else { continue }
+                    // MCP tools arrive as `mcp__otto__<tool>` — canonicalize
+                    // so the UI and the preview/genmedia upgrades see the
+                    // bare name, exactly like the Hermes path does.
+                    let name = OttoTools.canonicalToolName(rawName)
+                    let input = block["input"] as? [String: Any] ?? [:]
+                    toolNames[id] = name
+                    out.blocks.append(.toolUse(id: id, name: name, input: JSONValue.from(any: input)))
+                    out.events.append(.toolCall(id: id, name: name, input: input))
+                default:
+                    break
+                }
+            }
+            return out
 
-        case "system", "user", "result", "rate_limit_event":
-            return ParsedEvent(textDelta: "", events: [])
+        case "user":
+            // Tool results come back as user-role messages with tool_result
+            // blocks. (The echoed user prompt has string content — skipped.)
+            if let parent = obj["parent_tool_use_id"] as? String, !parent.isEmpty {
+                return ParsedEvent()
+            }
+            guard let message = obj["message"] as? [String: Any],
+                  let content = message["content"] as? [[String: Any]]
+            else { return ParsedEvent() }
+            var out = ParsedEvent()
+            for block in content where (block["type"] as? String) == "tool_result" {
+                guard let toolUseId = block["tool_use_id"] as? String else { continue }
+                let isError = (block["is_error"] as? Bool) ?? false
+                let text = Self.toolResultText(block["content"])
+                let name = toolNames[toolUseId] ?? "tool"
+                out.blocks.append(.toolResult(toolUseId: toolUseId, content: text, isError: isError))
+                out.events.append(.toolResult(id: toolUseId, name: name, summary: text, isError: isError))
+            }
+            return out
+
+        case "system", "result", "rate_limit_event":
+            return ParsedEvent()
 
         default:
-            return ParsedEvent(textDelta: "", events: [])
+            return ParsedEvent()
         }
+    }
+
+    /// tool_result `content` is either a plain string or an array of
+    /// `{type:"text", text}` blocks — flatten to one string.
+    private static func toolResultText(_ value: Any?) -> String {
+        if let s = value as? String { return s }
+        if let arr = value as? [[String: Any]] {
+            return arr.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        }
+        if let obj = value as? [String: Any], let s = obj["text"] as? String { return s }
+        return ""
     }
 }

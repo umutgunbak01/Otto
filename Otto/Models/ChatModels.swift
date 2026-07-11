@@ -287,9 +287,11 @@ enum ChatBlock: Codable, Hashable {
 
 /// UI-level event emitted during a chat-with-tools run — lets the view render a live log.
 enum ChatEvent {
-    /// Final, complete assistant text for the turn. Emitted once at end-of-
-    /// turn after all `.partialText` deltas. The UI treats this as the
-    /// canonical version and uses it to finalize the streaming bubble.
+    /// Finalized assistant text — the canonical version of one message
+    /// segment, emitted after that segment's `.partialText` deltas. The UI
+    /// uses it to settle the streaming bubble in place. Backends emit one
+    /// per assistant message segment, so tool chips interleave between
+    /// finalized bubbles (a turn with tool calls has several segments).
     case text(String)
     /// One streaming chunk of assistant text. Backends emit these as the
     /// model produces tokens; the UI accumulates them into the in-flight

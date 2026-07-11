@@ -275,7 +275,7 @@ actor CodexCLIService {
         // until process exit on the error path.
         defer { stderrHandle.readabilityHandler = nil }
 
-        let assistantText = try await parseStreamJSON(
+        let parsed = try await parseStreamJSON(
             stdout: stdoutPipe.fileHandleForReading,
             onDelta: onDelta,
             onEvent: onEvent
@@ -292,18 +292,26 @@ actor CodexCLIService {
             throw CLIError.crashed(proc.terminationStatus, msg)
         }
 
-        // OttoChatView renders bubbles from `onEvent(.text(...))` — not from
-        // the returned turns — so the completed assistant message needs to
-        // land there as a single event. Voice mode already got its text via
-        // `onDelta` in `parseStreamJSON`, so this is harmless for it.
-        let finalText = assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalText.isEmpty {
-            let captured = finalText
+        // Text segments finalize per completed `agent_message` item (each
+        // one already emitted `.text`), so tool chips interleave with
+        // bubbles the way Hermes renders them. `unfinalized` is only
+        // non-empty on degenerate streams — flush it so nothing is lost.
+        var blocks = parsed.blocks
+        let remainder = parsed.unfinalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !remainder.isEmpty {
+            blocks.append(.text(remainder))
+            let captured = remainder
             await MainActor.run { onEvent(.text(captured)) }
+        }
+        if blocks.isEmpty {
+            blocks = [.text(parsed.text)]
         }
 
         var updated = turns
-        updated.append(ChatTurn(role: "assistant", blocks: [.text(assistantText)]))
+        // Persist the full block log (text + toolUse + toolResult) — same as
+        // the Hermes path — so reopened sessions rebuild tool chips, preview
+        // cards, and media previews instead of just the prose.
+        updated.append(ChatTurn(role: "assistant", blocks: blocks))
         return updated
     }
 
@@ -371,38 +379,55 @@ actor CodexCLIService {
 
     /// Codex `exec` doesn't have a `--system-prompt` flag the way `claude -p`
     /// does. We prepend the system prompt as a `[system]` block followed by
-    /// role-prefixed turns, then pipe everything in on stdin.
+    /// the shared `ChatTranscript` flatten (role prefixes + compact bracketed
+    /// tool calls/results, so follow-up turns keep the substance that lives
+    /// in tool payloads), then pipe everything in on stdin.
     private func combinedPrompt(systemPrompt: String, turns: [ChatTurn]) -> String {
         var out: [String] = []
         let trimmedSystem = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedSystem.isEmpty {
             out.append("[system]\n\(trimmedSystem)")
         }
-        for turn in turns {
-            var chunks: [String] = []
-            for block in turn.blocks {
-                if case .text(let s) = block,
-                   !s.trimmingCharacters(in: .whitespaces).isEmpty {
-                    chunks.append(s)
-                }
-            }
-            let combined = chunks.joined(separator: "\n\n")
-            if combined.isEmpty { continue }
-            let prefix = turn.role == "assistant" ? "Assistant" : "User"
-            out.append("\(prefix): \(combined)")
+        let history = ChatTranscript.flatten(turns)
+        if !history.isEmpty {
+            out.append(history)
         }
         return out.joined(separator: "\n\n")
+    }
+
+    /// Everything one CLI run produced: the concatenated message text (voice
+    /// TTS + fallback), the ordered canonical blocks (text segments + tool
+    /// calls + tool results, mirroring what Hermes persists), and any text
+    /// that never got folded into a block (degenerate streams only).
+    private struct ParsedTurn {
+        let text: String
+        let blocks: [ChatBlock]
+        let unfinalized: String
+    }
+
+    /// Mutable parse state threaded through `parseEvent` line by line.
+    private struct ParserState {
+        /// Most recent agent_reasoning summary, so `item.updated` bursts can
+        /// emit just the delta rather than re-sending the full running text.
+        var lastReasoning = ""
+        /// Tool item ids whose `item.started` already produced a `.toolCall`,
+        /// so `item.completed` knows whether to backfill the call event
+        /// (some codex versions only emit `item.completed` for fast tools).
+        var startedToolItems: Set<String> = []
     }
 
     /// Parse JSONL events from `codex exec --json`. Emitted events:
     ///   - `thread.started` — session metadata, no-op
     ///   - `turn.started` — agent loop iteration begins, no-op
+    ///   - `item.started` — tool items (`mcp_tool_call`, `command_execution`,
+    ///     `web_search`) surface as `.toolCall` so the UI shows a pulsing
+    ///     chip while the tool runs, exactly like Hermes
     ///   - `item.completed` — wraps one completed item:
     ///       - `agent_message` → assistant text (delivered in one shot —
-    ///         see streaming caveat in the actor doc — but still emitted
-    ///         to the UI as a `.partialText` so the bubble shows up the
-    ///         moment Codex finishes, rather than at end-of-turn)
-    ///       - `function_call` / `tool_call` → tool invocation event
+    ///         see streaming caveat in the actor doc — emitted as
+    ///         `.partialText` + `.text` so the segment finalizes in place
+    ///         and tool chips interleave between bubbles)
+    ///       - tool items → `.toolResult` settles the matching chip
     ///       - `agent_reasoning` → emitted as `.thinkingDelta` so the
     ///         user can follow Codex's chain of thought
     ///   - `item.updated` — incremental updates while an item is forming;
@@ -414,13 +439,12 @@ actor CodexCLIService {
         stdout: FileHandle,
         onDelta: @escaping @MainActor (String) -> Void,
         onEvent: @escaping @MainActor (ChatEvent) -> Void
-    ) async throws -> String {
+    ) async throws -> ParsedTurn {
         var textBuffer = ""
         var leftover = ""
-        // Track the most recent agent_reasoning summary so `item.updated`
-        // bursts can emit just the delta rather than re-sending the full
-        // running text.
-        var lastReasoning = ""
+        var blocks: [ChatBlock] = []
+        var unfinalized = ""
+        var state = ParserState()
 
         while true {
             let chunk = try await readChunk(from: stdout)
@@ -431,12 +455,15 @@ actor CodexCLIService {
                 let line = String(leftover[..<newlineRange.lowerBound])
                 leftover = String(leftover[newlineRange.upperBound...])
                 if line.isEmpty { continue }
-                if let parsed = parseEvent(line, lastReasoning: &lastReasoning) {
+                if let parsed = parseEvent(line, state: &state) {
                     if !parsed.textDelta.isEmpty {
                         textBuffer += parsed.textDelta
+                        unfinalized += parsed.textDelta
                         let captured = parsed.textDelta
                         await MainActor.run { onDelta(captured) }
                     }
+                    blocks.append(contentsOf: parsed.blocks)
+                    if parsed.finalizedSegment { unfinalized = "" }
                     for ev in parsed.events {
                         let captured = ev
                         await MainActor.run { onEvent(captured) }
@@ -444,7 +471,7 @@ actor CodexCLIService {
                 }
             }
         }
-        return textBuffer
+        return ParsedTurn(text: textBuffer, blocks: blocks, unfinalized: unfinalized)
     }
 
     private func readChunk(from handle: FileHandle) async throws -> Data {
@@ -456,17 +483,18 @@ actor CodexCLIService {
         }
     }
 
+    /// Result of parsing a single JSONL line. `blocks` are canonical
+    /// ChatBlocks to persist in the assistant turn; `finalizedSegment`
+    /// marks that a consolidated text segment landed.
     private struct ParsedEvent {
-        let textDelta: String
-        let events: [ChatEvent]
+        var textDelta: String = ""
+        var events: [ChatEvent] = []
+        var blocks: [ChatBlock] = []
+        var finalizedSegment: Bool = false
     }
 
-    /// Extract a text delta and/or ChatEvents from one NDJSON line.
-    /// `lastReasoning` is read+written so `item.updated` bursts produce
-    /// strict deltas off the previous reasoning summary — emitting the
-    /// full running text every tick would produce N-shaped accumulation
-    /// in the UI's thinking bubble.
-    private func parseEvent(_ line: String, lastReasoning: inout String) -> ParsedEvent? {
+    /// Extract deltas, ChatEvents, and canonical blocks from one JSONL line.
+    private func parseEvent(_ line: String, state: inout ParserState) -> ParsedEvent? {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
@@ -474,32 +502,61 @@ actor CodexCLIService {
         let type = obj["type"] as? String ?? ""
 
         switch type {
+        case "item.started":
+            // Tool items announce themselves here — surface the pulsing
+            // chip right away, like Hermes's tool_call updates.
+            guard let item = obj["item"] as? [String: Any],
+                  let call = Self.toolCallDescriptor(item)
+            else { return ParsedEvent() }
+            state.startedToolItems.insert(call.id)
+            var out = ParsedEvent()
+            out.blocks.append(.toolUse(id: call.id, name: call.name, input: JSONValue.from(any: call.input)))
+            out.events.append(.toolCall(id: call.id, name: call.name, input: call.input))
+            return out
+
         case "item.completed":
             guard let item = obj["item"] as? [String: Any],
                   let itemType = item["type"] as? String
-            else { return ParsedEvent(textDelta: "", events: []) }
+            else { return ParsedEvent() }
             switch itemType {
             case "agent_message":
                 let text = item["text"] as? String ?? ""
-                if text.isEmpty { return ParsedEvent(textDelta: "", events: []) }
+                if text.isEmpty { return ParsedEvent() }
                 // Codex emits the final agent_message in one shot. Send it
-                // through `.partialText` too so the UI's streaming bubble
-                // appears immediately rather than waiting for end-of-turn.
-                return ParsedEvent(textDelta: text, events: [.partialText(text)])
+                // through `.partialText` (bubble appears immediately) and
+                // `.text` (segment finalizes in place, so a following tool
+                // chip starts a fresh bubble instead of merging).
+                var out = ParsedEvent()
+                out.textDelta = text
+                out.events = [.partialText(text), .text(text)]
+                out.blocks = [.text(text)]
+                out.finalizedSegment = true
+                return out
             case "agent_reasoning":
                 // Finalize the thinking stream — emit only the tail that
                 // hasn't already been surfaced via `item.updated` ticks.
                 let full = (item["text"] as? String) ?? (item["summary"] as? String) ?? ""
-                if full.isEmpty { return ParsedEvent(textDelta: "", events: []) }
-                let tail = Self.tail(of: full, since: lastReasoning)
-                lastReasoning = ""
-                if tail.isEmpty { return ParsedEvent(textDelta: "", events: []) }
-                return ParsedEvent(textDelta: "", events: [.thinkingDelta(tail)])
+                if full.isEmpty { return ParsedEvent() }
+                let tail = Self.tail(of: full, since: state.lastReasoning)
+                state.lastReasoning = ""
+                if tail.isEmpty { return ParsedEvent() }
+                return ParsedEvent(events: [.thinkingDelta(tail)])
             default:
-                // function_call, tool_call, etc. — we don't surface these in
-                // the chat UI for v1 (tool calls flow through the MCP bridge
-                // via OttoToolExecutor, which fires its own .toolCall events).
-                return ParsedEvent(textDelta: "", events: [])
+                // Tool items (mcp_tool_call, command_execution, web_search):
+                // settle the chip with the result. Backfill the call event
+                // when this codex version skipped `item.started` for it.
+                guard let call = Self.toolCallDescriptor(item) else {
+                    return ParsedEvent()
+                }
+                var out = ParsedEvent()
+                if !state.startedToolItems.contains(call.id) {
+                    out.blocks.append(.toolUse(id: call.id, name: call.name, input: JSONValue.from(any: call.input)))
+                    out.events.append(.toolCall(id: call.id, name: call.name, input: call.input))
+                }
+                let result = Self.toolResultDescriptor(item)
+                out.blocks.append(.toolResult(toolUseId: call.id, content: result.summary, isError: result.isError))
+                out.events.append(.toolResult(id: call.id, name: call.name, summary: result.summary, isError: result.isError))
+                return out
             }
 
         case "item.updated":
@@ -509,20 +566,90 @@ actor CodexCLIService {
             guard let item = obj["item"] as? [String: Any],
                   let itemType = item["type"] as? String,
                   itemType == "agent_reasoning"
-            else { return ParsedEvent(textDelta: "", events: []) }
+            else { return ParsedEvent() }
             let full = (item["text"] as? String) ?? (item["summary"] as? String) ?? ""
-            if full.isEmpty { return ParsedEvent(textDelta: "", events: []) }
-            let delta = Self.tail(of: full, since: lastReasoning)
-            lastReasoning = full
-            if delta.isEmpty { return ParsedEvent(textDelta: "", events: []) }
-            return ParsedEvent(textDelta: "", events: [.thinkingDelta(delta)])
+            if full.isEmpty { return ParsedEvent() }
+            let delta = Self.tail(of: full, since: state.lastReasoning)
+            state.lastReasoning = full
+            if delta.isEmpty { return ParsedEvent() }
+            return ParsedEvent(events: [.thinkingDelta(delta)])
 
-        case "thread.started", "turn.started", "turn.completed", "item.started":
-            return ParsedEvent(textDelta: "", events: [])
+        case "thread.started", "turn.started", "turn.completed":
+            return ParsedEvent()
 
         default:
-            return ParsedEvent(textDelta: "", events: [])
+            return ParsedEvent()
         }
+    }
+
+    /// Map a codex tool item onto a `(id, name, input)` triple the chat UI
+    /// can render. Field names are parsed defensively — the exec JSON schema
+    /// has drifted across codex versions.
+    private static func toolCallDescriptor(_ item: [String: Any]) -> (id: String, name: String, input: [String: Any])? {
+        guard let id = item["id"] as? String else { return nil }
+        switch item["type"] as? String ?? "" {
+        case "mcp_tool_call":
+            let rawName = (item["tool"] as? String)
+                ?? (item["tool_name"] as? String)
+                ?? "tool"
+            return (id, OttoTools.canonicalToolName(rawName), objectify(item["arguments"] ?? item["args"]))
+        case "command_execution":
+            var input: [String: Any] = [:]
+            if let cmd = item["command"] as? String { input["command"] = cmd }
+            return (id, "shell", input)
+        case "web_search":
+            var input: [String: Any] = [:]
+            if let query = item["query"] as? String { input["query"] = query }
+            return (id, "web_search", input)
+        default:
+            return nil
+        }
+    }
+
+    /// Best-effort result text + error flag for a completed tool item.
+    /// MCP results can arrive as a plain string, an MCP CallToolResult
+    /// (`{content:[{type:"text",text:…}], isError}`), or not at all (older
+    /// codex versions only carry `status`).
+    private static func toolResultDescriptor(_ item: [String: Any]) -> (summary: String, isError: Bool) {
+        let status = (item["status"] as? String ?? "").lowercased()
+        var isError = status == "failed" || status == "error"
+        if let code = item["exit_code"] as? Int, code != 0 { isError = true }
+
+        var text = ""
+        if let s = item["result"] as? String {
+            text = s
+        } else if let obj = item["result"] as? [String: Any] {
+            if let contents = obj["content"] as? [[String: Any]] {
+                text = contents.compactMap { $0["text"] as? String }.joined(separator: "\n")
+                if (obj["isError"] as? Bool) == true { isError = true }
+            }
+            if text.isEmpty,
+               let data = try? JSONSerialization.data(withJSONObject: obj),
+               let s = String(data: data, encoding: .utf8) {
+                text = s
+            }
+        } else if let s = item["output"] as? String {
+            text = s
+        } else if let s = item["aggregated_output"] as? String {
+            text = s
+        } else if let s = item["error"] as? String {
+            text = s
+            isError = true
+        }
+        if text.isEmpty { text = isError ? "failed" : "done" }
+        return (text, isError)
+    }
+
+    /// `arguments` may be a JSON object or a JSON-encoded string depending
+    /// on codex version — normalize to a dictionary.
+    private static func objectify(_ value: Any?) -> [String: Any] {
+        if let dict = value as? [String: Any] { return dict }
+        if let s = value as? String,
+           let data = s.data(using: .utf8),
+           let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            return dict
+        }
+        return [:]
     }
 
     /// Return the suffix of `full` that comes after `prefix`. If `prefix`

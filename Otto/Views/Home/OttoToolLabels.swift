@@ -37,6 +37,26 @@ enum OttoToolLabels {
         if normalized.hasSuffix("genmedia_upload_file") {
             return Label(verb: "Uploading to fal:", arg: resolveFileName(input: input, appState: appState))
         }
+        // Backend built-in tools (Claude Code's WebSearch/Read/…, Codex's
+        // shell/web_search, Hermes's own equivalents) — friendlier than the
+        // default underscores-to-Title-Case fallback.
+        switch normalized {
+        case "websearch", "web_search":
+            return Label(verb: "Searching the web:", arg: quoted(string(input, "query")))
+        case "webfetch", "web_fetch", "fetch":
+            return Label(verb: "Fetching page:", arg: hostFromUrl(string(input, "url")))
+        case "shell", "bash":
+            return Label(verb: "Running command:", arg: trim(string(input, "command")))
+        case "read":
+            let path = string(input, "file_path") ?? string(input, "path")
+            return Label(verb: "Reading:", arg: path.map { ($0 as NSString).lastPathComponent })
+        case "grep":
+            return Label(verb: "Searching files:", arg: quoted(string(input, "pattern")))
+        case "glob":
+            return Label(verb: "Finding files:", arg: trim(string(input, "pattern")))
+        default:
+            break
+        }
         switch name {
         case "search_items":
             return Label(verb: "Searching for", arg: quoted(string(input, "query")))
