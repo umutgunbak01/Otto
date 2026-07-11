@@ -128,6 +128,31 @@ enum OttoToolLabels {
             return Label(verb: "Reading file:", arg: resolveFileName(input: input, appState: appState))
         case "create_file":
             return Label(verb: "Creating file:", arg: trim(string(input, "filename")))
+        case "create_tab":
+            return Label(verb: "Creating tab:", arg: trim(string(input, "name")))
+        case "update_tab":
+            return Label(verb: "Updating tab:", arg: resolveTabName(input, appState))
+        case "get_tab":
+            if let tab = resolveTabName(input, appState) {
+                return Label(verb: "Reading tab:", arg: tab)
+            }
+            return Label(verb: "Listing custom tabs", arg: nil)
+        case "set_tab_blocks":
+            var arg = resolveTabName(input, appState)
+            if let name = arg, let count = (input["blocks"] as? [Any])?.count {
+                arg = "\(name) (\(count) block\(count == 1 ? "" : "s"))"
+            }
+            return Label(verb: "Building dashboard:", arg: arg)
+        case "update_tab_block":
+            let blockId = ((input["block"] as? [String: Any])?["id"] as? String).flatMap { trim($0) }
+            let parts = [resolveTabName(input, appState), blockId].compactMap { $0 }
+            return Label(verb: (input["remove"] as? Bool) == true ? "Removing block:" : "Updating dashboard:",
+                         arg: parts.isEmpty ? nil : parts.joined(separator: " · "))
+        case "add_tab_records":
+            let count = (input["records"] as? [Any])?.count ?? 0
+            return Label(verb: "Adding \(count) row\(count == 1 ? "" : "s") to", arg: resolveTabName(input, appState))
+        case "update_tab_record":
+            return Label(verb: "Updating row in", arg: resolveTabName(input, appState))
         default:
             // Generated custom-tab tools: create_<slug> / update_<slug>.
             if let appState,
@@ -234,6 +259,17 @@ enum OttoToolLabels {
               let id = UUID(uuidString: idStr)
         else { return nil }
         return trim(lookup(appState, id))
+    }
+
+    /// Pretty tab name for the tab-management tools' `tab` slug/name param.
+    @MainActor
+    private static func resolveTabName(_ input: [String: Any], _ appState: AppState?) -> String? {
+        guard let raw = string(input, "tab"), !raw.isEmpty else { return nil }
+        guard let appState else { return trim(raw) }
+        let lowered = raw.lowercased()
+        let tab = appState.customTabs.first { $0.slug == lowered }
+            ?? appState.customTabs.first { $0.name.caseInsensitiveCompare(raw) == .orderedSame }
+        return trim(tab?.name ?? raw)
     }
 
     @MainActor

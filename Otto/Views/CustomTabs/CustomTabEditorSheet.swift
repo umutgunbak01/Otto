@@ -17,6 +17,8 @@ struct CustomTabEditorSheet: View {
     @State private var name: String = ""
     @State private var icon: String = "tablecells"
     @State private var fields: [CustomFieldDefinition] = []
+    @State private var layout: CustomTabLayout = .table
+    @State private var boardGroupFieldId: UUID?
     @State private var editingField: FieldSheetTarget?
     @State private var showDeleteConfirm = false
 
@@ -48,6 +50,7 @@ struct CustomTabEditorSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     nameField
                     iconPicker
+                    layoutPicker
                     fieldsEditor
                 }
                 .padding(16)
@@ -168,11 +171,85 @@ struct CustomTabEditorSheet: View {
         }
     }
 
+    private var layoutPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Layout")
+                .hudLabel()
+            HStack(spacing: 6) {
+                ForEach(CustomTabLayout.allCases, id: \.self) { choice in
+                    Button {
+                        layout = choice
+                    } label: {
+                        VStack(spacing: 3) {
+                            Image(systemName: choice.icon)
+                                .font(.system(size: 13))
+                            Text(choice.displayName)
+                                .font(.system(size: 9.5))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(layout == choice ? Theme.Colors.selectTint : Theme.Colors.panel)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(layout == choice ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+                        )
+                        .foregroundStyle(layout == choice ? Theme.Colors.accentText : Theme.Colors.textDim)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if layout == .dashboard {
+                Text("Dashboards are composed by Otto in chat — blocks like stats, charts, checklists, timelines, plus your records embedded.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+            if layout == .board {
+                boardGroupPicker
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var boardGroupPicker: some View {
+        let selectFields = fields.filter { $0.kind == .singleSelect }
+        if selectFields.isEmpty {
+            Text("Boards group by a single-select column — add one below (e.g. Status).")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Colors.amber)
+        } else {
+            HStack(spacing: 6) {
+                Text("Group by")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.textDim)
+                Picker("", selection: Binding(
+                    get: {
+                        // Mirror CustomTabDefinition.boardGroupField's fallback.
+                        if let id = boardGroupFieldId, selectFields.contains(where: { $0.id == id }) { return id }
+                        return selectFields.first?.id ?? UUID()
+                    },
+                    set: { boardGroupFieldId = $0 }
+                )) {
+                    ForEach(selectFields) { field in
+                        Text(field.name).tag(field.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
+    }
+
     private var fieldsEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Columns")
                 .hudLabel()
-            Text("The first column is the record's title.")
+            Text(layout == .dashboard
+                 ? "Optional for dashboards — needed only if Otto keeps records here too."
+                 : "The first column is the record's title.")
                 .font(.system(size: 10))
                 .foregroundStyle(Theme.Colors.tertiaryText)
 
@@ -289,7 +366,7 @@ struct CustomTabEditorSheet: View {
                     .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(AccentButtonStyle())
-            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || fields.isEmpty)
+            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || (fields.isEmpty && layout != .dashboard))
         }
         .padding(12)
     }
@@ -301,6 +378,8 @@ struct CustomTabEditorSheet: View {
             name = existing.name
             icon = existing.icon
             fields = existing.sortedFields
+            layout = existing.layout
+            boardGroupFieldId = existing.boardGroupFieldId
         } else {
             // Seed a sensible title column so a new tab is one click from usable.
             fields = [CustomFieldDefinition(name: "Name", kind: .text)]
@@ -309,18 +388,22 @@ struct CustomTabEditorSheet: View {
 
     private func save() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty, !fields.isEmpty else { return }
+        guard !trimmedName.isEmpty, fields.isEmpty == false || layout == .dashboard else { return }
         // Re-stamp sortIndex from display order.
         let ordered = fields.enumerated().map { index, field -> CustomFieldDefinition in
             var f = field
             f.sortIndex = index
             return f
         }
+        // Drop a stale board grouping if its field was removed or isn't a select.
+        let groupId = ordered.first(where: { $0.id == boardGroupFieldId && $0.kind == .singleSelect })?.id
 
         if var existing = existing {
             existing.name = trimmedName
             existing.icon = icon
             existing.fields = ordered
+            existing.layout = layout
+            existing.boardGroupFieldId = groupId
             Task {
                 await appState.updateCustomTab(existing)
                 onSave?(existing)
@@ -328,7 +411,13 @@ struct CustomTabEditorSheet: View {
             }
         } else {
             Task {
-                let tab = await appState.addCustomTab(name: trimmedName, icon: icon, fields: ordered)
+                let tab = await appState.addCustomTab(
+                    name: trimmedName,
+                    icon: icon,
+                    fields: ordered,
+                    layout: layout,
+                    boardGroupFieldId: groupId
+                )
                 onSave?(tab)
                 dismiss()
             }

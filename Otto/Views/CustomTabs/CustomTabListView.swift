@@ -1,18 +1,22 @@
 import SwiftUI
 
-/// Generic table for a user-defined custom tab. Columns come straight from
-/// the tab's `CustomFieldDefinition`s; cells reuse the same `CustomFieldCell`
-/// inline editors the Connections table uses for its custom columns.
-struct CustomTabListView: View {
+/// Spreadsheet body for a custom tab's `table` layout. Columns come straight
+/// from the tab's `CustomFieldDefinition`s; cells reuse the same
+/// `CustomFieldCell` inline editors the Connections table uses. Header,
+/// search, and record lifecycle live in `CustomTabView` — this view just
+/// renders the given (already filtered) records.
+struct CustomTabTableView: View {
     @Environment(AppState.self) private var appState
     let tab: CustomTabDefinition
+    let records: [CustomRecord]
+    /// Set by the parent right after inserting a row — the table opens the
+    /// title cell's inline editor and clears it.
+    @Binding var focusRecordId: UUID?
+    let onDelete: (CustomRecord) -> Void
 
-    @State private var searchText: String = ""
     /// Which (row, field) is currently in edit mode. Only one at a time.
     @State private var editingCell: EditingCell?
     @State private var hoveredRowId: UUID?
-    @State private var showingTabEditor = false
-    @State private var recordPendingDelete: CustomRecord?
 
     private struct EditingCell: Equatable {
         let recordId: UUID
@@ -22,17 +26,6 @@ struct CustomTabListView: View {
     private let rowHeight: CGFloat = 36
     /// Trailing gutter that hosts the hover-delete button.
     private let gutterWidth: CGFloat = 44
-
-    private var records: [CustomRecord] {
-        var result = appState.customRecords.filter { $0.tabId == tab.id }
-        if !searchText.isEmpty {
-            result = result.filter {
-                $0.searchableText(in: tab).localizedCaseInsensitiveContains(searchText)
-            }
-        }
-        result.sort { $0.updatedAt > $1.updatedAt }
-        return result
-    }
 
     /// Column widths for the given viewport width. Base widths come from the
     /// field kinds; when their sum is narrower than the viewport they scale
@@ -48,125 +41,6 @@ struct CustomTabListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-
-            OttoDivider()
-
-            if records.isEmpty && searchText.isEmpty {
-                emptyState
-            } else if records.isEmpty {
-                noResultsState
-            } else {
-                table
-            }
-        }
-        .sheet(isPresented: $showingTabEditor) {
-            CustomTabEditorSheet(existing: tab, onSave: nil)
-        }
-        .confirmationDialog(
-            "Delete \"\(recordPendingDelete.map { $0.displayTitle(in: tab) } ?? "record")\"?",
-            isPresented: Binding(
-                get: { recordPendingDelete != nil },
-                set: { if !$0 { recordPendingDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Delete record", role: .destructive) {
-                if let record = recordPendingDelete {
-                    Task { await appState.deleteCustomRecord(record) }
-                }
-                recordPendingDelete = nil
-            }
-            Button("Cancel", role: .cancel) { recordPendingDelete = nil }
-        }
-    }
-
-    // MARK: - Header
-
-    private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.Colors.accentText)
-
-                Text(tab.name)
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
-
-                OttoCountBadge(count: records.count)
-
-                Spacer()
-
-                Button {
-                    showingTabEditor = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "slider.horizontal.3").font(.system(size: 11))
-                        Text("Edit tab").font(.system(size: 12))
-                    }
-                    .foregroundStyle(Theme.Colors.textDim)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(Theme.Colors.panel)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    addRecord()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 11))
-                        Text("New record").font(.system(size: 12, weight: .medium))
-                    }
-                }
-                .buttonStyle(AccentButtonStyle())
-            }
-
-            HStack(spacing: Theme.Spacing.sm) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                    if !searchText.isEmpty {
-                        Button { searchText = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Theme.Colors.bgInput)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-                .frame(maxWidth: 280)
-
-                Spacer()
-            }
-        }
-        .padding(Theme.Spacing.lg)
-    }
-
-    // MARK: - Table
-
-    private var table: some View {
         // GeometryReader feeds the viewport size so narrow tables stretch to
         // full width and short ones pin to the top instead of the two-axis
         // ScrollView's smaller-than-viewport centering.
@@ -185,6 +59,11 @@ struct CustomTabListView: View {
                 }
                 .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
             }
+        }
+        .onChange(of: focusRecordId) { _, newValue in
+            guard let id = newValue, let primary = tab.primaryField else { return }
+            editingCell = EditingCell(recordId: id, fieldId: primary.id)
+            focusRecordId = nil
         }
     }
 
@@ -240,7 +119,7 @@ struct CustomTabListView: View {
             Group {
                 if hoveredRowId == record.id {
                     Button {
-                        recordPendingDelete = record
+                        onDelete(record)
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 11))
@@ -266,61 +145,9 @@ struct CustomTabListView: View {
         #endif
         .contextMenu {
             Button(role: .destructive) {
-                recordPendingDelete = record
+                onDelete(record)
             } label: {
                 Label("Delete record", systemImage: "trash")
-            }
-        }
-    }
-
-    // MARK: - Empty states
-
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: tab.icon)
-                .font(.system(size: 32))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-            Text("No records yet")
-                .font(Theme.Typography.headline)
-                .foregroundStyle(Theme.Colors.text)
-            Text("Add rows here, or just ask Otto — it can fill this tab for you.")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.Colors.textDim)
-            Button {
-                addRecord()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "plus").font(.system(size: 11))
-                    Text("New record").font(.system(size: 12, weight: .medium))
-                }
-            }
-            .buttonStyle(AccentButtonStyle())
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var noResultsState: some View {
-        VStack(spacing: 8) {
-            Text("No matches for \"\(searchText)\"")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.textDim)
-            Button("Clear search") { searchText = "" }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.Colors.accentText)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: - Actions
-
-    /// Insert an empty row and drop straight into editing its title cell.
-    private func addRecord() {
-        let record = CustomRecord(tabId: tab.id)
-        Task {
-            await appState.addCustomRecord(record)
-            if let primary = tab.primaryField {
-                editingCell = EditingCell(recordId: record.id, fieldId: primary.id)
             }
         }
     }

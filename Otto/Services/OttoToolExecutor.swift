@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Bridges Claude tool calls to AppState mutations. Lives on the MainActor because
 /// every `add*` / `update*` / `delete*` method on AppState is @MainActor.
@@ -77,6 +78,13 @@ final class OttoToolExecutor {
         case .genmedia_get_model_schema:  result = await genmediaGetModelSchema(input)
         case .genmedia_run:               result = await genmediaRun(input)
         case .genmedia_upload_file:       result = await genmediaUploadFile(input)
+        case .create_tab:        result = await createTab(input)
+        case .update_tab:        result = await updateTab(input)
+        case .get_tab:           result = getTab(input)
+        case .set_tab_blocks:    result = await setTabBlocks(input)
+        case .update_tab_block:  result = await updateTabBlock(input)
+        case .add_tab_records:   result = await addTabRecords(input)
+        case .update_tab_record: result = await updateTabRecordGeneric(input)
         }
         // Audible confirmation of successful write-type actions — skip reads
         // (search/get/attach) and URL opens so we don't chime on every search.
@@ -101,7 +109,9 @@ final class OttoToolExecutor {
         // so it earns the same "thing happened" chime as the create_* tools.
         .genmedia_run,
         // Same rationale — create_file delivers a downloadable artifact.
-        .create_file
+        .create_file,
+        .create_tab, .update_tab, .set_tab_blocks, .update_tab_block,
+        .add_tab_records, .update_tab_record
     ]
 
     // MARK: - Grep data (workspace tables over MCP)
@@ -875,6 +885,504 @@ final class OttoToolExecutor {
             out[field.id] = try CustomFieldValue.fromToolInput(raw, field: field)
         }
         return out
+    }
+
+    // MARK: - Tab management (create_tab / update_tab / get_tab / blocks / generic records)
+
+    private struct TabToolError: Error {
+        let message: String
+    }
+
+    private static let maxTabBlocks = 30
+    private static let maxBatchRecords = 100
+
+    /// Resolve the `tab` input param to a custom tab: exact slug first, then
+    /// case-insensitive name, then slugified-name — with a corrective error
+    /// listing what exists.
+    private func requireTab(_ input: [String: Any]) throws -> CustomTabDefinition {
+        guard let raw = string(input, "tab").nonEmpty else {
+            throw TabToolError(message: "Missing 'tab'.\(availableTabsHint())")
+        }
+        let lowered = raw.lowercased()
+        if let tab = appState.customTabs.first(where: { $0.slug == lowered }) { return tab }
+        if let tab = appState.customTabs.first(where: { $0.name.caseInsensitiveCompare(raw) == .orderedSame }) { return tab }
+        let slugged = CustomTabSlug.slugify(raw)
+        if !slugged.isEmpty, let tab = appState.customTabs.first(where: { $0.slug == slugged }) { return tab }
+        throw TabToolError(message: "No custom tab matching '\(raw)'.\(availableTabsHint())")
+    }
+
+    private func availableTabsHint() -> String {
+        guard !appState.customTabs.isEmpty else {
+            return " There are no custom tabs yet — create one with create_tab."
+        }
+        let list = appState.customTabs.map { "\($0.slug) (\"\($0.name)\")" }.joined(separator: ", ")
+        return " Available tabs: \(list)."
+    }
+
+    /// Field by display name (case-insensitive) or slugified key.
+    private func matchField(_ raw: String, in fields: [CustomFieldDefinition]) -> CustomFieldDefinition? {
+        let needle = raw.trimmingCharacters(in: .whitespaces)
+        if let f = fields.first(where: { $0.name.caseInsensitiveCompare(needle) == .orderedSame }) { return f }
+        let key = CustomTabSlug.slugify(needle)
+        guard !key.isEmpty else { return nil }
+        return fields.first { CustomTabSlug.slugify($0.name) == key }
+    }
+
+    private func parseFieldKind(_ raw: String?, fieldName: String) throws -> CustomFieldKind {
+        guard let raw = raw?.trimmingCharacters(in: .whitespaces).lowercased(), !raw.isEmpty else { return .text }
+        switch raw.replacingOccurrences(of: " ", with: "_") {
+        case "text", "string": return .text
+        case "long_text", "longtext": return .longText
+        case "number", "integer", "float": return .number
+        case "date", "datetime": return .date
+        case "checkbox", "bool", "boolean": return .checkbox
+        case "url", "link": return .url
+        case "single_select", "singleselect", "select": return .singleSelect
+        case "multi_select", "multiselect", "tags": return .multiSelect
+        default:
+            throw TabToolError(message: "Field '\(fieldName)': unknown kind '\(raw)'. Use one of: text, long_text, number, date, checkbox, url, single_select, multi_select.")
+        }
+    }
+
+    private func parseOptionSpecs(_ raw: [Any], fieldName: String, startCount: Int = 0) throws -> [CustomFieldOption] {
+        var out: [CustomFieldOption] = []
+        for item in raw {
+            var label: String
+            var colorHex: String?
+            if let s = item as? String {
+                label = s.trimmingCharacters(in: .whitespaces)
+            } else if let dict = item as? [String: Any],
+                      let l = (dict["label"] as? String)?.trimmingCharacters(in: .whitespaces) {
+                label = l
+                colorHex = TabBlockColor.hex(for: dict["color"] as? String)
+            } else {
+                throw TabToolError(message: "Field '\(fieldName)': each option must be a string or {label, color}.")
+            }
+            guard !label.isEmpty else { continue }
+            guard !out.contains(where: { $0.label.caseInsensitiveCompare(label) == .orderedSame }) else { continue }
+            let hex = colorHex ?? CustomFieldOptionPalette.hexes[(startCount + out.count) % CustomFieldOptionPalette.hexes.count]
+            out.append(CustomFieldOption(label: label, colorHex: hex))
+        }
+        return out
+    }
+
+    /// Parse a create_tab / update_tab `fields` array into definitions.
+    private func parseFieldSpecs(_ raw: Any?, startIndex: Int) throws -> [CustomFieldDefinition] {
+        guard let arr = raw else { return [] }
+        guard let items = arr as? [Any] else {
+            throw TabToolError(message: "'fields' must be an array of {name, kind, options?} objects.")
+        }
+        var out: [CustomFieldDefinition] = []
+        for (i, item) in items.enumerated() {
+            guard let dict = item as? [String: Any],
+                  let name = (dict["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else {
+                throw TabToolError(message: "fields[\(i)] needs a non-empty 'name'.")
+            }
+            let kind = try parseFieldKind(dict["kind"] as? String, fieldName: name)
+            var options: [CustomFieldOption] = []
+            if let rawOptions = dict["options"] as? [Any] {
+                options = try parseOptionSpecs(rawOptions, fieldName: name)
+            }
+            if kind.usesOptions && options.isEmpty {
+                throw TabToolError(message: "Field '\(name)' (\(kind.rawValue)) needs 'options' — an array of labels or {label, color}.")
+            }
+            out.append(CustomFieldDefinition(name: name, kind: kind, options: options, sortIndex: startIndex + out.count))
+        }
+        return out
+    }
+
+    /// Parse + validate a blocks array; ids are de-duplicated in order.
+    private func parseBlocks(_ raw: Any?) throws -> [TabBlock] {
+        guard let items = raw as? [Any] else {
+            throw TabToolError(message: "'blocks' must be an array of block objects (see set_tab_blocks for the shapes).")
+        }
+        guard items.count <= Self.maxTabBlocks else {
+            throw TabToolError(message: "Too many blocks (\(items.count)); maximum is \(Self.maxTabBlocks).")
+        }
+        var out: [TabBlock] = []
+        for (i, item) in items.enumerated() {
+            do {
+                var block = try TabBlock.make(from: item, fallbackId: "block_\(i + 1)")
+                if out.contains(where: { $0.id == block.id }) {
+                    var n = 2
+                    while out.contains(where: { $0.id == "\(block.id)_\(n)" }) { n += 1 }
+                    block = TabBlock(id: "\(block.id)_\(n)", json: block.json)
+                }
+                out.append(block)
+            } catch let e as TabBlockError {
+                throw TabToolError(message: "blocks[\(i)]: \(e.message)")
+            }
+        }
+        return out
+    }
+
+    /// SF Symbol names the model invents don't always exist — fall back to a
+    /// generic table icon rather than a blank sidebar row.
+    private func sanitizeIcon(_ raw: String?) -> String {
+        guard let icon = raw.nonEmpty else { return "tablecells" }
+        return NSImage(systemSymbolName: icon, accessibilityDescription: nil) != nil ? icon : "tablecells"
+    }
+
+    private func columnsDoc(_ tab: CustomTabDefinition) -> String {
+        tab.fieldKeys().map { key, field in
+            switch field.kind {
+            case .singleSelect: return "\(key) (one of: \(field.options.map(\.label).joined(separator: "|")))"
+            case .multiSelect: return "\(key) (any of: \(field.options.map(\.label).joined(separator: "|")))"
+            default: return "\(key) (\(field.kind.rawValue))"
+            }
+        }.joined(separator: ", ")
+    }
+
+    private func createTab(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name").nonEmpty else {
+            return err("Missing 'name'.", summary: "Create tab failed")
+        }
+        if let existing = appState.customTabs.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            return err("A tab named \"\(name)\" already exists (slug \(existing.slug)). Use update_tab / add_tab_records / set_tab_blocks on it, or pick a different name.",
+                       summary: "Create tab failed")
+        }
+        let layoutRaw = (string(input, "layout").nonEmpty ?? "table").lowercased()
+        guard let layout = CustomTabLayout(rawValue: layoutRaw) else {
+            return err("Unknown layout '\(layoutRaw)'. Use one of: \(CustomTabLayout.allCases.map(\.rawValue).joined(separator: ", ")).",
+                       summary: "Create tab failed")
+        }
+
+        var fields: [CustomFieldDefinition]
+        let blocks: [TabBlock]
+        do {
+            fields = try parseFieldSpecs(input["fields"], startIndex: 0)
+            blocks = input["blocks"] != nil && !(input["blocks"] is NSNull) ? try parseBlocks(input["blocks"]) : []
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Create tab failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Create tab failed")
+        }
+        // A record-style tab with no columns would be unusable — seed a title
+        // column. Dashboard tabs legitimately run field-less.
+        if fields.isEmpty && layout != .dashboard {
+            fields = [CustomFieldDefinition(name: "Name", kind: .text, sortIndex: 0)]
+        }
+        if layout == .board && !fields.contains(where: { $0.kind == .singleSelect }) {
+            return err("layout=board needs a single_select field to group by — add one (e.g. Status with options like \"To do|In progress|Done\").",
+                       summary: "Create tab failed")
+        }
+        var boardGroupFieldId: UUID?
+        if let groupRaw = string(input, "board_group_by").nonEmpty {
+            guard let field = matchField(groupRaw, in: fields), field.kind == .singleSelect else {
+                return err("board_group_by '\(groupRaw)' must name one of the tab's single_select fields.",
+                           summary: "Create tab failed")
+            }
+            boardGroupFieldId = field.id
+        }
+
+        let tab = await appState.addCustomTab(
+            name: name,
+            icon: sanitizeIcon(string(input, "icon")),
+            fields: fields,
+            layout: layout,
+            subtitle: string(input, "subtitle").nonEmpty,
+            boardGroupFieldId: boardGroupFieldId,
+            blocks: blocks
+        )
+
+        var lines = ["Created tab \"\(name)\" — slug: \(tab.slug), layout: \(layout.rawValue)."]
+        if !tab.fields.isEmpty {
+            lines.append("Column keys: \(columnsDoc(tab)).")
+            lines.append("Add rows NOW with add_tab_records(tab: \"\(tab.slug)\", records: [...]); edit with update_tab_record. (Dedicated create_\(tab.slug)/update_\(tab.slug) tools appear in your next session.)")
+        }
+        if layout == .dashboard {
+            lines.append(blocks.isEmpty
+                ? "It's a dashboard tab — compose it with set_tab_blocks(tab: \"\(tab.slug)\", blocks: [...])."
+                : "Dashboard blocks: \(blocks.map(\.id).joined(separator: ", ")). Patch individual ones later with update_tab_block.")
+        }
+        lines.append("The tab is already visible in the user's sidebar.")
+        return ok(lines.joined(separator: "\n"), summary: "Created tab: \(name)")
+    }
+
+    private func updateTab(_ input: [String: Any]) async -> ToolResult {
+        var tab: CustomTabDefinition
+        do {
+            tab = try requireTab(input)
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Update tab failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update tab failed")
+        }
+
+        var changes: [String] = []
+        do {
+            // Append new columns first so layout/board changes can reference them.
+            if input["add_fields"] != nil && !(input["add_fields"] is NSNull) {
+                let start = (tab.fields.map(\.sortIndex).max() ?? -1) + 1
+                let added = try parseFieldSpecs(input["add_fields"], startIndex: start)
+                for field in added {
+                    guard matchField(field.name, in: tab.fields) == nil else {
+                        throw TabToolError(message: "Field '\(field.name)' already exists on \(tab.slug).")
+                    }
+                    tab.fields.append(field)
+                }
+                if !added.isEmpty { changes.append("added column\(added.count == 1 ? "" : "s") \(added.map(\.name).joined(separator: ", "))") }
+            }
+            if let rawAddOptions = input["add_options"] as? [Any] {
+                for item in rawAddOptions {
+                    guard let dict = item as? [String: Any],
+                          let fieldRaw = (dict["field"] as? String).nonEmpty,
+                          let rawOptions = dict["options"] as? [Any] else {
+                        throw TabToolError(message: "add_options entries must be {field, options:[...]}.")
+                    }
+                    guard let field = matchField(fieldRaw, in: tab.fields),
+                          let fi = tab.fields.firstIndex(where: { $0.id == field.id }) else {
+                        throw TabToolError(message: "add_options: no field '\(fieldRaw)' on \(tab.slug).")
+                    }
+                    guard field.kind.usesOptions else {
+                        throw TabToolError(message: "add_options: field '\(field.name)' is \(field.kind.rawValue), not a select.")
+                    }
+                    let parsed = try parseOptionSpecs(rawOptions, fieldName: field.name, startCount: field.options.count)
+                    let fresh = parsed.filter { option in
+                        !tab.fields[fi].options.contains { $0.label.caseInsensitiveCompare(option.label) == .orderedSame }
+                    }
+                    tab.fields[fi].options.append(contentsOf: fresh)
+                    if !fresh.isEmpty { changes.append("added \(field.name) option\(fresh.count == 1 ? "" : "s") \(fresh.map(\.label).joined(separator: ", "))") }
+                }
+            }
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Update tab failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update tab failed")
+        }
+
+        if let newName = string(input, "name").nonEmpty, newName != tab.name {
+            tab.name = newName
+            changes.append("renamed to \"\(newName)\" (slug stays \(tab.slug))")
+        }
+        if let icon = string(input, "icon").nonEmpty {
+            tab.icon = sanitizeIcon(icon)
+            changes.append("icon → \(tab.icon)")
+        }
+        if let subtitle = string(input, "subtitle") {
+            let trimmed = subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            tab.subtitle = trimmed.isEmpty ? nil : trimmed
+            changes.append(trimmed.isEmpty ? "cleared subtitle" : "subtitle updated")
+        }
+        if let layoutRaw = string(input, "layout").nonEmpty?.lowercased() {
+            guard let layout = CustomTabLayout(rawValue: layoutRaw) else {
+                return err("Unknown layout '\(layoutRaw)'. Use one of: \(CustomTabLayout.allCases.map(\.rawValue).joined(separator: ", ")).",
+                           summary: "Update tab failed")
+            }
+            if layout == .board && !tab.fields.contains(where: { $0.kind == .singleSelect }) {
+                return err("layout=board needs a single_select field to group by — add one via add_fields first.",
+                           summary: "Update tab failed")
+            }
+            if layout != tab.layout {
+                tab.layout = layout
+                changes.append("layout → \(layout.rawValue)")
+            }
+        }
+        if let groupRaw = string(input, "board_group_by").nonEmpty {
+            guard let field = matchField(groupRaw, in: tab.fields), field.kind == .singleSelect else {
+                return err("board_group_by '\(groupRaw)' must name one of the tab's single_select fields.",
+                           summary: "Update tab failed")
+            }
+            tab.boardGroupFieldId = field.id
+            changes.append("board groups by \(field.name)")
+        }
+
+        guard !changes.isEmpty else {
+            return err("Nothing to change — pass at least one of name, icon, subtitle, layout, board_group_by, add_fields, add_options.",
+                       summary: "Update tab failed")
+        }
+        await appState.updateCustomTab(tab)
+        var lines = ["Updated tab \(tab.slug): \(changes.joined(separator: "; "))."]
+        if !tab.fields.isEmpty { lines.append("Column keys now: \(columnsDoc(tab)).") }
+        return ok(lines.joined(separator: "\n"), summary: "Updated tab: \(tab.name)")
+    }
+
+    private func getTab(_ input: [String: Any]) -> ToolResult {
+        // No tab → compact list of every custom tab.
+        guard string(input, "tab").nonEmpty != nil else {
+            guard !appState.customTabs.isEmpty else {
+                return ok("No custom tabs yet. Create one with create_tab.", summary: "No custom tabs")
+            }
+            let lines = appState.customTabs.map { tab -> String in
+                let count = appState.customRecords.filter { $0.tabId == tab.id }.count
+                var line = "- \(tab.slug) (\"\(tab.name)\") — layout \(tab.layout.rawValue), \(count) record\(count == 1 ? "" : "s")"
+                if !tab.fields.isEmpty { line += ", columns: \(tab.fieldKeys().map(\.key).joined(separator: ", "))" }
+                if !tab.blocks.isEmpty { line += ", blocks: \(tab.blocks.map(\.id).joined(separator: ", "))" }
+                return line
+            }
+            return ok(lines.joined(separator: "\n"), summary: "Listed \(appState.customTabs.count) custom tabs")
+        }
+
+        let tab: CustomTabDefinition
+        do {
+            tab = try requireTab(input)
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Get tab failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Get tab failed")
+        }
+
+        var dict: [String: Any] = [
+            "name": tab.name,
+            "slug": tab.slug,
+            "icon": tab.icon,
+            "layout": tab.layout.rawValue,
+            "record_count": appState.customRecords.filter { $0.tabId == tab.id }.count,
+            "fields": tab.fieldKeys().map { key, field -> [String: Any] in
+                var f: [String: Any] = ["key": key, "name": field.name, "kind": field.kind.rawValue]
+                if field.kind.usesOptions { f["options"] = field.options.map(\.label) }
+                return f
+            },
+            "blocks": tab.blocks.map { $0.json.anyValue }
+        ]
+        if let subtitle = tab.subtitle { dict["subtitle"] = subtitle }
+        if let group = tab.boardGroupField { dict["board_group_by"] = group.name }
+        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8) else {
+            return err("Failed to serialize tab definition.", summary: "Get tab failed")
+        }
+        return ok(json, summary: "Read tab: \(tab.name)")
+    }
+
+    private func setTabBlocks(_ input: [String: Any]) async -> ToolResult {
+        let tab: CustomTabDefinition
+        let blocks: [TabBlock]
+        do {
+            tab = try requireTab(input)
+            blocks = try parseBlocks(input["blocks"])
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Set blocks failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Set blocks failed")
+        }
+        await appState.setCustomTabBlocks(tabId: tab.id, blocks: blocks)
+        var lines = ["Set \(blocks.count) block\(blocks.count == 1 ? "" : "s") on \(tab.slug): \(blocks.map(\.id).joined(separator: ", "))."]
+        if tab.layout != .dashboard {
+            lines.append("NOTE: this tab's layout is '\(tab.layout.rawValue)', so blocks aren't visible — call update_tab(tab: \"\(tab.slug)\", layout: \"dashboard\") to show them (embed the rows with a {\"type\":\"records\"} block).")
+        }
+        return ok(lines.joined(separator: "\n"), summary: "Rebuilt \(tab.name) dashboard")
+    }
+
+    private func updateTabBlock(_ input: [String: Any]) async -> ToolResult {
+        let tab: CustomTabDefinition
+        do {
+            tab = try requireTab(input)
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Update block failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update block failed")
+        }
+        guard let blockDict = input["block"] as? [String: Any] else {
+            return err("Missing 'block' — the full block object including its \"id\" and \"type\".", summary: "Update block failed")
+        }
+
+        if (input["remove"] as? Bool) == true {
+            let id = ((blockDict["id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !id.isEmpty else {
+                return err("remove=true needs block.id.", summary: "Update block failed")
+            }
+            guard tab.blocks.contains(where: { $0.id == id }) else {
+                return err("No block '\(id)' on \(tab.slug). Current blocks: \(tab.blocks.map(\.id).joined(separator: ", ")).",
+                           summary: "Update block failed")
+            }
+            await appState.removeCustomTabBlock(tabId: tab.id, blockId: id)
+            return ok("Removed block '\(id)' from \(tab.slug).", summary: "Removed \(tab.name) block")
+        }
+
+        let block: TabBlock
+        do {
+            block = try TabBlock.make(from: blockDict, fallbackId: "block_\(tab.blocks.count + 1)")
+        } catch let e as TabBlockError {
+            return err(e.message, summary: "Update block failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update block failed")
+        }
+        let existed = tab.blocks.contains { $0.id == block.id }
+        if !existed && tab.blocks.count >= Self.maxTabBlocks {
+            return err("Tab already has \(tab.blocks.count) blocks (max \(Self.maxTabBlocks)) — remove or replace one instead.",
+                       summary: "Update block failed")
+        }
+        await appState.upsertCustomTabBlock(tabId: tab.id, block: block)
+        var lines = ["\(existed ? "Updated" : "Added") block '\(block.id)' on \(tab.slug)."]
+        if tab.layout != .dashboard {
+            lines.append("NOTE: layout is '\(tab.layout.rawValue)' — blocks render when layout=dashboard.")
+        }
+        return ok(lines.joined(separator: "\n"),
+                  summary: "\(existed ? "Updated" : "Added") \(tab.name) block: \(block.id)")
+    }
+
+    private func addTabRecords(_ input: [String: Any]) async -> ToolResult {
+        let tab: CustomTabDefinition
+        do {
+            tab = try requireTab(input)
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Add rows failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Add rows failed")
+        }
+        guard !tab.fields.isEmpty else {
+            return err("Tab \(tab.slug) has no columns — add some with update_tab(add_fields:) first.", summary: "Add rows failed")
+        }
+        guard let rawRecords = input["records"] as? [Any], !rawRecords.isEmpty else {
+            return err("Missing 'records' — an array of row objects keyed by column key. Columns: \(columnsDoc(tab)).",
+                       summary: "Add rows failed")
+        }
+        guard rawRecords.count <= Self.maxBatchRecords else {
+            return err("Too many records (\(rawRecords.count)); maximum is \(Self.maxBatchRecords) per call.", summary: "Add rows failed")
+        }
+
+        // Validate everything before creating anything, so a partial batch
+        // never lands and the agent can retry the whole call safely.
+        var parsed: [[UUID: CustomFieldValue]] = []
+        var problems: [String] = []
+        for (i, raw) in rawRecords.enumerated() {
+            guard let dict = raw as? [String: Any] else {
+                problems.append("records[\(i)]: not an object.")
+                continue
+            }
+            do {
+                let values = try parseCustomFieldValues(tab: tab, input: dict).compactMapValues { $0 }
+                if values.isEmpty {
+                    problems.append("records[\(i)]: no recognized column keys. Columns: \(tab.fieldKeys().map(\.key).joined(separator: ", ")).")
+                } else {
+                    parsed.append(values)
+                }
+            } catch let e as CustomFieldInputError {
+                problems.append("records[\(i)]: \(e.message)")
+            } catch {
+                problems.append("records[\(i)]: \(error.localizedDescription)")
+            }
+        }
+        guard problems.isEmpty else {
+            return err("No rows added — fix these and resend the whole batch:\n" + problems.joined(separator: "\n"),
+                       summary: "Add rows failed")
+        }
+
+        let records = parsed.map { CustomRecord(tabId: tab.id, values: $0) }
+        await appState.addCustomRecords(records)
+        let lines = records.map { "- \($0.displayTitle(in: tab)) — id \($0.id.uuidString)" }
+        return ok("Added \(records.count) row\(records.count == 1 ? "" : "s") to \(tab.slug):\n" + lines.joined(separator: "\n"),
+                  summary: "Added \(records.count) row\(records.count == 1 ? "" : "s") to \(tab.name)")
+    }
+
+    private func updateTabRecordGeneric(_ input: [String: Any]) async -> ToolResult {
+        let tab: CustomTabDefinition
+        do {
+            tab = try requireTab(input)
+        } catch let e as TabToolError {
+            return err(e.message, summary: "Update row failed")
+        } catch {
+            return err(error.localizedDescription, summary: "Update row failed")
+        }
+        guard let values = input["values"] as? [String: Any], !values.isEmpty else {
+            return err("Missing 'values' — an object of column key → new value. Columns: \(columnsDoc(tab)).",
+                       summary: "Update row failed")
+        }
+        // Reuse the per-tab update path: values + id in one flat input.
+        var flat: [String: Any] = values
+        flat["id"] = input["id"]
+        return await updateCustomTabRecord(tab: tab, flat)
     }
 
     // MARK: - Search / get

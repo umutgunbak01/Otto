@@ -171,7 +171,7 @@ struct MainView: View {
         // A selected custom tab wins over the built-in switch; assigning
         // `selectedTab` clears the custom selection (didSet in AppState).
         if let customTab = appState.customTabs.first(where: { $0.id == appState.selectedCustomTabId }) {
-            CustomTabListView(tab: customTab)
+            CustomTabView(tab: customTab)
         } else {
             builtInListContent
         }

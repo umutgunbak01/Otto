@@ -11,6 +11,9 @@ struct VisualizationCard: View {
     /// inline item chip in a table cell or stat detail. The chat view
     /// resolves it to a detail popup, same as chips in prose.
     var onOpenItem: ((URL) -> Void)? = nil
+    /// true when hosted outside the chat transcript (custom-tab dashboard
+    /// blocks) — drops the chat column's outer gutter.
+    var embedded: Bool = false
 
     /// Categorical series/slice palette, in Theme accent order.
     private static let palette: [Color] = [
@@ -37,7 +40,7 @@ struct VisualizationCard: View {
             RoundedRectangle(cornerRadius: Theme.Radius.md)
                 .stroke(Theme.Colors.border, lineWidth: 1)
         )
-        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.horizontal, embedded ? 0 : Theme.Spacing.lg)
         // Item chips inside cells route to the detail popup; ordinary web
         // links in cells keep the default open-in-browser behavior.
         .environment(\.openURL, OpenURLAction { url in

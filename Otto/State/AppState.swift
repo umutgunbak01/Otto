@@ -1074,13 +1074,25 @@ final class AppState {
     // MARK: - Custom Tabs
 
     @MainActor
-    func addCustomTab(name: String, icon: String, fields: [CustomFieldDefinition]) async -> CustomTabDefinition {
+    func addCustomTab(
+        name: String,
+        icon: String,
+        fields: [CustomFieldDefinition],
+        layout: CustomTabLayout = .table,
+        subtitle: String? = nil,
+        boardGroupFieldId: UUID? = nil,
+        blocks: [TabBlock] = []
+    ) async -> CustomTabDefinition {
         let tab = CustomTabDefinition(
             name: name,
             slug: CustomTabSlug.make(from: name, existing: customTabs),
             icon: icon,
             fields: fields,
-            sortIndex: (customTabs.map { $0.sortIndex }.max() ?? -1) + 1
+            sortIndex: (customTabs.map { $0.sortIndex }.max() ?? -1) + 1,
+            layout: layout,
+            subtitle: subtitle,
+            boardGroupFieldId: boardGroupFieldId,
+            blocks: blocks
         )
         customTabs.append(tab)
         try? await persistence.updateCustomTabs(customTabs)
@@ -1122,11 +1134,94 @@ final class AppState {
         try? await persistence.updateCustomRecords(customRecords)
     }
 
+    // MARK: - Custom Tab Blocks
+
+    /// Replace a tab's whole dashboard (agent `set_tab_blocks`). Pushes an
+    /// undo entry because it can wipe a composed dashboard in one call.
+    @MainActor
+    func setCustomTabBlocks(tabId: UUID, blocks: [TabBlock]) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        let captured = customTabs[index].blocks
+        if !captured.isEmpty {
+            undoService.pushUndo(label: "Dashboard replaced") { [self] in
+                if let i = customTabs.firstIndex(where: { $0.id == tabId }) {
+                    customTabs[i].blocks = captured
+                    try? await persistence.updateCustomTabs(customTabs)
+                }
+            }
+        }
+        customTabs[index].blocks = blocks
+        try? await persistence.updateCustomTabs(customTabs)
+    }
+
+    /// Upsert one block by id: replace in place, or append when new.
+    @MainActor
+    func upsertCustomTabBlock(tabId: UUID, block: TabBlock) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        if let bi = customTabs[index].blocks.firstIndex(where: { $0.id == block.id }) {
+            customTabs[index].blocks[bi] = block
+        } else {
+            customTabs[index].blocks.append(block)
+        }
+        try? await persistence.updateCustomTabs(customTabs)
+    }
+
+    @MainActor
+    func removeCustomTabBlock(tabId: UUID, blockId: String) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        customTabs[index].blocks.removeAll { $0.id == blockId }
+        try? await persistence.updateCustomTabs(customTabs)
+    }
+
+    /// Move a block one step up/down in the dashboard order.
+    @MainActor
+    func moveCustomTabBlock(tabId: UUID, blockId: String, up: Bool) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tabId }),
+              let bi = customTabs[index].blocks.firstIndex(where: { $0.id == blockId }) else { return }
+        let target = up ? bi - 1 : bi + 1
+        guard customTabs[index].blocks.indices.contains(target) else { return }
+        customTabs[index].blocks.swapAt(bi, target)
+        try? await persistence.updateCustomTabs(customTabs)
+    }
+
+    /// Toggle one checklist item inside a `list` block (user ticked it in
+    /// the dashboard). Rewrites the block's raw JSON so the agent sees the
+    /// change on its next `get_tab`.
+    @MainActor
+    func setCustomTabBlockItemDone(tabId: UUID, blockId: String, itemIndex: Int, done: Bool) async {
+        guard let index = customTabs.firstIndex(where: { $0.id == tabId }),
+              let bi = customTabs[index].blocks.firstIndex(where: { $0.id == blockId }),
+              var dict = customTabs[index].blocks[bi].json.asDictionary,
+              var items = dict["items"] as? [Any],
+              items.indices.contains(itemIndex) else { return }
+        if var item = items[itemIndex] as? [String: Any] {
+            item["done"] = done
+            items[itemIndex] = item
+        } else if let text = items[itemIndex] as? String {
+            items[itemIndex] = ["text": text, "done": done]
+        } else {
+            return
+        }
+        dict["items"] = items
+        customTabs[index].blocks[bi].json = JSONValue.from(any: dict)
+        customTabs[index].blocks[bi].updatedAt = Date()
+        try? await persistence.updateCustomTabs(customTabs)
+    }
+
     // MARK: - Custom Records
 
     @MainActor
     func addCustomRecord(_ record: CustomRecord) async {
         customRecords.insert(record, at: 0)
+        try? await persistence.updateCustomRecords(customRecords)
+    }
+
+    /// Batch insert (agent `add_tab_records`): one persistence write, rows
+    /// land at the top in the order given.
+    @MainActor
+    func addCustomRecords(_ records: [CustomRecord]) async {
+        guard !records.isEmpty else { return }
+        customRecords.insert(contentsOf: records, at: 0)
         try? await persistence.updateCustomRecords(customRecords)
     }
 

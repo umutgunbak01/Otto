@@ -1,5 +1,38 @@
 import Foundation
 
+// MARK: - Custom Tab Layout
+
+/// How a custom tab renders its content. `table`/`board`/`gallery`/`list`
+/// are views over the tab's records; `dashboard` renders the tab's agent-
+/// composed `blocks` (which can embed the records via a `records` block).
+enum CustomTabLayout: String, Codable, CaseIterable, Hashable {
+    case table
+    case board
+    case gallery
+    case list
+    case dashboard
+
+    var displayName: String {
+        switch self {
+        case .table: return "Table"
+        case .board: return "Board"
+        case .gallery: return "Gallery"
+        case .list: return "List"
+        case .dashboard: return "Dashboard"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .table: return "tablecells"
+        case .board: return "rectangle.split.3x1"
+        case .gallery: return "square.grid.2x2"
+        case .list: return "list.bullet"
+        case .dashboard: return "rectangle.3.group"
+        }
+    }
+}
+
 // MARK: - Custom Tab Definition
 
 /// A user-created tab: a named table whose columns are `CustomFieldDefinition`s
@@ -19,6 +52,15 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
     var fields: [CustomFieldDefinition]
     var sortIndex: Int
     let createdAt: Date
+    /// Rendering style; `table` for tabs created before layouts existed.
+    var layout: CustomTabLayout
+    /// Optional one-line description under the tab title (agent-settable).
+    var subtitle: String?
+    /// Board layout's grouping column; must be a `.singleSelect` field.
+    /// nil → first single-select field.
+    var boardGroupFieldId: UUID?
+    /// Agent-composed dashboard blocks (rendered when `layout == .dashboard`).
+    var blocks: [TabBlock]
 
     init(
         id: UUID = UUID(),
@@ -27,7 +69,11 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
         icon: String = "tablecells",
         fields: [CustomFieldDefinition] = [],
         sortIndex: Int = 0,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        layout: CustomTabLayout = .table,
+        subtitle: String? = nil,
+        boardGroupFieldId: UUID? = nil,
+        blocks: [TabBlock] = []
     ) {
         self.id = id
         self.name = name
@@ -36,6 +82,10 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
         self.fields = fields
         self.sortIndex = sortIndex
         self.createdAt = createdAt
+        self.layout = layout
+        self.subtitle = subtitle
+        self.boardGroupFieldId = boardGroupFieldId
+        self.blocks = blocks
     }
 
     init(from decoder: Decoder) throws {
@@ -47,6 +97,10 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
         fields = (try? container.decode([CustomFieldDefinition].self, forKey: .fields)) ?? []
         sortIndex = (try? container.decode(Int.self, forKey: .sortIndex)) ?? 0
         createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
+        layout = (try? container.decode(CustomTabLayout.self, forKey: .layout)) ?? .table
+        subtitle = try? container.decode(String.self, forKey: .subtitle)
+        boardGroupFieldId = try? container.decode(UUID.self, forKey: .boardGroupFieldId)
+        blocks = (try? container.decode([TabBlock].self, forKey: .blocks)) ?? []
     }
 
     var sortedFields: [CustomFieldDefinition] {
@@ -57,6 +111,16 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
     /// display title in search results, tool summaries, and the sidebar.
     var primaryField: CustomFieldDefinition? {
         sortedFields.first
+    }
+
+    /// The column board layouts group by: the configured field when it still
+    /// exists and is a single-select, else the first single-select field.
+    var boardGroupField: CustomFieldDefinition? {
+        if let id = boardGroupFieldId,
+           let field = fields.first(where: { $0.id == id && $0.kind == .singleSelect }) {
+            return field
+        }
+        return sortedFields.first { $0.kind == .singleSelect }
     }
 
     /// Stable (toolInputKey, field) pairs for the generated tool schemas and

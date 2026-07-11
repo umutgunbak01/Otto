@@ -22,6 +22,9 @@ enum OttoTools {
         case read_file
         case create_file
         case genmedia_search_models, genmedia_get_model_schema, genmedia_run, genmedia_upload_file
+        case create_tab, update_tab, get_tab
+        case set_tab_blocks, update_tab_block
+        case add_tab_records, update_tab_record
     }
 
     // MARK: - Backend-agnostic name / preview helpers
@@ -924,6 +927,142 @@ enum OttoTools {
                     "file_id": stringProp("UUID of an Otto File (from `search_items` with type=file).")
                 ],
                 required: ["file_id"]
+            )
+        ],
+
+        // MARK: Custom tabs (agent-created tabs, layouts, dashboard blocks)
+        [
+            "name": Name.create_tab.rawValue,
+            "description": """
+            Create a new custom tab in Otto's sidebar — a purpose-built tracker the user can watch and you can keep updated. Use when the user wants to track anything that doesn't fit the built-in tabs: a project, a tournament, a job hunt, a trip plan, a watchlist. Pick the layout by shape: 'table' (spreadsheet), 'board' (kanban grouped by a single_select field), 'list' (compact checklist-style rows), 'gallery' (cards), or 'dashboard' (a generative page composed of blocks — see set_tab_blocks — which can also embed the records via a {"type":"records"} block). Returns the tab's slug and column keys. Add rows right away with add_tab_records (dedicated create_<slug>/update_<slug> tools also exist from your next session). Keep fields minimal — 2 to 6 columns beats 12.
+            """,
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Tab name shown in the sidebar, e.g. \"World Cup 2026\"."),
+                    "icon": stringProp("SF Symbol name for the sidebar, e.g. trophy, airplane, cart, book, film, dumbbell, banknote, chart.bar, globe, star, flag, folder. Defaults to tablecells."),
+                    "subtitle": stringProp("Optional one-line description shown under the tab title."),
+                    "layout": enumProp(CustomTabLayout.allCases.map(\.rawValue), "How the tab renders. Defaults to table."),
+                    "fields": [
+                        "type": "array",
+                        "description": "The tab's typed columns, in display order. The FIRST field is the record's display title (make it text). Omit entirely for a pure dashboard tab.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "name": ["type": "string", "description": "Column name, e.g. \"Status\"."],
+                                "kind": ["type": "string", "enum": ["text", "long_text", "number", "date", "checkbox", "url", "single_select", "multi_select"], "description": "Column type. Defaults to text."],
+                                "options": ["type": "array", "description": "For select kinds: option labels, either plain strings or {label, color} with color one of red|orange|yellow|green|teal|blue|purple|pink or #RRGGBB.", "items": [String: Any]()]
+                            ],
+                            "required": ["name"]
+                        ]
+                    ],
+                    "board_group_by": stringProp("For layout=board: name of the single_select field that defines the columns. Defaults to the first single_select field."),
+                    "blocks": [
+                        "type": "array",
+                        "description": "Initial dashboard blocks (layout=dashboard). Same format as set_tab_blocks — see that tool for the block reference.",
+                        "items": ["type": "object"]
+                    ]
+                ],
+                required: ["name"]
+            )
+        ],
+        [
+            "name": Name.update_tab.rawValue,
+            "description": "Reconfigure an existing custom tab: rename it, change icon/subtitle/layout, switch the board grouping, append new columns (add_fields), or add options to an existing select column (add_options). Existing columns and records are never removed by this tool — the user manages those in the tab editor. The tab's slug and tool names never change on rename.",
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug (preferred) or exact name."),
+                    "name": stringProp("New display name."),
+                    "icon": stringProp("New SF Symbol icon."),
+                    "subtitle": stringProp("New subtitle; empty string clears it."),
+                    "layout": enumProp(CustomTabLayout.allCases.map(\.rawValue), "Switch the rendering layout."),
+                    "board_group_by": stringProp("Name/key of the single_select field boards group by."),
+                    "add_fields": [
+                        "type": "array",
+                        "description": "New columns to append — same shape as create_tab's fields.",
+                        "items": ["type": "object"]
+                    ],
+                    "add_options": [
+                        "type": "array",
+                        "description": "Add options to existing select columns: [{field: \"Status\", options: [\"Blocked\", {label: \"Done\", color: \"green\"}]}]. Existing options are untouched.",
+                        "items": ["type": "object"]
+                    ]
+                ],
+                required: ["tab"]
+            )
+        ],
+        [
+            "name": Name.get_tab.rawValue,
+            "description": "Read a custom tab's full definition: fields with their input keys/kinds/options, layout, record count, and current dashboard blocks (raw JSON, including checklist done-states the user may have ticked). Call this before set_tab_blocks/update_tab_block so you patch rather than clobber. Omit `tab` to list every custom tab.",
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug or exact name. Omit to list all custom tabs.")
+                ],
+                required: []
+            )
+        ],
+        [
+            "name": Name.set_tab_blocks.rawValue,
+            "description": """
+            Replace a custom tab's dashboard with a new ordered array of blocks (rendered when the tab's layout is 'dashboard' — set it via create_tab/update_tab). This is Otto's generative UI: compose the page that best serves the tab's purpose, and keep it fresh over time with update_tab_block. Give every block a stable snake_case "id" so you can patch it later, and an optional "title" heading. Block types:
+            • {"id","type":"markdown","content"} — rich text: ## headings, **bold**, bullets, [links](https://…).
+            • {"id","type":"stats","stats":[{"label","value","detail?"}]} — headline number tiles (2-8).
+            • {"id","type":"table","title?","columns":[…],"rows":[[…]]} — data table (standings, schedules).
+            • {"id","type":"bar"|"line","title?","series":[{"name","points":[{"label","value"}]}]} — charts.
+            • {"id","type":"pie","title?","series":[one series]} — composition donut.
+            • {"id","type":"progress","title?","items":[{"label","value","target?" (default 100),"color?","detail?"}]} — progress bars; color: red|orange|yellow|green|teal|blue|purple|pink or #RRGGBB.
+            • {"id","type":"list","title?","style":"bullet"|"number"|"check","items":[{"text","done?","note?"}]} — style=check renders user-tickable checkboxes.
+            • {"id","type":"timeline","title?","items":[{"date","title","detail?"}]} — dated feed, put newest first.
+            • {"id","type":"records","view":"table"|"list"|"board"|"gallery","limit?"} — live embed of the tab's own records; combine with blocks above for an overview-plus-data page.
+            """,
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug or exact name."),
+                    "blocks": [
+                        "type": "array",
+                        "description": "The full new dashboard, top to bottom. Replaces ALL existing blocks — call get_tab first if you're keeping some.",
+                        "items": ["type": "object"]
+                    ]
+                ],
+                required: ["tab", "blocks"]
+            )
+        ],
+        [
+            "name": Name.update_tab_block.rawValue,
+            "description": "Patch ONE dashboard block on a custom tab without touching the rest: the block replaces the existing block with the same id, or is appended when the id is new. Set remove=true (with block:{id}) to delete that block instead. This is the tool for recurring updates — e.g. refresh the \"standings\" table and append to the \"log\" timeline each day. Block format: see set_tab_blocks.",
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug or exact name."),
+                    "block": ["type": "object", "description": "The full block object including its \"id\" and \"type\" (see set_tab_blocks for shapes)."],
+                    "remove": ["type": "boolean", "description": "true = remove the block with block.id instead of upserting."]
+                ],
+                required: ["tab", "block"]
+            )
+        ],
+        [
+            "name": Name.add_tab_records.rawValue,
+            "description": "Add multiple rows to a custom tab in one call (works for tabs created seconds ago — no new session needed). Each record is an object keyed by the tab's column keys (from create_tab's result or get_tab). Prefer this over repeated create_<slug> calls when adding 2+ rows. Values: text/url/date as strings (dates ISO8601), numbers as numbers, checkbox as boolean, single_select as an option label, multi_select as an array of option labels.",
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug or exact name."),
+                    "records": [
+                        "type": "array",
+                        "description": "Up to 100 row objects keyed by column key, e.g. [{\"team\": \"Turkey\", \"points\": 7}].",
+                        "items": ["type": "object"]
+                    ]
+                ],
+                required: ["tab", "records"]
+            )
+        ],
+        [
+            "name": Name.update_tab_record.rawValue,
+            "description": "Update one row in any custom tab by id (generic sibling of the per-tab update_<slug> tools — use it when the tab was created this session). Only the keys present in `values` change; empty string / empty array clears a field. Row ids come from add_tab_records results or search_items(types=[\"<slug>\"]).",
+            "input_schema": objectSchema(
+                properties: [
+                    "tab": stringProp("The tab's slug or exact name."),
+                    "id": stringProp("UUID of the record to update."),
+                    "values": ["type": "object", "description": "Column key → new value, e.g. {\"status\": \"Done\", \"points\": 9}."]
+                ],
+                required: ["tab", "id", "values"]
             )
         ]
         ]
