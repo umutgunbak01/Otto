@@ -163,20 +163,27 @@ struct FilePreviewPopup: View {
                 excelPreview
             case .text:
                 textPreview
-            case .video, .audio:
-                // No in-app player — point users at Quick Look. Hover popup
-                // stays compact; the full FileDetailView has a dedicated
-                // mediaUnsupportedPreview with a button.
-                VStack(spacing: Theme.Spacing.md) {
-                    Image(systemName: file.fileType == .video ? "film" : "waveform")
-                        .font(.system(size: 32, weight: .thin))
-                        .foregroundStyle(file.fileType.color)
-                    Text("Use Quick Look or open the file from the Files tab.")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                        .multilineTextAlignment(.center)
+            case .video:
+                if let url = previewURL {
+                    InlineVideoPlayer(url: url, maxHeight: .infinity)
+                        .padding(Theme.Spacing.md)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    placeholderView(icon: "film", message: "Unable to load video")
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .audio:
+                if let url = previewURL {
+                    VStack {
+                        Spacer()
+                        InlineAudioPlayer(url: url, accent: file.fileType.color)
+                            .padding(.horizontal, Theme.Spacing.xl)
+                            .frame(maxWidth: 460)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    placeholderView(icon: "waveform", message: "Unable to load audio")
+                }
             }
         }
     }

@@ -21,6 +21,22 @@ enum OttoToolLabels {
     @MainActor
     static func describe(name rawName: String, input: [String: Any], appState: AppState?) -> Label {
         let name = OttoTools.canonicalToolName(rawName)
+        // Genmedia tools can arrive under backend-specific naming the switch
+        // below can't see (Hermes humanizes MCP titles: "Mcp Otto Genmedia
+        // Run") — suffix-match the normalized name like OttoTools does.
+        let normalized = name.lowercased().replacingOccurrences(of: " ", with: "_")
+        if normalized.hasSuffix("genmedia_search_models") {
+            return Label(verb: "Searching fal models:", arg: quoted(string(input, "query")))
+        }
+        if normalized.hasSuffix("genmedia_get_model_schema") {
+            return Label(verb: "Fetching model schema:", arg: trim(string(input, "model_id")))
+        }
+        if normalized.hasSuffix("genmedia_run") {
+            return Label(verb: "Generating media:", arg: trim(string(input, "model_id")))
+        }
+        if normalized.hasSuffix("genmedia_upload_file") {
+            return Label(verb: "Uploading to fal:", arg: resolveFileName(input: input, appState: appState))
+        }
         switch name {
         case "search_items":
             return Label(verb: "Searching for", arg: quoted(string(input, "query")))

@@ -425,8 +425,19 @@ struct OttoChatView: View {
                 isInFlight: isInFlight
             )
         case .itemPreview(let type, let itemId):
-            ItemPreviewCard(type: type, itemId: itemId) { detail in
-                previewDetail = detail
+            // Media files (genmedia outputs, attached images/video/audio)
+            // render their actual content inline — thumbnail or player —
+            // instead of the generic click-through card.
+            if type == .file,
+               let file = appState.files.first(where: { $0.id == itemId }),
+               ChatMediaCard.supports(file.fileType) {
+                ChatMediaCard(file: file) {
+                    previewDetail = .filePreview(file)
+                }
+            } else {
+                ItemPreviewCard(type: type, itemId: itemId) { detail in
+                    previewDetail = detail
+                }
             }
         case .visualization(let spec):
             VisualizationCard(spec: spec, onOpenItem: openOttoItem)
@@ -486,6 +497,13 @@ struct OttoChatView: View {
             // tab's overlay; give it a concrete frame when hosted in a sheet.
             HabitDetailView(habit: habit, onClose: { previewDetail = nil })
                 .frame(width: 680, height: 620)
+                .environment(appState)
+        case .filePreview(let file):
+            // Same full-size preview the Files tab opens — image lightbox,
+            // video/audio players, PDF, tables. Needs a concrete frame when
+            // hosted in a sheet.
+            FilePreviewPopup(file: file, onClose: { previewDetail = nil })
+                .frame(width: 760, height: 560)
                 .environment(appState)
         }
     }
@@ -1449,6 +1467,195 @@ private struct ToolStepRow: View {
     }
 }
 
+// MARK: - Chat Media Card
+//
+// Inline preview for media files in the transcript — the payoff of a
+// genmedia run (or an attach_item_preview on an image/video/audio file)
+// should be the media itself, not a generic file row. Images render as a
+// thumbnail, videos as an inline player, audio as a compact play bar; a
+// caption row underneath keeps the name, size, save-to-disk, and the
+// click-through to the full FilePreviewPopup lightbox.
+
+private struct ChatMediaCard: View {
+    let file: FileItem
+    /// Opens the FilePreviewPopup sheet — owned by OttoChatView because
+    /// sheets attached inside LazyVStack rows don't present.
+    let onOpen: () -> Void
+
+    @State private var fileURL: URL?
+    @State private var missingOnDisk = false
+    @State private var thumbnail: NSImage?
+    @State private var thumbnailLoadFinished = false
+
+    /// File types this card can render inline. Everything else stays on
+    /// the generic ItemPreviewCard.
+    static func supports(_ type: FileType) -> Bool {
+        type == .image || type == .video || type == .audio
+    }
+
+    private var accent: Color { file.fileType.color }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                mediaArea
+                captionBar
+            }
+            .frame(maxWidth: 440)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(Theme.Colors.panel)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .task(id: file.id) {
+            await resolveMedia()
+        }
+    }
+
+    // MARK: Media area
+
+    @ViewBuilder
+    private var mediaArea: some View {
+        if missingOnDisk {
+            mediaPlaceholder(icon: file.fileType.iconName, label: "File missing on disk")
+        } else {
+            switch file.fileType {
+            case .image:
+                imageArea
+            case .video:
+                if let url = fileURL {
+                    InlineVideoPlayer(url: url)
+                } else {
+                    mediaPlaceholder(icon: "film", label: nil)
+                }
+            case .audio:
+                if let url = fileURL {
+                    InlineAudioPlayer(url: url, accent: accent)
+                        .padding(.horizontal, 13)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+                } else {
+                    mediaPlaceholder(icon: "waveform", label: nil)
+                }
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var imageArea: some View {
+        if let thumbnail {
+            Button(action: onOpen) {
+                Image(nsImage: thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 320)
+                    .background(Theme.Colors.bg1)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open preview")
+        } else if thumbnailLoadFinished {
+            mediaPlaceholder(icon: "photo", label: "Unable to load image")
+        } else {
+            ZStack {
+                Theme.Colors.bg1
+                ProgressView().controlSize(.small)
+            }
+            .frame(height: 160)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func mediaPlaceholder(icon: String, label: String?) -> some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .thin))
+                .foregroundStyle(accent.opacity(0.8))
+            if let label {
+                Text(label)
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+        .frame(height: 110)
+        .frame(maxWidth: .infinity)
+        .background(Theme.Colors.bg1)
+    }
+
+    // MARK: Caption bar
+
+    private var captionBar: some View {
+        Button(action: onOpen) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: file.fileType.iconName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(accent)
+
+                Text(file.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.Colors.text)
+                    .lineLimit(1)
+
+                Text("\(file.fileType.displayName.lowercased()) • \(file.formattedSize)")
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+
+                Spacer(minLength: 0)
+
+                // Same save-to-disk affordance as the generic file card —
+                // a generated image should end up in Finder in one click.
+                Button {
+                    FileSavePanel.save(file)
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.Colors.textDim)
+                }
+                .buttonStyle(.plain)
+                .help("Save to disk…")
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Loading
+
+    /// Resolve the stored binary's URL (and, for images, decode a
+    /// downsampled thumbnail off the main thread).
+    @MainActor
+    private func resolveMedia() async {
+        let url = await FileStorageService.shared.getFileURL(for: file)
+        let exists = FileManager.default.fileExists(atPath: url.path)
+        fileURL = exists ? url : nil
+        missingOnDisk = !exists
+        guard exists, file.fileType == .image else {
+            thumbnailLoadFinished = true
+            return
+        }
+        thumbnail = await MediaThumbnailLoader.load(url: url, maxPixel: 1000)
+        thumbnailLoadFinished = true
+    }
+}
+
 // MARK: - Item Preview Card
 //
 // Clickable card embedded in the chat scroll when Claude calls `attach_item_preview`.
@@ -1465,15 +1672,19 @@ private enum PreviewDetail: Identifiable {
     case event(Event)
     case community(Community)
     case habit(Habit)
+    /// Full media lightbox (FilePreviewPopup) for a chat media card —
+    /// richer than the generic search-result popup for images/video/audio.
+    case filePreview(FileItem)
 
     var id: UUID {
         switch self {
-        case .result(let r):    return r.id
-        case .network(let n):   return n.id
-        case .company(let c):   return c.id
-        case .event(let e):     return e.id
-        case .community(let c): return c.id
-        case .habit(let h):     return h.id
+        case .result(let r):      return r.id
+        case .network(let n):     return n.id
+        case .company(let c):     return c.id
+        case .event(let e):       return e.id
+        case .community(let c):   return c.id
+        case .habit(let h):       return h.id
+        case .filePreview(let f): return f.id
         }
     }
 
@@ -1557,7 +1768,7 @@ private struct ItemPreviewCard: View {
                 // just an in-app preview.
                 if type == .file, let file = appState.files.first(where: { $0.id == itemId }) {
                     Button {
-                        saveToDisk(file)
+                        FileSavePanel.save(file)
                     } label: {
                         Image(systemName: "arrow.down.circle")
                             .font(.system(size: 16, weight: .medium))
@@ -1584,33 +1795,6 @@ private struct ItemPreviewCard: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, Theme.Spacing.lg)
-    }
-
-    /// NSSavePanel copy-out of the stored binary (same flow as HomeView's
-    /// PDF export), then reveal the saved file in Finder.
-    private func saveToDisk(_ file: FileItem) {
-        Task { @MainActor in
-            let srcURL = await FileStorageService.shared.getFileURL(for: file)
-            guard FileManager.default.fileExists(atPath: srcURL.path) else { return }
-
-            let panel = NSSavePanel()
-            if let contentType = UTType(filenameExtension: file.fileExtension) {
-                panel.allowedContentTypes = [contentType]
-            }
-            panel.nameFieldStringValue = "\(file.name).\(file.fileExtension)"
-            panel.canCreateDirectories = true
-            panel.title = "Save \(file.name)"
-
-            if panel.runModal() == .OK, let destURL = panel.url {
-                try? FileManager.default.removeItem(at: destURL)
-                do {
-                    try FileManager.default.copyItem(at: srcURL, to: destURL)
-                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
-                } catch {
-                    NSLog("[Chat] save file failed: \(error.localizedDescription)")
-                }
-            }
-        }
     }
 
     private func lookupTitle() -> String? {

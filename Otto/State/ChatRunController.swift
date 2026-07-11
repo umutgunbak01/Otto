@@ -429,6 +429,35 @@ final class ChatRunController {
                 return
             }
 
+            // genmedia_run: same treatment — a successful generation should
+            // read as inline media, not a JSON blob in a chip. Recover the
+            // imported file ids from the result payload and upgrade the chip
+            // to one preview card per file (images render inline; video/audio
+            // get players). "Model returned no media" results carry no ids
+            // and fall through to a plain settled chip.
+            if OttoTools.isGenmediaRun(name), !isError {
+                let fileIds = OttoTools.parseGenmediaRunFileIds(summary)
+                    .filter { !Self.containsPreview(entries, itemId: $0) }
+                if !fileIds.isEmpty {
+                    if let idx = entries.lastIndex(where: { entry in
+                        entry.toolUseId == id && entry.kind.isToolStep
+                    }) {
+                        entries[idx].kind = .itemPreview(type: .file, itemId: fileIds[0])
+                        for (offset, fileId) in fileIds.dropFirst().enumerated() {
+                            entries.insert(
+                                ChatUIEntry(toolUseId: id, kind: .itemPreview(type: .file, itemId: fileId)),
+                                at: idx + 1 + offset
+                            )
+                        }
+                    } else {
+                        for fileId in fileIds {
+                            entries.append(ChatUIEntry(toolUseId: id, kind: .itemPreview(type: .file, itemId: fileId)))
+                        }
+                    }
+                    return
+                }
+            }
+
             if OttoTools.isAttachItemPreview(name) {
                 // Card already rendered on the toolCall event → the result is
                 // a no-op so we don't show a redundant checkmark chip.
@@ -606,6 +635,10 @@ final class ChatRunController {
         // cards from the result's "Created file: <uuid> …" line, mirroring
         // the live handleEvent path.
         var createFileChipIds: Set<String> = []
+        // genmedia_run calls — their chips get upgraded to media preview
+        // cards (one per imported file id in the result payload), mirroring
+        // the live handleEvent path.
+        var genmediaRunChipIds: Set<String> = []
 
         for turn in turns {
             switch turn.role {
@@ -643,6 +676,9 @@ final class ChatRunController {
                             if OttoTools.isCreateFile(name) {
                                 createFileChipIds.insert(id)
                             }
+                            if OttoTools.isGenmediaRun(name) {
+                                genmediaRunChipIds.insert(id)
+                            }
                             let label = OttoToolLabels.describe(name: name, input: input, appState: appState)
                             let callLabel: String
                             if let arg = label.arg, !arg.isEmpty {
@@ -677,6 +713,34 @@ final class ChatRunController {
                                     kind: .itemPreview(type: .file, itemId: fileId)
                                 )
                                 continue
+                            }
+                            // genmedia_run chip: recover the imported file ids
+                            // from the result payload and upgrade to media
+                            // preview cards, matching the live path. Extra
+                            // cards shift every index after the chip, so
+                            // toolIndex entries past it must be re-based.
+                            if genmediaRunChipIds.contains(toolUseId), !isError {
+                                let fileIds = OttoTools.parseGenmediaRunFileIds(content)
+                                    .filter { !containsPreview(out, itemId: $0) }
+                                if !fileIds.isEmpty {
+                                    out[idx] = ChatUIEntry(
+                                        toolUseId: toolUseId,
+                                        kind: .itemPreview(type: .file, itemId: fileIds[0])
+                                    )
+                                    for (offset, fileId) in fileIds.dropFirst().enumerated() {
+                                        out.insert(
+                                            ChatUIEntry(toolUseId: toolUseId, kind: .itemPreview(type: .file, itemId: fileId)),
+                                            at: idx + 1 + offset
+                                        )
+                                    }
+                                    let extras = fileIds.count - 1
+                                    if extras > 0 {
+                                        for (key, value) in toolIndex where value > idx {
+                                            toolIndex[key] = value + extras
+                                        }
+                                    }
+                                    continue
+                                }
                             }
                             // Preview chip whose call had no usable input:
                             // recover {type, id} from the executor's result

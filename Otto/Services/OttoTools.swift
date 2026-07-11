@@ -93,6 +93,39 @@ enum OttoTools {
         return token.flatMap { UUID(uuidString: String($0)) }
     }
 
+    /// True when `raw` names the genmedia_run tool under any backend's
+    /// naming — bare, MCP-prefixed, or humanized ("Mcp Otto Genmedia Run").
+    static func isGenmediaRun(_ raw: String) -> Bool {
+        let normalized = canonicalToolName(raw)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+        return normalized.hasSuffix(Name.genmedia_run.rawValue)
+    }
+
+    /// Recover the imported files' ids from a genmedia_run result payload so
+    /// the chat can auto-attach media preview cards without relying on the
+    /// agent to call attach_item_preview. The payload is the executor's JSON
+    /// (`"files": [{"file_id": …}]`), but depending on backend it may arrive
+    /// pretty-printed, or JSON-escaped inside an ACP `{"result": "…"}`
+    /// wrapper — stripping backslashes first makes the key scan see both.
+    static func parseGenmediaRunFileIds(_ text: String) -> [UUID] {
+        let flat = text.replacingOccurrences(of: "\\", with: "")
+        guard flat.contains("\"file_id\"") else { return [] }
+        let pattern = #""file_id"\s*:\s*"([0-9a-fA-F\-]{36})""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = flat as NSString
+        var seen = Set<UUID>()
+        var out: [UUID] = []
+        for match in regex.matches(in: flat, range: NSRange(location: 0, length: ns.length))
+        where match.numberOfRanges > 1 {
+            if let id = UUID(uuidString: ns.substring(with: match.range(at: 1))),
+               seen.insert(id).inserted {
+                out.append(id)
+            }
+        }
+        return out
+    }
+
     /// Recover `(type, id)` from the executor's
     /// "Attached preview: <type> <uuid> — <title>" result line. Used when a
     /// backend doesn't deliver tool inputs (ACP tool_call without rawInput),
@@ -870,7 +903,7 @@ enum OttoTools {
         ],
         [
             "name": Name.genmedia_run.rawValue,
-            "description": "Generate media synchronously via `genmedia run`. Saves outputs into Otto's Files tab and returns the new file ids — call `attach_item_preview` with type=`file` afterwards to give the user click-through previews in your reply. Generation can take 5-120 seconds depending on the model (videos especially); if it times out, fall back to a faster model. The user's fal account is billed directly.",
+            "description": "Generate media synchronously via `genmedia run`. Saves outputs into Otto's Files tab and returns the new file ids. Every generated file gets an inline preview in the chat AUTOMATICALLY (images render inline; video/audio get players) — do NOT also call `attach_item_preview` for generated files, and don't describe the media in detail; a one-line caption is enough. Generation can take 5-120 seconds depending on the model (videos especially); if it times out, fall back to a faster model. The user's fal account is billed directly.",
             "input_schema": objectSchema(
                 properties: [
                     "model_id": stringProp("Full fal model id, e.g. 'fal-ai/flux/dev'."),
