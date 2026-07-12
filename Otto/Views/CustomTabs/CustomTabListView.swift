@@ -8,6 +8,7 @@ import SwiftUI
 struct CustomTabTableView: View {
     @Environment(AppState.self) private var appState
     let tab: CustomTabDefinition
+    let collection: TabCollection
     let records: [CustomRecord]
     /// Set by the parent right after inserting a row — the table opens the
     /// title cell's inline editor and clears it.
@@ -32,7 +33,7 @@ struct CustomTabTableView: View {
     /// up proportionally so the table fills the content area edge to edge.
     /// Wider-than-viewport tables keep base widths and scroll horizontally.
     private func columnWidths(available: CGFloat) -> [UUID: CGFloat] {
-        let fields = tab.sortedFields
+        let fields = collection.sortedFields
         let base = fields.map { $0.kind.defaultColumnWidth }
         let baseTotal = base.reduce(0, +)
         guard baseTotal > 0 else { return [:] }
@@ -61,7 +62,7 @@ struct CustomTabTableView: View {
             }
         }
         .onChange(of: focusRecordId) { _, newValue in
-            guard let id = newValue, let primary = tab.primaryField else { return }
+            guard let id = newValue, let primary = collection.primaryField else { return }
             editingCell = EditingCell(recordId: id, fieldId: primary.id)
             focusRecordId = nil
         }
@@ -73,7 +74,7 @@ struct CustomTabTableView: View {
 
     private func columnHeaderRow(widths: [UUID: CGFloat]) -> some View {
         HStack(spacing: 0) {
-            ForEach(tab.sortedFields) { field in
+            ForEach(collection.sortedFields) { field in
                 HStack(spacing: 5) {
                     Image(systemName: field.kind.icon)
                         .font(.system(size: 9))
@@ -95,7 +96,7 @@ struct CustomTabTableView: View {
     @ViewBuilder
     private func recordRow(_ record: CustomRecord, widths: [UUID: CGFloat]) -> some View {
         HStack(spacing: 0) {
-            ForEach(tab.sortedFields) { field in
+            ForEach(collection.sortedFields) { field in
                 CustomFieldCell(
                     definition: field,
                     value: record.values[field.id],

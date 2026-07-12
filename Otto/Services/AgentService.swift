@@ -272,11 +272,12 @@ actor AgentService {
         The user tracks habits in the Habits tab. Use `create_habit` when the user describes a routine they want to build ("I want to drink 2.5L of water every day", "track no porn", "log my workouts 3x a week"). Infer the right shape from their words: numeric amounts with units → `kind=quantity` (e.g. 2500 mL water), time-based → `kind=duration` (e.g. 30 min reading), simple done/not-done → `kind=binary`. Use `log_habit_entry` when the user reports doing some amount ("I drank 500ml", "read for 25 min", "did 30 pushups", "ate 80g of protein") — you can pass the habit name and the executor will find it. Use `complete_habit` when they finished a habit with no specific quantity ("done with my workout", "meditated today", "made my bed"). Use `list_habits` for "how am I doing today?" / "what habits did I miss?" before answering.
 
         ### Custom tabs & generative dashboards
-        You can create whole new sidebar tabs for the user with `create_tab` — use it whenever they want to TRACK something ongoing that doesn't fit the built-in tabs ("help me track my job applications", "make me a World Cup tab", "I need a place for my Japan trip plan"). Pick the layout by shape: `table` for spreadsheet-ish data, `board` for status pipelines (needs a single_select column), `list` for checklists, `gallery` for card browsing, `dashboard` for a composed page of blocks (stats tiles, charts, tables, markdown, progress bars, tickable checklists, timelines — plus a `records` block embedding the tab's own rows). Rules of thumb:
-        - Fields: 2-6 well-chosen columns; the FIRST field is the record's title. Give select fields sensible options with colors.
-        - Fill data in the SAME turn with `add_tab_records` (batch) — don't wait for the per-tab tools, and don't create a tab and leave it empty.
-        - For living trackers (sports, projects, markets), prefer `dashboard` layout: overview blocks on top (stats/progress/markdown), a `records` block or table below, and a `timeline` block as a running log. On later "update my X tab" requests: `get_tab` first, then patch surgically with `update_tab_block` / `update_tab_record` instead of rebuilding everything.
-        - `update_tab` evolves the schema (rename, icon, layout switch, add_fields, add_options) — column removal stays manual in the tab editor.
+        You can create whole new sidebar tabs for the user with `create_tab` — use it whenever they want to TRACK something ongoing that doesn't fit the built-in tabs ("help me track my job applications", "make me a World Cup tab", "I want to track my boxing and nutrition"). A tab holds one or MORE record collections, each with its own typed columns — so "boxing sessions" and "meals" live in ONE tab, not two. Pick the layout by shape: `table` for spreadsheet-ish data, `board` for status pipelines (needs a single_select column), `list` for checklists, `gallery` for card browsing, `calendar` for date-driven logs (sessions, appointments — needs a date column), `dashboard` for a composed page of blocks (stats tiles, charts, tables, markdown, progress bars, tickable checklists, timelines — plus `records` blocks embedding each collection in its own view). Rules of thumb:
+        - Fields: 2-6 well-chosen columns per collection; the FIRST field is the record's title. Give select fields sensible options with colors.
+        - Fill data in the SAME turn with `add_tab_records` (batch; pass `collection` on multi-collection tabs) — don't create a tab and leave it empty.
+        - Tracking SEVERAL things at once ("boxing AND nutrition") → one tab, `collections` array, layout=dashboard, and one `records` block per collection each in the view that fits (sessions → calendar or list, meals → table, pipeline → board), plus stats/progress/checklist blocks on top.
+        - For living trackers (sports, projects, markets), prefer `dashboard` layout: overview blocks on top, records below, a `timeline` block as a running log. On later "update my X tab" requests: `get_tab` first, then patch surgically with `update_tab_block` / `update_tab_record` instead of rebuilding everything.
+        - `update_tab` evolves the shape afterwards: rename, icon, layout switch, add_collections (a whole new record set), add_fields, add_options, board_group_by, date_field. Removal (columns, collections) stays manual in the tab editor.
         - Don't create a custom tab for things the built-in tabs already do (todos, notes, habits, reminders, contacts, companies, events, files).
 
         ### Web tools (always available)
@@ -306,10 +307,9 @@ actor AgentService {
         if !appState.customTabs.isEmpty {
             var section: [String] = []
             section.append("### Existing custom tabs")
-            section.append("Rows: `create_<slug>`/`update_<slug>` (generated per tab), or the generic `add_tab_records`/`update_tab_record`; `delete_item(type=\"<slug>\")` removes one; find rows via `search_items(types=[\"<slug>\"])` or `grep_data(file: \"custom_<slug>.csv\", …)`. Tab shape/dashboard: `get_tab`, `update_tab`, `set_tab_blocks`, `update_tab_block`. Custom-tab records do NOT support otto:// inline links or attach_item_preview — reference them by title in plain prose.")
-            for tab in appState.customTabs {
-                let count = appState.customRecords.filter { $0.tabId == tab.id }.count
-                let columns = tab.fieldKeys().map { col -> String in
+            section.append("Rows: `add_tab_records`/`update_tab_record` (generic, take a `collection` param on multi-collection tabs; single-collection tabs also have generated `create_<slug>`/`update_<slug>` tools); `delete_item(type=\"<slug>\")` removes one; find rows via `search_items(types=[\"<slug>\"])` or `grep_data` on the tab's CSV (single collection: `custom_<slug>.csv`; multiple: `custom_<slug>__<collection>.csv`). Tab shape/dashboard: `get_tab`, `update_tab`, `set_tab_blocks`, `update_tab_block`. Custom-tab records do NOT support otto:// inline links or attach_item_preview — reference them by title in plain prose.")
+            func columnsDoc(_ collection: TabCollection) -> String {
+                collection.fieldKeys().map { col -> String in
                     switch col.field.kind {
                     case .singleSelect:
                         return "\(col.key) (one of: \(col.field.options.map(\.label).joined(separator: "|")))"
@@ -319,8 +319,18 @@ actor AgentService {
                         return "\(col.key) (\(col.field.kind.label.lowercased()))"
                     }
                 }.joined(separator: ", ")
+            }
+            for tab in appState.customTabs {
+                let count = appState.customRecords.filter { $0.tabId == tab.id }.count
                 var line = "- \"\(tab.name)\" — slug `\(tab.slug)`, layout \(tab.layout.rawValue), \(count) record\(count == 1 ? "" : "s")."
-                if !columns.isEmpty { line += " Columns: \(columns)." }
+                if tab.collections.count == 1, let only = tab.collections.first {
+                    let columns = columnsDoc(only)
+                    if !columns.isEmpty { line += " Columns: \(columns)." }
+                } else {
+                    for collection in tab.sortedCollections {
+                        line += " Collection `\(collection.key)` (\(collection.name)): \(columnsDoc(collection))."
+                    }
+                }
                 if !tab.blocks.isEmpty {
                     line += " Dashboard blocks: \(tab.blocks.map { "\($0.id) (\($0.typeName))" }.joined(separator: ", "))."
                 }

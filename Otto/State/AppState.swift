@@ -309,6 +309,7 @@ final class AppState {
             communities = store.communities
             customTabs = store.customTabs.sorted { $0.sortIndex < $1.sortIndex }
             customRecords = store.customRecords
+            migrateCustomRecordCollectionIds()
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             domainTags = store.domainTags
@@ -1073,6 +1074,49 @@ final class AppState {
 
     // MARK: - Custom Tabs
 
+    /// One-time stamp of pre-collections records: nil collectionId resolves
+    /// to the tab's lifted legacy collection; persist only if anything moved.
+    /// Records whose tab is gone are left alone (defensive — shouldn't happen).
+    @MainActor
+    private func migrateCustomRecordCollectionIds() {
+        var changed = false
+        for i in customRecords.indices where customRecords[i].collectionId == nil {
+            guard let tab = customTabs.first(where: { $0.id == customRecords[i].tabId }),
+                  let collection = tab.collection(for: customRecords[i]) else { continue }
+            customRecords[i].collectionId = collection.id
+            changed = true
+        }
+        if changed {
+            let snapshot = customRecords
+            Task { try? await persistence.updateCustomRecords(snapshot) }
+        }
+    }
+
+    @MainActor
+    func addCustomTab(
+        name: String,
+        icon: String,
+        collections: [TabCollection],
+        layout: CustomTabLayout = .table,
+        subtitle: String? = nil,
+        blocks: [TabBlock] = []
+    ) async -> CustomTabDefinition {
+        let tab = CustomTabDefinition(
+            name: name,
+            slug: CustomTabSlug.make(from: name, existing: customTabs),
+            icon: icon,
+            collections: collections,
+            sortIndex: (customTabs.map { $0.sortIndex }.max() ?? -1) + 1,
+            layout: layout,
+            subtitle: subtitle,
+            blocks: blocks
+        )
+        customTabs.append(tab)
+        try? await persistence.updateCustomTabs(customTabs)
+        return tab
+    }
+
+    /// Single-collection convenience (tab editor's simple path).
     @MainActor
     func addCustomTab(
         name: String,
@@ -1083,35 +1127,56 @@ final class AppState {
         boardGroupFieldId: UUID? = nil,
         blocks: [TabBlock] = []
     ) async -> CustomTabDefinition {
-        let tab = CustomTabDefinition(
+        return await addCustomTab(
             name: name,
-            slug: CustomTabSlug.make(from: name, existing: customTabs),
             icon: icon,
-            fields: fields,
-            sortIndex: (customTabs.map { $0.sortIndex }.max() ?? -1) + 1,
+            collections: [TabCollection(name: "Items", key: "items", fields: fields, boardGroupFieldId: boardGroupFieldId)],
             layout: layout,
             subtitle: subtitle,
-            boardGroupFieldId: boardGroupFieldId,
             blocks: blocks
         )
-        customTabs.append(tab)
-        try? await persistence.updateCustomTabs(customTabs)
-        return tab
     }
 
     @MainActor
     func updateCustomTab(_ tab: CustomTabDefinition) async {
         guard let index = customTabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        let previous = customTabs[index]
         customTabs[index] = tab
-        // Drop record values whose field definition no longer exists.
-        let validFieldIds = Set(tab.fields.map { $0.id })
+
         var recordsChanged = false
+
+        // Cascade: records of a removed collection go with it (the editor
+        // confirms this destructive step in its UI). Undo restores both.
+        let validCollectionIds = Set(tab.collections.map(\.id))
+        let removedRecords = customRecords.filter { record in
+            guard record.tabId == tab.id else { return false }
+            guard let cid = record.collectionId else { return false }
+            return !validCollectionIds.contains(cid)
+        }
+        if !removedRecords.isEmpty {
+            undoService.pushUndo(label: "Collection deleted") { [self] in
+                if let i = customTabs.firstIndex(where: { $0.id == tab.id }) {
+                    customTabs[i] = previous
+                }
+                customRecords.append(contentsOf: removedRecords)
+                try? await persistence.updateCustomTabs(customTabs)
+                try? await persistence.updateCustomRecords(customRecords)
+            }
+            let removedIds = Set(removedRecords.map(\.id))
+            customRecords.removeAll { removedIds.contains($0.id) }
+            recordsChanged = true
+        }
+
+        // Drop record values whose field definition no longer exists in any
+        // collection.
+        let validFieldIds = tab.allFieldIds
         for i in customRecords.indices where customRecords[i].tabId == tab.id {
             let orphaned = customRecords[i].values.keys.filter { !validFieldIds.contains($0) }
             guard !orphaned.isEmpty else { continue }
             for key in orphaned { customRecords[i].values.removeValue(forKey: key) }
             recordsChanged = true
         }
+
         try? await persistence.updateCustomTabs(customTabs)
         if recordsChanged { try? await persistence.updateCustomRecords(customRecords) }
     }

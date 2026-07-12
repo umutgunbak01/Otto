@@ -827,20 +827,30 @@ final class OttoToolExecutor {
 
     // MARK: - Custom-tab records (generated create_<slug> / update_<slug> tools)
 
+    /// The generated per-tab tools exist only for single-collection tabs, but
+    /// a stale session may still call one after the tab grew collections —
+    /// the first collection is always the target.
     private func createCustomTabRecord(tab: CustomTabDefinition, _ input: [String: Any]) async -> ToolResult {
+        guard let collection = tab.sortedCollections.first else {
+            return err("Tab \(tab.slug) has no collections.", summary: "Add to \(tab.name) failed")
+        }
+        return await createRecord(tab: tab, collection: collection, input: input)
+    }
+
+    private func createRecord(tab: CustomTabDefinition, collection: TabCollection, input: [String: Any]) async -> ToolResult {
         let values: [UUID: CustomFieldValue]
         do {
-            values = try parseCustomFieldValues(tab: tab, input: input).compactMapValues { $0 }
+            values = try parseCustomFieldValues(collection: collection, input: input).compactMapValues { $0 }
         } catch let e as CustomFieldInputError {
             return err(e.message, summary: "Add to \(tab.name) failed")
         } catch {
             return err(error.localizedDescription, summary: "Add to \(tab.name) failed")
         }
         guard !values.isEmpty else {
-            return err("Provide at least one field value. Columns: \(tab.fieldKeys().map { $0.key }.joined(separator: ", ")).",
+            return err("Provide at least one field value. Columns: \(collection.fieldKeys().map { $0.key }.joined(separator: ", ")).",
                        summary: "Add to \(tab.name) failed")
         }
-        let record = CustomRecord(tabId: tab.id, values: values)
+        let record = CustomRecord(tabId: tab.id, collectionId: collection.id, values: values)
         await appState.addCustomRecord(record)
         return ok("Created \(tab.name) record \(record.id.uuidString).",
                   summary: "Added to \(tab.name): \(record.displayTitle(in: tab))")
@@ -853,16 +863,22 @@ final class OttoToolExecutor {
         guard var record = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id }) else {
             return err("No \(tab.name) record with id \(id.uuidString).", summary: "Update \(tab.name) failed")
         }
+        // Parse against the record's OWN collection — record ids are unique
+        // across the tab, so updates hit the right schema automatically.
+        guard let collection = tab.collection(for: record) else {
+            return err("Record's collection no longer exists on \(tab.slug).", summary: "Update \(tab.name) failed")
+        }
         let parsed: [UUID: CustomFieldValue?]
         do {
-            parsed = try parseCustomFieldValues(tab: tab, input: input)
+            parsed = try parseCustomFieldValues(collection: collection, input: input)
         } catch let e as CustomFieldInputError {
             return err(e.message, summary: "Update \(tab.name) failed")
         } catch {
             return err(error.localizedDescription, summary: "Update \(tab.name) failed")
         }
         guard !parsed.isEmpty else {
-            return err("No fields provided to update.", summary: "Update \(tab.name) failed")
+            return err("No fields provided to update. Columns: \(collection.fieldKeys().map { $0.key }.joined(separator: ", ")).",
+                       summary: "Update \(tab.name) failed")
         }
         for (fieldId, value) in parsed {
             if let value, !value.isEmpty {
@@ -876,11 +892,12 @@ final class OttoToolExecutor {
                   summary: "Updated \(tab.name): \(record.displayTitle(in: tab))")
     }
 
-    /// Parse every provided field key in `input` against the tab's schema.
-    /// nil values mean "explicitly cleared" (empty string / array / unchecked).
-    private func parseCustomFieldValues(tab: CustomTabDefinition, input: [String: Any]) throws -> [UUID: CustomFieldValue?] {
+    /// Parse every provided field key in `input` against one collection's
+    /// schema. nil values mean "explicitly cleared" (empty string / array /
+    /// unchecked).
+    private func parseCustomFieldValues(collection: TabCollection, input: [String: Any]) throws -> [UUID: CustomFieldValue?] {
         var out: [UUID: CustomFieldValue?] = [:]
-        for (key, field) in tab.fieldKeys() {
+        for (key, field) in collection.fieldKeys() {
             guard let raw = input[key], !(raw is NSNull) else { continue }
             out[field.id] = try CustomFieldValue.fromToolInput(raw, field: field)
         }
@@ -992,6 +1009,58 @@ final class OttoToolExecutor {
         return out
     }
 
+    /// Resolve the `collection` input param within a tab. Omitted → the only
+    /// collection (single-collection tabs), or an error listing keys when the
+    /// tab has several.
+    private func requireCollection(_ tab: CustomTabDefinition, _ input: [String: Any], paramKey: String = "collection") throws -> TabCollection {
+        let keysHint = tab.sortedCollections.map { "\($0.key) (\"\($0.name)\")" }.joined(separator: ", ")
+        guard let raw = string(input, paramKey).nonEmpty else {
+            if tab.collections.count == 1, let only = tab.collections.first { return only }
+            throw TabToolError(message: "Tab \(tab.slug) has \(tab.collections.count) collections — pass 'collection'. Collections: \(keysHint).")
+        }
+        guard let collection = tab.collection(matching: raw) else {
+            throw TabToolError(message: "No collection '\(raw)' on \(tab.slug). Collections: \(keysHint).")
+        }
+        return collection
+    }
+
+    /// Parse one create_tab/update_tab collection spec:
+    /// {name, fields:[...], board_group_by?, date_field?}.
+    private func parseCollectionSpec(_ raw: Any, index: Int, existing: [TabCollection]) throws -> TabCollection {
+        guard let dict = raw as? [String: Any] else {
+            throw TabToolError(message: "collections[\(index)] must be an object: {name, fields:[...], board_group_by?, date_field?}.")
+        }
+        guard let name = (dict["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            throw TabToolError(message: "collections[\(index)] needs a non-empty 'name' (e.g. \"Boxing sessions\").")
+        }
+        if existing.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            throw TabToolError(message: "Collection '\(name)' already exists.")
+        }
+        var fields = try parseFieldSpecs(dict["fields"], startIndex: 0)
+        if fields.isEmpty {
+            fields = [CustomFieldDefinition(name: "Name", kind: .text, sortIndex: 0)]
+        }
+        var collection = TabCollection(
+            name: name,
+            key: TabCollection.makeKey(from: name, existing: existing),
+            fields: fields,
+            sortIndex: (existing.map(\.sortIndex).max() ?? -1) + 1
+        )
+        if let groupRaw = (dict["board_group_by"] as? String).nonEmpty {
+            guard let field = matchField(groupRaw, in: fields), field.kind == .singleSelect else {
+                throw TabToolError(message: "Collection '\(name)': board_group_by '\(groupRaw)' must name one of its single_select fields.")
+            }
+            collection.boardGroupFieldId = field.id
+        }
+        if let dateRaw = (dict["date_field"] as? String).nonEmpty {
+            guard let field = matchField(dateRaw, in: fields), field.kind == .date else {
+                throw TabToolError(message: "Collection '\(name)': date_field '\(dateRaw)' must name one of its date fields.")
+            }
+            collection.dateFieldId = field.id
+        }
+        return collection
+    }
+
     /// Parse + validate a blocks array; ids are de-duplicated in order.
     private func parseBlocks(_ raw: Any?) throws -> [TabBlock] {
         guard let items = raw as? [Any] else {
@@ -1024,14 +1093,21 @@ final class OttoToolExecutor {
         return NSImage(systemSymbolName: icon, accessibilityDescription: nil) != nil ? icon : "tablecells"
     }
 
-    private func columnsDoc(_ tab: CustomTabDefinition) -> String {
-        tab.fieldKeys().map { key, field in
+    private func columnsDoc(_ collection: TabCollection) -> String {
+        collection.fieldKeys().map { key, field in
             switch field.kind {
             case .singleSelect: return "\(key) (one of: \(field.options.map(\.label).joined(separator: "|")))"
             case .multiSelect: return "\(key) (any of: \(field.options.map(\.label).joined(separator: "|")))"
             default: return "\(key) (\(field.kind.rawValue))"
             }
         }.joined(separator: ", ")
+    }
+
+    /// Per-collection "key: columns" lines for tool results.
+    private func collectionsDoc(_ tab: CustomTabDefinition) -> [String] {
+        tab.sortedCollections.map { collection in
+            "- collection \"\(collection.key)\" (\(collection.name)): \(columnsDoc(collection))"
+        }
     }
 
     private func createTab(_ input: [String: Any]) async -> ToolResult {
@@ -1048,53 +1124,73 @@ final class OttoToolExecutor {
                        summary: "Create tab failed")
         }
 
-        var fields: [CustomFieldDefinition]
+        var collections: [TabCollection] = []
         let blocks: [TabBlock]
         do {
-            fields = try parseFieldSpecs(input["fields"], startIndex: 0)
+            if let rawCollections = input["collections"] as? [Any], !rawCollections.isEmpty {
+                guard rawCollections.count <= 8 else {
+                    throw TabToolError(message: "Too many collections (\(rawCollections.count)); maximum is 8 per tab.")
+                }
+                for (i, raw) in rawCollections.enumerated() {
+                    collections.append(try parseCollectionSpec(raw, index: i, existing: collections))
+                }
+            } else {
+                // Single-collection shorthand: a bare `fields` array.
+                var fields = try parseFieldSpecs(input["fields"], startIndex: 0)
+                // A record-style tab with no columns would be unusable — seed
+                // a title column. Dashboard tabs legitimately run field-less.
+                if fields.isEmpty && layout != .dashboard {
+                    fields = [CustomFieldDefinition(name: "Name", kind: .text, sortIndex: 0)]
+                }
+                if !fields.isEmpty {
+                    var only = TabCollection(name: "Items", key: "items", fields: fields)
+                    if let groupRaw = string(input, "board_group_by").nonEmpty {
+                        guard let field = matchField(groupRaw, in: fields), field.kind == .singleSelect else {
+                            throw TabToolError(message: "board_group_by '\(groupRaw)' must name one of the tab's single_select fields.")
+                        }
+                        only.boardGroupFieldId = field.id
+                    }
+                    collections = [only]
+                }
+            }
             blocks = input["blocks"] != nil && !(input["blocks"] is NSNull) ? try parseBlocks(input["blocks"]) : []
         } catch let e as TabToolError {
             return err(e.message, summary: "Create tab failed")
         } catch {
             return err(error.localizedDescription, summary: "Create tab failed")
         }
-        // A record-style tab with no columns would be unusable — seed a title
-        // column. Dashboard tabs legitimately run field-less.
-        if fields.isEmpty && layout != .dashboard {
-            fields = [CustomFieldDefinition(name: "Name", kind: .text, sortIndex: 0)]
-        }
-        if layout == .board && !fields.contains(where: { $0.kind == .singleSelect }) {
+
+        if layout == .board, let first = collections.first, first.boardGroupField == nil {
             return err("layout=board needs a single_select field to group by — add one (e.g. Status with options like \"To do|In progress|Done\").",
                        summary: "Create tab failed")
-        }
-        var boardGroupFieldId: UUID?
-        if let groupRaw = string(input, "board_group_by").nonEmpty {
-            guard let field = matchField(groupRaw, in: fields), field.kind == .singleSelect else {
-                return err("board_group_by '\(groupRaw)' must name one of the tab's single_select fields.",
-                           summary: "Create tab failed")
-            }
-            boardGroupFieldId = field.id
         }
 
         let tab = await appState.addCustomTab(
             name: name,
             icon: sanitizeIcon(string(input, "icon")),
-            fields: fields,
+            collections: collections,
             layout: layout,
             subtitle: string(input, "subtitle").nonEmpty,
-            boardGroupFieldId: boardGroupFieldId,
             blocks: blocks
         )
 
         var lines = ["Created tab \"\(name)\" — slug: \(tab.slug), layout: \(layout.rawValue)."]
-        if !tab.fields.isEmpty {
-            lines.append("Column keys: \(columnsDoc(tab)).")
-            lines.append("Add rows NOW with add_tab_records(tab: \"\(tab.slug)\", records: [...]); edit with update_tab_record. (Dedicated create_\(tab.slug)/update_\(tab.slug) tools appear in your next session.)")
+        if !tab.collections.isEmpty {
+            if tab.collections.count == 1, let only = tab.collections.first {
+                lines.append("Column keys: \(columnsDoc(only)).")
+                lines.append("Add rows NOW with add_tab_records(tab: \"\(tab.slug)\", records: [...]); edit with update_tab_record. (Dedicated create_\(tab.slug)/update_\(tab.slug) tools appear in your next session.)")
+            } else {
+                lines.append("Collections:")
+                lines.append(contentsOf: collectionsDoc(tab))
+                lines.append("Add rows NOW with add_tab_records(tab: \"\(tab.slug)\", collection: \"<key>\", records: [...]); edit with update_tab_record.")
+            }
         }
         if layout == .dashboard {
             lines.append(blocks.isEmpty
-                ? "It's a dashboard tab — compose it with set_tab_blocks(tab: \"\(tab.slug)\", blocks: [...])."
+                ? "It's a dashboard tab — compose it with set_tab_blocks(tab: \"\(tab.slug)\", blocks: [...]); embed each collection with {\"type\":\"records\",\"collection\":\"<key>\",\"view\":\"table|list|board|gallery|calendar\"}."
                 : "Dashboard blocks: \(blocks.map(\.id).joined(separator: ", ")). Patch individual ones later with update_tab_block.")
+        } else if tab.collections.count > 1 {
+            lines.append("Tip: with several collections, layout=dashboard usually serves best — records blocks can show each collection in its own view.")
         }
         lines.append("The tab is already visible in the user's sidebar.")
         return ok(lines.joined(separator: "\n"), summary: "Created tab: \(name)")
@@ -1112,39 +1208,88 @@ final class OttoToolExecutor {
 
         var changes: [String] = []
         do {
-            // Append new columns first so layout/board changes can reference them.
+            // New collections first, then column/option edits (which may
+            // target them), then cosmetic/layout changes.
+            if let rawCollections = input["add_collections"] as? [Any], !rawCollections.isEmpty {
+                guard tab.collections.count + rawCollections.count <= 8 else {
+                    throw TabToolError(message: "Tab \(tab.slug) would exceed 8 collections.")
+                }
+                for (i, raw) in rawCollections.enumerated() {
+                    let collection = try parseCollectionSpec(raw, index: i, existing: tab.collections)
+                    tab.collections.append(collection)
+                    changes.append("added collection \(collection.key) (\"\(collection.name)\")")
+                }
+            }
+            if let renameRaw = input["rename_collection"] as? [String: Any] {
+                let target = try requireCollection(tab, renameRaw)
+                guard let newName = (renameRaw["name"] as? String).nonEmpty else {
+                    throw TabToolError(message: "rename_collection needs {collection, name}.")
+                }
+                if let index = tab.collections.firstIndex(where: { $0.id == target.id }) {
+                    tab.collections[index].name = newName
+                    changes.append("renamed collection \(target.key) to \"\(newName)\" (key stays \(target.key))")
+                }
+            }
+            // Column edits target one collection (the only one, or the
+            // `collection` param).
             if input["add_fields"] != nil && !(input["add_fields"] is NSNull) {
-                let start = (tab.fields.map(\.sortIndex).max() ?? -1) + 1
+                let target = try requireCollection(tab, input)
+                guard let ci = tab.collections.firstIndex(where: { $0.id == target.id }) else {
+                    throw TabToolError(message: "Collection lookup failed.")
+                }
+                let start = (tab.collections[ci].fields.map(\.sortIndex).max() ?? -1) + 1
                 let added = try parseFieldSpecs(input["add_fields"], startIndex: start)
                 for field in added {
-                    guard matchField(field.name, in: tab.fields) == nil else {
-                        throw TabToolError(message: "Field '\(field.name)' already exists on \(tab.slug).")
+                    guard matchField(field.name, in: tab.collections[ci].fields) == nil else {
+                        throw TabToolError(message: "Field '\(field.name)' already exists on \(tab.slug)/\(target.key).")
                     }
-                    tab.fields.append(field)
+                    tab.collections[ci].fields.append(field)
                 }
-                if !added.isEmpty { changes.append("added column\(added.count == 1 ? "" : "s") \(added.map(\.name).joined(separator: ", "))") }
+                if !added.isEmpty { changes.append("added column\(added.count == 1 ? "" : "s") \(added.map(\.name).joined(separator: ", ")) to \(target.key)") }
             }
             if let rawAddOptions = input["add_options"] as? [Any] {
+                let target = try requireCollection(tab, input)
+                guard let ci = tab.collections.firstIndex(where: { $0.id == target.id }) else {
+                    throw TabToolError(message: "Collection lookup failed.")
+                }
                 for item in rawAddOptions {
                     guard let dict = item as? [String: Any],
                           let fieldRaw = (dict["field"] as? String).nonEmpty,
                           let rawOptions = dict["options"] as? [Any] else {
                         throw TabToolError(message: "add_options entries must be {field, options:[...]}.")
                     }
-                    guard let field = matchField(fieldRaw, in: tab.fields),
-                          let fi = tab.fields.firstIndex(where: { $0.id == field.id }) else {
-                        throw TabToolError(message: "add_options: no field '\(fieldRaw)' on \(tab.slug).")
+                    guard let field = matchField(fieldRaw, in: tab.collections[ci].fields),
+                          let fi = tab.collections[ci].fields.firstIndex(where: { $0.id == field.id }) else {
+                        throw TabToolError(message: "add_options: no field '\(fieldRaw)' on \(tab.slug)/\(target.key).")
                     }
                     guard field.kind.usesOptions else {
                         throw TabToolError(message: "add_options: field '\(field.name)' is \(field.kind.rawValue), not a select.")
                     }
                     let parsed = try parseOptionSpecs(rawOptions, fieldName: field.name, startCount: field.options.count)
                     let fresh = parsed.filter { option in
-                        !tab.fields[fi].options.contains { $0.label.caseInsensitiveCompare(option.label) == .orderedSame }
+                        !tab.collections[ci].fields[fi].options.contains { $0.label.caseInsensitiveCompare(option.label) == .orderedSame }
                     }
-                    tab.fields[fi].options.append(contentsOf: fresh)
+                    tab.collections[ci].fields[fi].options.append(contentsOf: fresh)
                     if !fresh.isEmpty { changes.append("added \(field.name) option\(fresh.count == 1 ? "" : "s") \(fresh.map(\.label).joined(separator: ", "))") }
                 }
+            }
+            if let groupRaw = string(input, "board_group_by").nonEmpty {
+                let target = try requireCollection(tab, input)
+                guard let ci = tab.collections.firstIndex(where: { $0.id == target.id }),
+                      let field = matchField(groupRaw, in: tab.collections[ci].fields), field.kind == .singleSelect else {
+                    throw TabToolError(message: "board_group_by '\(groupRaw)' must name a single_select field on the target collection.")
+                }
+                tab.collections[ci].boardGroupFieldId = field.id
+                changes.append("\(target.key) boards group by \(field.name)")
+            }
+            if let dateRaw = string(input, "date_field").nonEmpty {
+                let target = try requireCollection(tab, input)
+                guard let ci = tab.collections.firstIndex(where: { $0.id == target.id }),
+                      let field = matchField(dateRaw, in: tab.collections[ci].fields), field.kind == .date else {
+                    throw TabToolError(message: "date_field '\(dateRaw)' must name a date field on the target collection.")
+                }
+                tab.collections[ci].dateFieldId = field.id
+                changes.append("\(target.key) calendars use \(field.name)")
             }
         } catch let e as TabToolError {
             return err(e.message, summary: "Update tab failed")
@@ -1170,7 +1315,7 @@ final class OttoToolExecutor {
                 return err("Unknown layout '\(layoutRaw)'. Use one of: \(CustomTabLayout.allCases.map(\.rawValue).joined(separator: ", ")).",
                            summary: "Update tab failed")
             }
-            if layout == .board && !tab.fields.contains(where: { $0.kind == .singleSelect }) {
+            if layout == .board, tab.sortedCollections.first?.boardGroupField == nil {
                 return err("layout=board needs a single_select field to group by — add one via add_fields first.",
                            summary: "Update tab failed")
             }
@@ -1179,22 +1324,14 @@ final class OttoToolExecutor {
                 changes.append("layout → \(layout.rawValue)")
             }
         }
-        if let groupRaw = string(input, "board_group_by").nonEmpty {
-            guard let field = matchField(groupRaw, in: tab.fields), field.kind == .singleSelect else {
-                return err("board_group_by '\(groupRaw)' must name one of the tab's single_select fields.",
-                           summary: "Update tab failed")
-            }
-            tab.boardGroupFieldId = field.id
-            changes.append("board groups by \(field.name)")
-        }
 
         guard !changes.isEmpty else {
-            return err("Nothing to change — pass at least one of name, icon, subtitle, layout, board_group_by, add_fields, add_options.",
+            return err("Nothing to change — pass at least one of name, icon, subtitle, layout, add_collections, rename_collection, add_fields, add_options, board_group_by, date_field.",
                        summary: "Update tab failed")
         }
         await appState.updateCustomTab(tab)
         var lines = ["Updated tab \(tab.slug): \(changes.joined(separator: "; "))."]
-        if !tab.fields.isEmpty { lines.append("Column keys now: \(columnsDoc(tab)).") }
+        lines.append(contentsOf: collectionsDoc(tab))
         return ok(lines.joined(separator: "\n"), summary: "Updated tab: \(tab.name)")
     }
 
@@ -1207,7 +1344,11 @@ final class OttoToolExecutor {
             let lines = appState.customTabs.map { tab -> String in
                 let count = appState.customRecords.filter { $0.tabId == tab.id }.count
                 var line = "- \(tab.slug) (\"\(tab.name)\") — layout \(tab.layout.rawValue), \(count) record\(count == 1 ? "" : "s")"
-                if !tab.fields.isEmpty { line += ", columns: \(tab.fieldKeys().map(\.key).joined(separator: ", "))" }
+                if tab.collections.count == 1, let only = tab.collections.first {
+                    if !only.fields.isEmpty { line += ", columns: \(only.fieldKeys().map(\.key).joined(separator: ", "))" }
+                } else if !tab.collections.isEmpty {
+                    line += ", collections: \(tab.sortedCollections.map(\.key).joined(separator: ", "))"
+                }
                 if !tab.blocks.isEmpty { line += ", blocks: \(tab.blocks.map(\.id).joined(separator: ", "))" }
                 return line
             }
@@ -1229,15 +1370,26 @@ final class OttoToolExecutor {
             "icon": tab.icon,
             "layout": tab.layout.rawValue,
             "record_count": appState.customRecords.filter { $0.tabId == tab.id }.count,
-            "fields": tab.fieldKeys().map { key, field -> [String: Any] in
-                var f: [String: Any] = ["key": key, "name": field.name, "kind": field.kind.rawValue]
-                if field.kind.usesOptions { f["options"] = field.options.map(\.label) }
-                return f
+            "collections": tab.sortedCollections.map { collection -> [String: Any] in
+                var c: [String: Any] = [
+                    "key": collection.key,
+                    "name": collection.name,
+                    "record_count": appState.customRecords.filter { record in
+                        record.tabId == tab.id && tab.collection(for: record)?.id == collection.id
+                    }.count,
+                    "fields": collection.fieldKeys().map { key, field -> [String: Any] in
+                        var f: [String: Any] = ["key": key, "name": field.name, "kind": field.kind.rawValue]
+                        if field.kind.usesOptions { f["options"] = field.options.map(\.label) }
+                        return f
+                    }
+                ]
+                if let group = collection.boardGroupField { c["board_group_by"] = group.name }
+                if let date = collection.dateField { c["date_field"] = date.name }
+                return c
             },
             "blocks": tab.blocks.map { $0.json.anyValue }
         ]
         if let subtitle = tab.subtitle { dict["subtitle"] = subtitle }
-        if let group = tab.boardGroupField { dict["board_group_by"] = group.name }
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
               let json = String(data: data, encoding: .utf8) else {
             return err("Failed to serialize tab definition.", summary: "Get tab failed")
@@ -1314,18 +1466,20 @@ final class OttoToolExecutor {
 
     private func addTabRecords(_ input: [String: Any]) async -> ToolResult {
         let tab: CustomTabDefinition
+        let collection: TabCollection
         do {
             tab = try requireTab(input)
+            collection = try requireCollection(tab, input)
         } catch let e as TabToolError {
             return err(e.message, summary: "Add rows failed")
         } catch {
             return err(error.localizedDescription, summary: "Add rows failed")
         }
-        guard !tab.fields.isEmpty else {
-            return err("Tab \(tab.slug) has no columns — add some with update_tab(add_fields:) first.", summary: "Add rows failed")
+        guard !collection.fields.isEmpty else {
+            return err("Collection \(collection.key) on \(tab.slug) has no columns — add some with update_tab(add_fields:) first.", summary: "Add rows failed")
         }
         guard let rawRecords = input["records"] as? [Any], !rawRecords.isEmpty else {
-            return err("Missing 'records' — an array of row objects keyed by column key. Columns: \(columnsDoc(tab)).",
+            return err("Missing 'records' — an array of row objects keyed by column key. Columns: \(columnsDoc(collection)).",
                        summary: "Add rows failed")
         }
         guard rawRecords.count <= Self.maxBatchRecords else {
@@ -1342,9 +1496,9 @@ final class OttoToolExecutor {
                 continue
             }
             do {
-                let values = try parseCustomFieldValues(tab: tab, input: dict).compactMapValues { $0 }
+                let values = try parseCustomFieldValues(collection: collection, input: dict).compactMapValues { $0 }
                 if values.isEmpty {
-                    problems.append("records[\(i)]: no recognized column keys. Columns: \(tab.fieldKeys().map(\.key).joined(separator: ", ")).")
+                    problems.append("records[\(i)]: no recognized column keys. Columns: \(collection.fieldKeys().map(\.key).joined(separator: ", ")).")
                 } else {
                     parsed.append(values)
                 }
@@ -1359,10 +1513,11 @@ final class OttoToolExecutor {
                        summary: "Add rows failed")
         }
 
-        let records = parsed.map { CustomRecord(tabId: tab.id, values: $0) }
+        let records = parsed.map { CustomRecord(tabId: tab.id, collectionId: collection.id, values: $0) }
         await appState.addCustomRecords(records)
+        let target = tab.collections.count > 1 ? "\(tab.slug)/\(collection.key)" : tab.slug
         let lines = records.map { "- \($0.displayTitle(in: tab)) — id \($0.id.uuidString)" }
-        return ok("Added \(records.count) row\(records.count == 1 ? "" : "s") to \(tab.slug):\n" + lines.joined(separator: "\n"),
+        return ok("Added \(records.count) row\(records.count == 1 ? "" : "s") to \(target):\n" + lines.joined(separator: "\n"),
                   summary: "Added \(records.count) row\(records.count == 1 ? "" : "s") to \(tab.name)")
     }
 
@@ -1376,10 +1531,11 @@ final class OttoToolExecutor {
             return err(error.localizedDescription, summary: "Update row failed")
         }
         guard let values = input["values"] as? [String: Any], !values.isEmpty else {
-            return err("Missing 'values' — an object of column key → new value. Columns: \(columnsDoc(tab)).",
+            return err("Missing 'values' — an object of column key → new value.\n" + collectionsDoc(tab).joined(separator: "\n"),
                        summary: "Update row failed")
         }
-        // Reuse the per-tab update path: values + id in one flat input.
+        // Reuse the per-tab update path (it resolves the record's own
+        // collection from the id): values + id in one flat input.
         var flat: [String: Any] = values
         flat["id"] = input["id"]
         return await updateCustomTabRecord(tab: tab, flat)
@@ -1885,8 +2041,11 @@ final class OttoToolExecutor {
                     "created_at": df.string(from: r.createdAt),
                     "updated_at": df.string(from: r.updatedAt)
                 ]
-                for (key, field) in tab.fieldKeys() {
-                    out[key] = r.values[field.id].map { $0.toolOutputValue(for: field) } ?? NSNull()
+                if let collection = tab.collection(for: r) {
+                    if tab.collections.count > 1 { out["collection"] = collection.key }
+                    for (key, field) in collection.fieldKeys() {
+                        out[key] = r.values[field.id].map { $0.toolOutputValue(for: field) } ?? NSNull()
+                    }
                 }
                 payload = out
             }

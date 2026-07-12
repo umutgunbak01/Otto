@@ -82,6 +82,7 @@ struct CustomValueChip: View {
 struct RecordListRows: View {
     @Environment(AppState.self) private var appState
     let tab: CustomTabDefinition
+    let collection: TabCollection
     let records: [CustomRecord]
     let onOpen: (CustomRecord) -> Void
     let onDelete: (CustomRecord) -> Void
@@ -92,13 +93,13 @@ struct RecordListRows: View {
     @State private var hoveredRowId: UUID?
 
     private var checkboxField: CustomFieldDefinition? {
-        tab.sortedFields.first { $0.kind == .checkbox }
+        collection.sortedFields.first { $0.kind == .checkbox }
     }
 
     /// Fields rendered as trailing chips: everything except the title field,
     /// the toggle checkbox, and long text (too big for a row).
     private var chipFields: [CustomFieldDefinition] {
-        tab.sortedFields.dropFirst().filter { field in
+        collection.sortedFields.dropFirst().filter { field in
             field.id != checkboxField?.id && field.kind != .longText
         }
     }
@@ -193,6 +194,7 @@ struct RecordListRows: View {
 /// Card grid: title plus each non-empty field as a label/value row.
 struct RecordGalleryGrid: View {
     let tab: CustomTabDefinition
+    let collection: TabCollection
     let records: [CustomRecord]
     let onOpen: (CustomRecord) -> Void
     let onDelete: (CustomRecord) -> Void
@@ -217,7 +219,7 @@ struct RecordGalleryGrid: View {
                 .lineLimit(2)
 
             VStack(alignment: .leading, spacing: 5) {
-                ForEach(tab.sortedFields.dropFirst().prefix(5)) { field in
+                ForEach(collection.sortedFields.dropFirst().prefix(5)) { field in
                     if let value = record.values[field.id] {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(field.name.uppercased())

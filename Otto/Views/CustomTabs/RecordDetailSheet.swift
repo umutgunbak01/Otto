@@ -18,6 +18,11 @@ struct RecordDetailSheet: View {
         appState.customRecords.first { $0.id == recordId }
     }
 
+    /// The record's own collection — its fields are what the form shows.
+    private var recordCollection: TabCollection? {
+        record.flatMap { tab.collection(for: $0) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -25,7 +30,7 @@ struct RecordDetailSheet: View {
             if let record {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        ForEach(tab.sortedFields) { field in
+                        ForEach(recordCollection?.sortedFields ?? []) { field in
                             fieldRow(field, record: record)
                         }
 
@@ -73,6 +78,14 @@ struct RecordDetailSheet: View {
                 .font(Theme.Typography.headline)
                 .foregroundStyle(Theme.Colors.text)
                 .lineLimit(1)
+            if tab.collections.count > 1, let collection = recordCollection {
+                Text(collection.name)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Theme.Colors.bg1))
+            }
             Spacer()
             Button {
                 dismiss()

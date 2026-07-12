@@ -105,11 +105,15 @@ enum TabBlockContent {
         var detail: String?
     }
 
-    /// Live embed of the tab's own records inside a dashboard.
+    /// Live embed of one of the tab's record collections inside a dashboard.
     struct RecordsConfig {
-        var view: CustomTabLayout   // .table / .list / .board / .gallery
+        var view: CustomTabLayout   // .table / .list / .board / .gallery / .calendar
+        /// Collection key/name; nil → the tab's first collection.
+        var collection: String?
         var limit: Int?
         var title: String?
+        /// Calendar view's date column (key/name); nil → collection default.
+        var dateField: String?
     }
 
     static let typeNames = [
@@ -197,12 +201,18 @@ enum TabBlockContent {
         case "records":
             let viewRaw = ((dict["view"] as? String) ?? "table").lowercased()
             guard let view = CustomTabLayout(rawValue: viewRaw), view != .dashboard else {
-                throw TabBlockError("type='records' 'view' must be one of: table, list, board, gallery.")
+                throw TabBlockError("type='records' 'view' must be one of: table, list, board, gallery, calendar.")
             }
             var limit: Int?
             if let l = dict["limit"] as? Int { limit = max(1, min(l, 500)) }
             else if let l = doubleValue(dict["limit"]) { limit = max(1, min(Int(l), 500)) }
-            return .records(RecordsConfig(view: view, limit: limit, title: cleanString(dict["title"])))
+            return .records(RecordsConfig(
+                view: view,
+                collection: cleanString(dict["collection"]),
+                limit: limit,
+                title: cleanString(dict["title"]),
+                dateField: cleanString(dict["date_field"])
+            ))
 
         default:
             throw TabBlockError("Unknown block type '\(type)'. Valid types: \(typeNames.joined(separator: ", ")).")

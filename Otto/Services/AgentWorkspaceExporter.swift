@@ -403,22 +403,34 @@ enum AgentWorkspaceExporter {
             return rows.joined(separator: "\n")
         }
 
-        // One table per user-defined custom tab — columns from its schema.
+        // One table per custom-tab collection — columns from its schema.
+        // Single-collection tabs keep the historical custom_<slug>.csv name;
+        // multi-collection tabs get custom_<slug>__<collection>.csv each.
         for tab in snap.customTabs {
-            let records = snap.customRecords.filter { $0.tabId == tab.id }
-            let keys = tab.fieldKeys()
-            let columnNames = keys.map { $0.key }
-            add("custom_\(tab.slug).csv", records.count,
-                "id," + columnNames.joined(separator: ",") + ",updated (user-defined \"\(tab.name)\" tab)") {
-                var rows = [csvRow(["id"] + columnNames + ["updated"])]
-                for r in records.sorted(by: { $0.updatedAt > $1.updatedAt }) {
-                    rows.append(csvRow(
-                        [r.id.uuidString]
-                        + keys.map { col in r.values[col.field.id].map { $0.displayString(for: col.field) } ?? "" }
-                        + [iso(r.updatedAt)]
-                    ))
+            for collection in tab.sortedCollections {
+                let records = snap.customRecords.filter {
+                    $0.tabId == tab.id && tab.collection(for: $0)?.id == collection.id
                 }
-                return rows.joined(separator: "\n")
+                let keys = collection.fieldKeys()
+                let columnNames = keys.map { $0.key }
+                let filename = tab.collections.count == 1
+                    ? "custom_\(tab.slug).csv"
+                    : "custom_\(tab.slug)__\(collection.key).csv"
+                let label = tab.collections.count == 1
+                    ? "(user-defined \"\(tab.name)\" tab)"
+                    : "(\"\(collection.name)\" collection of the \"\(tab.name)\" tab)"
+                add(filename, records.count,
+                    "id," + columnNames.joined(separator: ",") + ",updated " + label) {
+                    var rows = [csvRow(["id"] + columnNames + ["updated"])]
+                    for r in records.sorted(by: { $0.updatedAt > $1.updatedAt }) {
+                        rows.append(csvRow(
+                            [r.id.uuidString]
+                            + keys.map { col in r.values[col.field.id].map { $0.displayString(for: col.field) } ?? "" }
+                            + [iso(r.updatedAt)]
+                        ))
+                    }
+                    return rows.joined(separator: "\n")
+                }
             }
         }
 

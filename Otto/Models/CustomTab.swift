@@ -10,6 +10,7 @@ enum CustomTabLayout: String, Codable, CaseIterable, Hashable {
     case board
     case gallery
     case list
+    case calendar
     case dashboard
 
     var displayName: String {
@@ -18,6 +19,7 @@ enum CustomTabLayout: String, Codable, CaseIterable, Hashable {
         case .board: return "Board"
         case .gallery: return "Gallery"
         case .list: return "List"
+        case .calendar: return "Calendar"
         case .dashboard: return "Dashboard"
         }
     }
@@ -28,92 +30,71 @@ enum CustomTabLayout: String, Codable, CaseIterable, Hashable {
         case .board: return "rectangle.split.3x1"
         case .gallery: return "square.grid.2x2"
         case .list: return "list.bullet"
+        case .calendar: return "calendar"
         case .dashboard: return "rectangle.3.group"
         }
     }
 }
 
-// MARK: - Custom Tab Definition
+// MARK: - Tab Collection
 
-/// A user-created tab: a named table whose columns are `CustomFieldDefinition`s
-/// (same typed-field model the Connections CRM columns use). Each tab is also
-/// surfaced to the agent as a pair of generated tools (`create_<slug>` /
-/// `update_<slug>`), a `search_items` / `delete_item` type, and a
-/// `custom_<slug>.csv` workspace table.
-struct CustomTabDefinition: Codable, Identifiable, Hashable {
+/// One typed record set inside a custom tab. A tab holds 1..n collections —
+/// "Boxing sessions" and "Meals" can live in the same tab, each with its own
+/// columns, and dashboard `records` blocks / layout views target one
+/// collection at a time.
+struct TabCollection: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
-    /// snake_case identifier baked into tool names and the agent-facing type
-    /// string. Fixed at creation (NOT re-derived on rename) so tool-approval
-    /// preferences and chat history stay valid across renames.
-    let slug: String
-    /// SF Symbol shown in the sidebar.
-    var icon: String
+    /// snake_case identifier used as the agent tools' `collection` parameter
+    /// and in workspace CSV names. Fixed at creation, unique within the tab.
+    let key: String
     var fields: [CustomFieldDefinition]
-    var sortIndex: Int
-    let createdAt: Date
-    /// Rendering style; `table` for tabs created before layouts existed.
-    var layout: CustomTabLayout
-    /// Optional one-line description under the tab title (agent-settable).
-    var subtitle: String?
-    /// Board layout's grouping column; must be a `.singleSelect` field.
-    /// nil → first single-select field.
+    /// Board views' grouping column; must be `.singleSelect`. nil → first
+    /// single-select field.
     var boardGroupFieldId: UUID?
-    /// Agent-composed dashboard blocks (rendered when `layout == .dashboard`).
-    var blocks: [TabBlock]
+    /// Calendar views' date column. nil → first `.date` field.
+    var dateFieldId: UUID?
+    var sortIndex: Int
 
     init(
         id: UUID = UUID(),
         name: String,
-        slug: String,
-        icon: String = "tablecells",
+        key: String,
         fields: [CustomFieldDefinition] = [],
-        sortIndex: Int = 0,
-        createdAt: Date = Date(),
-        layout: CustomTabLayout = .table,
-        subtitle: String? = nil,
         boardGroupFieldId: UUID? = nil,
-        blocks: [TabBlock] = []
+        dateFieldId: UUID? = nil,
+        sortIndex: Int = 0
     ) {
         self.id = id
         self.name = name
-        self.slug = slug
-        self.icon = icon
+        self.key = key
         self.fields = fields
-        self.sortIndex = sortIndex
-        self.createdAt = createdAt
-        self.layout = layout
-        self.subtitle = subtitle
         self.boardGroupFieldId = boardGroupFieldId
-        self.blocks = blocks
+        self.dateFieldId = dateFieldId
+        self.sortIndex = sortIndex
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        slug = try container.decode(String.self, forKey: .slug)
-        icon = (try? container.decode(String.self, forKey: .icon)) ?? "tablecells"
+        name = (try? container.decode(String.self, forKey: .name)) ?? "Items"
+        key = (try? container.decode(String.self, forKey: .key)) ?? "items"
         fields = (try? container.decode([CustomFieldDefinition].self, forKey: .fields)) ?? []
-        sortIndex = (try? container.decode(Int.self, forKey: .sortIndex)) ?? 0
-        createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
-        layout = (try? container.decode(CustomTabLayout.self, forKey: .layout)) ?? .table
-        subtitle = try? container.decode(String.self, forKey: .subtitle)
         boardGroupFieldId = try? container.decode(UUID.self, forKey: .boardGroupFieldId)
-        blocks = (try? container.decode([TabBlock].self, forKey: .blocks)) ?? []
+        dateFieldId = try? container.decode(UUID.self, forKey: .dateFieldId)
+        sortIndex = (try? container.decode(Int.self, forKey: .sortIndex)) ?? 0
     }
 
     var sortedFields: [CustomFieldDefinition] {
         fields.sorted { $0.sortIndex < $1.sortIndex }
     }
 
-    /// The tab's "title" column — the first field. Rendered as the record's
-    /// display title in search results, tool summaries, and the sidebar.
+    /// The collection's "title" column — the first field.
     var primaryField: CustomFieldDefinition? {
         sortedFields.first
     }
 
-    /// The column board layouts group by: the configured field when it still
+    /// The column board views group by: the configured field when it still
     /// exists and is a single-select, else the first single-select field.
     var boardGroupField: CustomFieldDefinition? {
         if let id = boardGroupFieldId,
@@ -121,6 +102,16 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
             return field
         }
         return sortedFields.first { $0.kind == .singleSelect }
+    }
+
+    /// The column calendar views place records by: the configured field when
+    /// it still exists and is a date, else the first date field.
+    var dateField: CustomFieldDefinition? {
+        if let id = dateFieldId,
+           let field = fields.first(where: { $0.id == id && $0.kind == .date }) {
+            return field
+        }
+        return sortedFields.first { $0.kind == .date }
     }
 
     /// Stable (toolInputKey, field) pairs for the generated tool schemas and
@@ -142,6 +133,207 @@ struct CustomTabDefinition: Codable, Identifiable, Hashable {
             out.append((key, field))
         }
         return out
+    }
+
+    /// snake_case key for a new collection, ≤24 chars, unique within the tab.
+    static func makeKey(from name: String, existing: [TabCollection]) -> String {
+        var base = String(CustomTabSlug.slugify(name).prefix(24))
+        while base.hasSuffix("_") { base.removeLast() }
+        if base.isEmpty { base = "items" }
+        let taken = Set(existing.map(\.key))
+        if !taken.contains(base) { return base }
+        var n = 2
+        while taken.contains("\(base)_\(n)") { n += 1 }
+        return "\(base)_\(n)"
+    }
+}
+
+// MARK: - Custom Tab Definition
+
+/// A user-created tab: one or more `TabCollection` record sets plus optional
+/// agent-composed dashboard `blocks`. Each tab is surfaced to the agent as a
+/// `search_items` / `delete_item` type, generic record tools
+/// (`add_tab_records` / `update_tab_record` with a `collection` param), a
+/// generated `create_<slug>` / `update_<slug>` pair when it has exactly one
+/// collection, and per-collection workspace CSVs.
+struct CustomTabDefinition: Codable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    /// snake_case identifier baked into tool names and the agent-facing type
+    /// string. Fixed at creation (NOT re-derived on rename) so tool-approval
+    /// preferences and chat history stay valid across renames.
+    let slug: String
+    /// SF Symbol shown in the sidebar.
+    var icon: String
+    var collections: [TabCollection]
+    var sortIndex: Int
+    let createdAt: Date
+    /// Rendering style; `table` for tabs created before layouts existed.
+    /// Non-dashboard layouts render one collection at a time (header chips
+    /// switch between them); `dashboard` composes blocks.
+    var layout: CustomTabLayout
+    /// Optional one-line description under the tab title (agent-settable).
+    var subtitle: String?
+    /// Agent-composed dashboard blocks (rendered when `layout == .dashboard`).
+    var blocks: [TabBlock]
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, slug, icon, collections, sortIndex, createdAt, layout, subtitle, blocks
+        // Pre-collections encoding (schema lived flat on the tab).
+        case fields, boardGroupFieldId
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        slug: String,
+        icon: String = "tablecells",
+        fields: [CustomFieldDefinition] = [],
+        sortIndex: Int = 0,
+        createdAt: Date = Date(),
+        layout: CustomTabLayout = .table,
+        subtitle: String? = nil,
+        boardGroupFieldId: UUID? = nil,
+        blocks: [TabBlock] = []
+    ) {
+        self.init(
+            id: id, name: name, slug: slug, icon: icon,
+            collections: [TabCollection(id: id, name: "Items", key: "items", fields: fields, boardGroupFieldId: boardGroupFieldId)],
+            sortIndex: sortIndex, createdAt: createdAt, layout: layout, subtitle: subtitle, blocks: blocks
+        )
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        slug: String,
+        icon: String = "tablecells",
+        collections: [TabCollection],
+        sortIndex: Int = 0,
+        createdAt: Date = Date(),
+        layout: CustomTabLayout = .table,
+        subtitle: String? = nil,
+        blocks: [TabBlock] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.slug = slug
+        self.icon = icon
+        self.collections = collections
+        self.sortIndex = sortIndex
+        self.createdAt = createdAt
+        self.layout = layout
+        self.subtitle = subtitle
+        self.blocks = blocks
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        slug = try container.decode(String.self, forKey: .slug)
+        icon = (try? container.decode(String.self, forKey: .icon)) ?? "tablecells"
+        sortIndex = (try? container.decode(Int.self, forKey: .sortIndex)) ?? 0
+        createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
+        layout = (try? container.decode(CustomTabLayout.self, forKey: .layout)) ?? .table
+        subtitle = try? container.decode(String.self, forKey: .subtitle)
+        blocks = (try? container.decode([TabBlock].self, forKey: .blocks)) ?? []
+        if let decoded = try? container.decode([TabCollection].self, forKey: .collections), !decoded.isEmpty {
+            collections = decoded
+        } else {
+            // Pre-collections tab: lift the flat schema into one collection.
+            // Its id deliberately equals the tab id — deterministic across
+            // launches, so legacy records (nil collectionId) resolve stably.
+            let legacyFields = (try? container.decode([CustomFieldDefinition].self, forKey: .fields)) ?? []
+            let legacyGroup = try? container.decode(UUID.self, forKey: .boardGroupFieldId)
+            collections = [TabCollection(id: id, name: "Items", key: "items", fields: legacyFields, boardGroupFieldId: legacyGroup)]
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(slug, forKey: .slug)
+        try container.encode(icon, forKey: .icon)
+        try container.encode(collections, forKey: .collections)
+        try container.encode(sortIndex, forKey: .sortIndex)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(layout, forKey: .layout)
+        try container.encodeIfPresent(subtitle, forKey: .subtitle)
+        try container.encode(blocks, forKey: .blocks)
+    }
+
+    // MARK: Collection lookup
+
+    var sortedCollections: [TabCollection] {
+        collections.sorted { $0.sortIndex < $1.sortIndex }
+    }
+
+    /// Match a tool `collection` param: exact key, case-insensitive name, or
+    /// slugified name.
+    func collection(matching raw: String) -> TabCollection? {
+        let needle = raw.trimmingCharacters(in: .whitespaces)
+        let lowered = needle.lowercased()
+        if let c = collections.first(where: { $0.key == lowered }) { return c }
+        if let c = collections.first(where: { $0.name.caseInsensitiveCompare(needle) == .orderedSame }) { return c }
+        let slugged = CustomTabSlug.slugify(needle)
+        guard !slugged.isEmpty else { return nil }
+        return collections.first { CustomTabSlug.slugify($0.name) == slugged || $0.key == slugged }
+    }
+
+    /// The collection a record belongs to. Legacy records (nil collectionId)
+    /// resolve to the collection whose id equals the tab id (the lifted
+    /// pre-collections schema), else the first collection.
+    func collection(for record: CustomRecord) -> TabCollection? {
+        if let cid = record.collectionId, let c = collections.first(where: { $0.id == cid }) {
+            return c
+        }
+        return collections.first(where: { $0.id == id }) ?? sortedCollections.first
+    }
+
+    // MARK: First-collection conveniences
+    //
+    // Single-collection tabs are the common case; these keep their call sites
+    // (generated per-tab tools, legacy views, the sidebar) reading naturally.
+
+    /// The first collection's columns. Setter writes through — used by the
+    /// tab editor and schema tools when the tab has one collection.
+    var fields: [CustomFieldDefinition] {
+        get { sortedCollections.first?.fields ?? [] }
+        set {
+            if let first = sortedCollections.first,
+               let index = collections.firstIndex(where: { $0.id == first.id }) {
+                collections[index].fields = newValue
+            } else {
+                collections = [TabCollection(id: id, name: "Items", key: "items", fields: newValue)]
+            }
+        }
+    }
+
+    var sortedFields: [CustomFieldDefinition] {
+        sortedCollections.first?.sortedFields ?? []
+    }
+
+    /// The first collection's "title" column.
+    var primaryField: CustomFieldDefinition? {
+        sortedCollections.first?.primaryField
+    }
+
+    var boardGroupField: CustomFieldDefinition? {
+        sortedCollections.first?.boardGroupField
+    }
+
+    /// Tool-input keys for the first collection (the generated
+    /// `create_<slug>` / `update_<slug>` tools' schema).
+    func fieldKeys() -> [(key: String, field: CustomFieldDefinition)] {
+        sortedCollections.first?.fieldKeys() ?? []
+    }
+
+    /// Every field across every collection — orphan-value cleanup and
+    /// record migration use this.
+    var allFieldIds: Set<UUID> {
+        Set(collections.flatMap { $0.fields.map(\.id) })
     }
 }
 
@@ -207,6 +399,10 @@ enum CustomTabSlug {
 struct CustomRecord: Codable, Identifiable, Hashable {
     let id: UUID
     let tabId: UUID
+    /// Owning collection within the tab. nil on records persisted before
+    /// collections existed — AppState stamps those to the tab's legacy
+    /// collection at load.
+    var collectionId: UUID?
     var values: [UUID: CustomFieldValue]
     let createdAt: Date
     var updatedAt: Date
@@ -214,25 +410,28 @@ struct CustomRecord: Codable, Identifiable, Hashable {
     init(
         id: UUID = UUID(),
         tabId: UUID,
+        collectionId: UUID? = nil,
         values: [UUID: CustomFieldValue] = [:],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.tabId = tabId
+        self.collectionId = collectionId
         self.values = values
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, tabId, values, createdAt, updatedAt
+        case id, tabId, collectionId, values, createdAt, updatedAt
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         tabId = try container.decode(UUID.self, forKey: .tabId)
+        collectionId = try? container.decode(UUID.self, forKey: .collectionId)
         // UUID-keyed dictionaries encode as flat arrays in JSON — store
         // string-keyed instead (same workaround as Connection.customFields).
         if let stringKeyed = try? container.decode([String: CustomFieldValue].self, forKey: .values) {
@@ -250,25 +449,30 @@ struct CustomRecord: Codable, Identifiable, Hashable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(tabId, forKey: .tabId)
+        try container.encodeIfPresent(collectionId, forKey: .collectionId)
         let stringKeyed = Dictionary(uniqueKeysWithValues: values.map { ($0.key.uuidString, $0.value) })
         try container.encode(stringKeyed, forKey: .values)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 
-    /// Display title: the primary (first) field's value, or "Untitled".
+    /// Display title: the owning collection's primary (first) field value,
+    /// or "Untitled".
     func displayTitle(in tab: CustomTabDefinition) -> String {
-        guard let primary = tab.primaryField,
+        guard let primary = tab.collection(for: self)?.primaryField,
               let value = values[primary.id] else { return "Untitled" }
         let text = value.displayString(for: primary)
         return text.isEmpty ? "Untitled" : text
     }
 
-    /// Every value flattened to text — feeds search_items matching.
+    /// Every value flattened to text — feeds search_items matching. Includes
+    /// the collection name so "boxing" finds boxing-session rows by set name.
     func searchableText(in tab: CustomTabDefinition) -> String {
-        tab.sortedFields
+        guard let collection = tab.collection(for: self) else { return "" }
+        var parts = collection.sortedFields
             .compactMap { field in values[field.id]?.displayString(for: field) }
-            .joined(separator: " ")
+        if tab.collections.count > 1 { parts.append(collection.name) }
+        return parts.joined(separator: " ")
     }
 }
 

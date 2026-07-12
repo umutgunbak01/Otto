@@ -21,16 +21,19 @@ Nothing leaves your device unless you explicitly connect an integration.
   people and companies
 - **Companies, Communities & Events tabs** — with dedicated editors, all
   exposed to the chat agent's tools
-- **Custom tabs** — define your own tables (reading list, job pipeline,
+- **Custom tabs** — define your own trackers (reading list, job pipeline,
   wine cellar…) with typed fields and a choice of layouts: spreadsheet
-  table, drag-and-drop kanban board, card gallery, or compact checklist;
-  each tab automatically gets its own create/update tools in the chat
+  table, drag-and-drop kanban board, card gallery, compact checklist, or
+  month calendar; one tab can hold multiple record collections, each with
+  its own columns, and every tab gets create/update tools in the chat
   agent's toolbox
 - **Generative dashboards** — the agent can create whole tabs itself and
   compose live dashboard pages from blocks (stat tiles, charts, tables,
-  markdown, progress bars, tickable checklists, timelines, plus an embedded
-  view of the tab's own records), then keep them fresh over time — "make me
-  a World Cup tab and update it daily" just works
+  markdown, progress bars, tickable checklists, timelines, plus embedded
+  live views of the tab's record collections — each in its own table,
+  list, board, gallery, or calendar), then keep them fresh over time —
+  "track my boxing and nutrition in one tab" or "make me a World Cup tab
+  and update it daily" just works
 - **Meeting transcription** — Otto notices when a meeting app (Zoom, Teams,
   Slack, Webex, FaceTime, browser calls…) starts using your microphone and
   offers to transcribe. It records both sides — your mic and the system

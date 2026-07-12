@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Kanban board over a custom tab's records, grouped by a single-select
-/// field (`tab.boardGroupField`). Cards drag between columns to change that
+/// field (`collection.boardGroupField`). Cards drag between columns to change that
 /// field; each column can spawn a pre-tagged record.
 ///
 /// Two hosting modes: as the tab's full layout (`embedded == false`) each
@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 struct RecordBoardView: View {
     @Environment(AppState.self) private var appState
     let tab: CustomTabDefinition
+    let collection: TabCollection
     let records: [CustomRecord]
     let embedded: Bool
     let onOpen: (CustomRecord) -> Void
@@ -50,7 +51,7 @@ struct RecordBoardView: View {
     }
 
     var body: some View {
-        if let field = tab.boardGroupField {
+        if let field = collection.boardGroupField {
             board(field: field)
         } else {
             VStack(spacing: 8) {
@@ -167,7 +168,7 @@ struct RecordBoardView: View {
     private func boardCard(_ record: CustomRecord, groupField: CustomFieldDefinition) -> some View {
         // Up to 3 secondary fields, skipping the grouping column (the column
         // header already says it) and long text.
-        let metaFields = tab.sortedFields.dropFirst()
+        let metaFields = collection.sortedFields.dropFirst()
             .filter { $0.id != groupField.id && $0.kind != .longText && record.values[$0.id] != nil }
             .prefix(3)
         return VStack(alignment: .leading, spacing: 6) {

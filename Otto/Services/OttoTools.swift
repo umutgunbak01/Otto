@@ -166,10 +166,13 @@ enum OttoTools {
 
     /// Full tool catalogue: the built-in tools (with custom-tab slugs spliced
     /// into the delete/search/get type enums) plus a generated
-    /// `create_<slug>` / `update_<slug>` pair per custom tab.
+    /// `create_<slug>` / `update_<slug>` pair per single-collection custom
+    /// tab. Multi-collection tabs skip the pair — one flat schema can't
+    /// serve several column sets, so the generic `add_tab_records` /
+    /// `update_tab_record` (with their `collection` param) are the path.
     static func catalog(customTabs: [CustomTabDefinition]) -> [[String: Any]] {
         var out = baseTools(customTypeSlugs: customTabs.map(\.slug))
-        for tab in customTabs {
+        for tab in customTabs where tab.collections.count == 1 {
             out.append(createTool(for: tab))
             out.append(updateTool(for: tab))
         }
@@ -934,17 +937,22 @@ enum OttoTools {
         [
             "name": Name.create_tab.rawValue,
             "description": """
-            Create a new custom tab in Otto's sidebar — a purpose-built tracker the user can watch and you can keep updated. Use when the user wants to track anything that doesn't fit the built-in tabs: a project, a tournament, a job hunt, a trip plan, a watchlist. Pick the layout by shape: 'table' (spreadsheet), 'board' (kanban grouped by a single_select field), 'list' (compact checklist-style rows), 'gallery' (cards), or 'dashboard' (a generative page composed of blocks — see set_tab_blocks — which can also embed the records via a {"type":"records"} block). Returns the tab's slug and column keys. Add rows right away with add_tab_records (dedicated create_<slug>/update_<slug> tools also exist from your next session). Keep fields minimal — 2 to 6 columns beats 12.
+            Create a new custom tab in Otto's sidebar — a purpose-built tracker the user can watch and you can keep updated. Use when the user wants to track anything that doesn't fit the built-in tabs: a project, a tournament, a job hunt, a trip plan, a training-plus-nutrition log. A tab holds one or MORE record collections, each with its own typed columns — "Boxing sessions" and "Meals" can share one tab. Pick the layout by shape: 'table' (spreadsheet), 'board' (kanban grouped by a single_select field), 'list' (compact checklist-style rows), 'gallery' (cards), 'calendar' (month grid over a date field), or 'dashboard' (a generative page composed of blocks — see set_tab_blocks — that embeds each collection in its own view). Multi-collection tabs almost always want layout=dashboard. Returns the slug, collection keys, and column keys. Add rows right away with add_tab_records. Keep schemas minimal — 2 to 6 columns per collection beats 12.
             """,
             "input_schema": objectSchema(
                 properties: [
-                    "name": stringProp("Tab name shown in the sidebar, e.g. \"World Cup 2026\"."),
-                    "icon": stringProp("SF Symbol name for the sidebar, e.g. trophy, airplane, cart, book, film, dumbbell, banknote, chart.bar, globe, star, flag, folder. Defaults to tablecells."),
+                    "name": stringProp("Tab name shown in the sidebar, e.g. \"Boxing & Nutrition\"."),
+                    "icon": stringProp("SF Symbol name for the sidebar, e.g. trophy, airplane, cart, book, film, dumbbell, banknote, chart.bar, globe, star, flag, folder, figure.boxing, fork.knife. Defaults to tablecells."),
                     "subtitle": stringProp("Optional one-line description shown under the tab title."),
                     "layout": enumProp(CustomTabLayout.allCases.map(\.rawValue), "How the tab renders. Defaults to table."),
+                    "collections": [
+                        "type": "array",
+                        "description": "The tab's record collections (max 8), each: {name, fields: [...], board_group_by?, date_field?}. Use 2+ when the tab tracks distinct things (sessions vs meals); each gets its own key for add_tab_records and records blocks. Omit and use `fields` for a simple single-collection tab.",
+                        "items": ["type": "object"]
+                    ],
                     "fields": [
                         "type": "array",
-                        "description": "The tab's typed columns, in display order. The FIRST field is the record's display title (make it text). Omit entirely for a pure dashboard tab.",
+                        "description": "Single-collection shorthand: the tab's typed columns, in display order. The FIRST field is the record's display title (make it text). Ignored when `collections` is given; omit both for a pure dashboard tab.",
                         "items": [
                             "type": "object",
                             "properties": [
@@ -955,7 +963,7 @@ enum OttoTools {
                             "required": ["name"]
                         ]
                     ],
-                    "board_group_by": stringProp("For layout=board: name of the single_select field that defines the columns. Defaults to the first single_select field."),
+                    "board_group_by": stringProp("For layout=board with `fields`: name of the single_select field that defines the columns. Inside `collections`, set it per collection. Defaults to the first single_select field."),
                     "blocks": [
                         "type": "array",
                         "description": "Initial dashboard blocks (layout=dashboard). Same format as set_tab_blocks — see that tool for the block reference.",
@@ -967,7 +975,7 @@ enum OttoTools {
         ],
         [
             "name": Name.update_tab.rawValue,
-            "description": "Reconfigure an existing custom tab: rename it, change icon/subtitle/layout, switch the board grouping, append new columns (add_fields), or add options to an existing select column (add_options). Existing columns and records are never removed by this tool — the user manages those in the tab editor. The tab's slug and tool names never change on rename.",
+            "description": "Reconfigure an existing custom tab: rename it, change icon/subtitle/layout, add whole new collections (add_collections), rename a collection, append new columns (add_fields), add select options (add_options), or point boards/calendars at a different column (board_group_by / date_field). Column edits target the tab's only collection, or the one named by `collection`. Existing columns, collections, and records are never removed by this tool — the user manages removal in the tab editor. The tab's slug and tool names never change on rename.",
             "input_schema": objectSchema(
                 properties: [
                     "tab": stringProp("The tab's slug (preferred) or exact name."),
@@ -975,15 +983,23 @@ enum OttoTools {
                     "icon": stringProp("New SF Symbol icon."),
                     "subtitle": stringProp("New subtitle; empty string clears it."),
                     "layout": enumProp(CustomTabLayout.allCases.map(\.rawValue), "Switch the rendering layout."),
-                    "board_group_by": stringProp("Name/key of the single_select field boards group by."),
+                    "collection": stringProp("Which collection add_fields/add_options/board_group_by/date_field target. Optional when the tab has exactly one."),
+                    "add_collections": [
+                        "type": "array",
+                        "description": "New record collections to add: [{name, fields: [...], board_group_by?, date_field?}] — e.g. add a \"Meals\" log next to \"Boxing sessions\".",
+                        "items": ["type": "object"]
+                    ],
+                    "rename_collection": ["type": "object", "description": "{collection: \"<key>\", name: \"New display name\"} — the key stays fixed."],
+                    "board_group_by": stringProp("Name/key of the single_select field boards group by (on the target collection)."),
+                    "date_field": stringProp("Name/key of the date field calendars place records by (on the target collection)."),
                     "add_fields": [
                         "type": "array",
-                        "description": "New columns to append — same shape as create_tab's fields.",
+                        "description": "New columns to append to the target collection — same shape as create_tab's fields.",
                         "items": ["type": "object"]
                     ],
                     "add_options": [
                         "type": "array",
-                        "description": "Add options to existing select columns: [{field: \"Status\", options: [\"Blocked\", {label: \"Done\", color: \"green\"}]}]. Existing options are untouched.",
+                        "description": "Add options to existing select columns on the target collection: [{field: \"Status\", options: [\"Blocked\", {label: \"Done\", color: \"green\"}]}]. Existing options are untouched.",
                         "items": ["type": "object"]
                     ]
                 ],
@@ -992,7 +1008,7 @@ enum OttoTools {
         ],
         [
             "name": Name.get_tab.rawValue,
-            "description": "Read a custom tab's full definition: fields with their input keys/kinds/options, layout, record count, and current dashboard blocks (raw JSON, including checklist done-states the user may have ticked). Call this before set_tab_blocks/update_tab_block so you patch rather than clobber. Omit `tab` to list every custom tab.",
+            "description": "Read a custom tab's full definition: its collections (keys, column keys/kinds/options, record counts, board/date columns), layout, and current dashboard blocks (raw JSON, including checklist done-states the user may have ticked). Call this before set_tab_blocks/update_tab_block so you patch rather than clobber. Omit `tab` to list every custom tab.",
             "input_schema": objectSchema(
                 properties: [
                     "tab": stringProp("The tab's slug or exact name. Omit to list all custom tabs.")
@@ -1012,7 +1028,7 @@ enum OttoTools {
             • {"id","type":"progress","title?","items":[{"label","value","target?" (default 100),"color?","detail?"}]} — progress bars; color: red|orange|yellow|green|teal|blue|purple|pink or #RRGGBB.
             • {"id","type":"list","title?","style":"bullet"|"number"|"check","items":[{"text","done?","note?"}]} — style=check renders user-tickable checkboxes.
             • {"id","type":"timeline","title?","items":[{"date","title","detail?"}]} — dated feed, put newest first.
-            • {"id","type":"records","view":"table"|"list"|"board"|"gallery","limit?"} — live embed of the tab's own records; combine with blocks above for an overview-plus-data page.
+            • {"id","type":"records","collection":"<key>","view":"table"|"list"|"board"|"gallery"|"calendar","limit?","date_field?"} — live embed of one of the tab's record collections (collection defaults to the first; calendar view places rows on a month grid by date_field / the collection's date column). Give EACH collection its own records block to compose a multi-tracker page.
             """,
             "input_schema": objectSchema(
                 properties: [
@@ -1040,10 +1056,11 @@ enum OttoTools {
         ],
         [
             "name": Name.add_tab_records.rawValue,
-            "description": "Add multiple rows to a custom tab in one call (works for tabs created seconds ago — no new session needed). Each record is an object keyed by the tab's column keys (from create_tab's result or get_tab). Prefer this over repeated create_<slug> calls when adding 2+ rows. Values: text/url/date as strings (dates ISO8601), numbers as numbers, checkbox as boolean, single_select as an option label, multi_select as an array of option labels.",
+            "description": "Add multiple rows to a custom tab's collection in one call (works for tabs created seconds ago — no new session needed). Each record is an object keyed by the collection's column keys (from create_tab's result or get_tab). Prefer this over repeated create_<slug> calls when adding 2+ rows. Values: text/url/date as strings (dates ISO8601), numbers as numbers, checkbox as boolean, single_select as an option label, multi_select as an array of option labels.",
             "input_schema": objectSchema(
                 properties: [
                     "tab": stringProp("The tab's slug or exact name."),
+                    "collection": stringProp("Which collection the rows go into (key or name). Optional when the tab has exactly one collection; required otherwise."),
                     "records": [
                         "type": "array",
                         "description": "Up to 100 row objects keyed by column key, e.g. [{\"team\": \"Turkey\", \"points\": 7}].",
@@ -1055,7 +1072,7 @@ enum OttoTools {
         ],
         [
             "name": Name.update_tab_record.rawValue,
-            "description": "Update one row in any custom tab by id (generic sibling of the per-tab update_<slug> tools — use it when the tab was created this session). Only the keys present in `values` change; empty string / empty array clears a field. Row ids come from add_tab_records results or search_items(types=[\"<slug>\"]).",
+            "description": "Update one row in any custom tab by id (generic sibling of the per-tab update_<slug> tools — use it when the tab was created this session or has multiple collections; the row's own collection determines the valid keys). Only the keys present in `values` change; empty string / empty array clears a field. Row ids come from add_tab_records results or search_items(types=[\"<slug>\"]).",
             "input_schema": objectSchema(
                 properties: [
                     "tab": stringProp("The tab's slug or exact name."),

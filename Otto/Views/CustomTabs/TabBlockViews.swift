@@ -266,20 +266,38 @@ struct TabBlockView: View {
 
     @ViewBuilder
     private func recordsBlock(_ config: TabBlockContent.RecordsConfig) -> some View {
+        // Resolve the target collection: the block's `collection` key, else
+        // the tab's first. A stale key renders a fix-it card instead of
+        // silently showing the wrong data.
+        let resolved = config.collection.map { tab.collection(matching: $0) } ?? tab.sortedCollections.first
+        if let collection = resolved {
+            recordsBlockBody(config, collection: collection)
+        } else {
+            blockCard {
+                Text(config.collection.map { "Records block: no collection '\($0)' on this tab — ask Otto to fix it." }
+                     ?? "Records block: this tab has no collections yet.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func recordsBlockBody(_ config: TabBlockContent.RecordsConfig, collection: TabCollection) -> some View {
         let all = appState.customRecords
-            .filter { $0.tabId == tab.id }
+            .filter { $0.tabId == tab.id && tab.collection(for: $0)?.id == collection.id }
             .sorted { $0.updatedAt > $1.updatedAt }
         let shown = config.limit.map { Array(all.prefix($0)) } ?? all
 
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            if let title = config.title ?? block.title {
+            if let title = config.title ?? block.title ?? (tab.collections.count > 1 ? collection.name : nil) {
                 Text(title.uppercased())
                     .font(Theme.Typography.label)
                     .tracking(Theme.Tracking.xwide)
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
 
-            if shown.isEmpty {
+            if shown.isEmpty && config.view != .calendar {
                 Text("No records yet — add rows here or ask Otto.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.Colors.tertiaryText)
@@ -288,12 +306,13 @@ struct TabBlockView: View {
             } else {
                 switch config.view {
                 case .list:
-                    RecordListRows(tab: tab, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord, horizontalPadding: 0)
+                    RecordListRows(tab: tab, collection: collection, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord, horizontalPadding: 0)
                 case .gallery:
-                    RecordGalleryGrid(tab: tab, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord)
+                    RecordGalleryGrid(tab: tab, collection: collection, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord)
                 case .board:
                     RecordBoardView(
                         tab: tab,
+                        collection: collection,
                         records: shown,
                         embedded: true,
                         onOpen: onOpenRecord,
@@ -303,15 +322,25 @@ struct TabBlockView: View {
                             if let option = preset.option {
                                 values[preset.field.id] = .optionIds([option.id])
                             }
-                            let record = CustomRecord(tabId: tab.id, values: values)
+                            let record = CustomRecord(tabId: tab.id, collectionId: collection.id, values: values)
                             Task {
                                 await appState.addCustomRecord(record)
                                 onOpenRecord(record)
                             }
                         }
                     )
+                case .calendar:
+                    RecordCalendarView(
+                        tab: tab,
+                        collection: collection,
+                        records: shown,
+                        embedded: true,
+                        dateFieldOverride: config.dateField,
+                        onOpen: onOpenRecord,
+                        onDelete: onDeleteRecord
+                    )
                 case .table, .dashboard:
-                    RecordMiniTable(tab: tab, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord)
+                    RecordMiniTable(tab: tab, collection: collection, records: shown, onOpen: onOpenRecord, onDelete: onDeleteRecord)
                 }
 
                 if shown.count < all.count {
@@ -341,13 +370,14 @@ struct TabBlockView: View {
 /// opens the record editor.
 struct RecordMiniTable: View {
     let tab: CustomTabDefinition
+    let collection: TabCollection
     let records: [CustomRecord]
     let onOpen: (CustomRecord) -> Void
     let onDelete: (CustomRecord) -> Void
 
     @State private var hoveredRowId: UUID?
 
-    private var fields: [CustomFieldDefinition] { tab.sortedFields }
+    private var fields: [CustomFieldDefinition] { collection.sortedFields }
 
     private var widths: [CGFloat] {
         fields.map { min($0.kind.defaultColumnWidth, 200) }

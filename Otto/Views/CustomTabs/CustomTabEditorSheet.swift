@@ -16,11 +16,35 @@ struct CustomTabEditorSheet: View {
 
     @State private var name: String = ""
     @State private var icon: String = "tablecells"
-    @State private var fields: [CustomFieldDefinition] = []
+    @State private var collections: [TabCollection] = []
+    @State private var selectedCollectionId: UUID?
     @State private var layout: CustomTabLayout = .table
-    @State private var boardGroupFieldId: UUID?
     @State private var editingField: FieldSheetTarget?
     @State private var showDeleteConfirm = false
+    @State private var collectionPendingDelete: TabCollection?
+
+    // The columns editor and pickers below all operate on the SELECTED
+    // collection — these accessors keep their code reading flat.
+
+    private var selectedIndex: Int? {
+        if let id = selectedCollectionId, let i = collections.firstIndex(where: { $0.id == id }) { return i }
+        return collections.isEmpty ? nil : 0
+    }
+
+    private var fields: [CustomFieldDefinition] {
+        get { selectedIndex.map { collections[$0].fields } ?? [] }
+        nonmutating set { if let i = selectedIndex { collections[i].fields = newValue } }
+    }
+
+    private var boardGroupFieldId: UUID? {
+        get { selectedIndex.flatMap { collections[$0].boardGroupFieldId } }
+        nonmutating set { if let i = selectedIndex { collections[i].boardGroupFieldId = newValue } }
+    }
+
+    private var dateFieldId: UUID? {
+        get { selectedIndex.flatMap { collections[$0].dateFieldId } }
+        nonmutating set { if let i = selectedIndex { collections[i].dateFieldId = newValue } }
+    }
 
     /// Sheet target: edit one existing draft field, or add a new one.
     private struct FieldSheetTarget: Identifiable {
@@ -51,6 +75,7 @@ struct CustomTabEditorSheet: View {
                     nameField
                     iconPicker
                     layoutPicker
+                    collectionsBar
                     fieldsEditor
                 }
                 .padding(16)
@@ -209,6 +234,154 @@ struct CustomTabEditorSheet: View {
             if layout == .board {
                 boardGroupPicker
             }
+            if layout == .calendar {
+                dateFieldPicker
+            }
+        }
+    }
+
+    // MARK: Collections
+
+    /// Chip per collection + add button; the columns editor below edits the
+    /// selected one. Rename and delete live next to the selected chip.
+    private var collectionsBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("Collections")
+                    .hudLabel()
+                Text("separate record sets in one tab (e.g. Sessions + Meals)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+            HStack(spacing: 6) {
+                ForEach(collections) { collection in
+                    let isSelected = selectedIndex.map { collections[$0].id == collection.id } ?? false
+                    Button {
+                        selectedCollectionId = collection.id
+                    } label: {
+                        Text(collection.name)
+                            .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel))
+                            .overlay(Capsule().strokeBorder(isSelected ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1))
+                            .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.textDim)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    addCollection()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Theme.Colors.panel))
+                        .overlay(Capsule().strokeBorder(Theme.Colors.border, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help("Add a collection")
+                #endif
+            }
+
+            if let i = selectedIndex {
+                HStack(spacing: 8) {
+                    Text("Name")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.Colors.textDim)
+                    TextField("Collection name", text: Binding(
+                        get: { collections[i].name },
+                        set: { collections[i].name = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Theme.Colors.bgInput)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.Colors.border, lineWidth: 1))
+                    .frame(maxWidth: 220)
+
+                    if collections.count > 1 {
+                        Button {
+                            collectionPendingDelete = collections[i]
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
+                        #if os(macOS)
+                        .help("Delete this collection and its records")
+                        #endif
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .confirmationDialog(
+            "Delete collection \"\(collectionPendingDelete?.name ?? "")\"?",
+            isPresented: Binding(
+                get: { collectionPendingDelete != nil },
+                set: { if !$0 { collectionPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete collection and its records", role: .destructive) {
+                if let target = collectionPendingDelete {
+                    collections.removeAll { $0.id == target.id }
+                    if selectedCollectionId == target.id { selectedCollectionId = collections.first?.id }
+                }
+                collectionPendingDelete = nil
+            }
+            Button("Cancel", role: .cancel) { collectionPendingDelete = nil }
+        } message: {
+            Text("Its records are removed when you save. Blocks referencing it show a fix-it note.")
+        }
+    }
+
+    private func addCollection() {
+        let name = "Collection \(collections.count + 1)"
+        let collection = TabCollection(
+            name: name,
+            key: TabCollection.makeKey(from: name, existing: collections),
+            fields: [CustomFieldDefinition(name: "Name", kind: .text)],
+            sortIndex: (collections.map(\.sortIndex).max() ?? -1) + 1
+        )
+        collections.append(collection)
+        selectedCollectionId = collection.id
+    }
+
+    @ViewBuilder
+    private var dateFieldPicker: some View {
+        let dateFields = fields.filter { $0.kind == .date }
+        if dateFields.isEmpty {
+            Text("Calendars place records by a date column — add one below.")
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Colors.amber)
+        } else {
+            HStack(spacing: 6) {
+                Text("Date column")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.textDim)
+                Picker("", selection: Binding(
+                    get: {
+                        if let id = dateFieldId, dateFields.contains(where: { $0.id == id }) { return id }
+                        return dateFields.first?.id ?? UUID()
+                    },
+                    set: { dateFieldId = $0 }
+                )) {
+                    ForEach(dateFields) { field in
+                        Text(field.name).tag(field.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
         }
     }
 
@@ -366,7 +539,7 @@ struct CustomTabEditorSheet: View {
                     .font(.system(size: 12, weight: .medium))
             }
             .buttonStyle(AccentButtonStyle())
-            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || (fields.isEmpty && layout != .dashboard))
+            .disabled(!canSave)
         }
         .padding(12)
     }
@@ -377,33 +550,73 @@ struct CustomTabEditorSheet: View {
         if let existing = existing {
             name = existing.name
             icon = existing.icon
-            fields = existing.sortedFields
+            collections = existing.sortedCollections
+            selectedCollectionId = collections.first?.id
             layout = existing.layout
-            boardGroupFieldId = existing.boardGroupFieldId
         } else {
-            // Seed a sensible title column so a new tab is one click from usable.
-            fields = [CustomFieldDefinition(name: "Name", kind: .text)]
+            // Seed one collection with a title column so a new tab is one
+            // click from usable.
+            let seed = TabCollection(name: "Items", key: "items", fields: [CustomFieldDefinition(name: "Name", kind: .text)])
+            collections = [seed]
+            selectedCollectionId = seed.id
         }
     }
 
-    private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty, fields.isEmpty == false || layout == .dashboard else { return }
-        // Re-stamp sortIndex from display order.
-        let ordered = fields.enumerated().map { index, field -> CustomFieldDefinition in
-            var f = field
-            f.sortIndex = index
-            return f
+    /// Draft collections normalized for saving: display-order sort indexes
+    /// re-stamped, stale board/date field pointers dropped, empty-name
+    /// fallbacks applied, and NEW collections re-minted so their fixed key
+    /// derives from the final name (not the "Collection 2" placeholder).
+    private func normalizedCollections() -> [TabCollection] {
+        let existingIds = Set(existing?.collections.map(\.id) ?? [])
+        var out: [TabCollection] = []
+        for (ci, var collection) in collections.enumerated() {
+            collection.sortIndex = ci
+            if collection.name.trimmingCharacters(in: .whitespaces).isEmpty {
+                collection.name = "Items"
+            }
+            collection.fields = collection.sortedFields.enumerated().map { index, field in
+                var f = field
+                f.sortIndex = index
+                return f
+            }
+            if !collection.fields.contains(where: { $0.id == collection.boardGroupFieldId && $0.kind == .singleSelect }) {
+                collection.boardGroupFieldId = nil
+            }
+            if !collection.fields.contains(where: { $0.id == collection.dateFieldId && $0.kind == .date }) {
+                collection.dateFieldId = nil
+            }
+            if !existingIds.contains(collection.id) {
+                collection = TabCollection(
+                    id: collection.id,
+                    name: collection.name,
+                    key: TabCollection.makeKey(from: collection.name, existing: out),
+                    fields: collection.fields,
+                    boardGroupFieldId: collection.boardGroupFieldId,
+                    dateFieldId: collection.dateFieldId,
+                    sortIndex: ci
+                )
+            }
+            out.append(collection)
         }
-        // Drop a stale board grouping if its field was removed or isn't a select.
-        let groupId = ordered.first(where: { $0.id == boardGroupFieldId && $0.kind == .singleSelect })?.id
+        return out
+    }
+
+    private var canSave: Bool {
+        guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        if layout == .dashboard { return true }
+        return collections.contains { !$0.fields.isEmpty }
+    }
+
+    private func save() {
+        guard canSave else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let normalized = normalizedCollections()
 
         if var existing = existing {
             existing.name = trimmedName
             existing.icon = icon
-            existing.fields = ordered
+            existing.collections = normalized
             existing.layout = layout
-            existing.boardGroupFieldId = groupId
             Task {
                 await appState.updateCustomTab(existing)
                 onSave?(existing)
@@ -414,9 +627,8 @@ struct CustomTabEditorSheet: View {
                 let tab = await appState.addCustomTab(
                     name: trimmedName,
                     icon: icon,
-                    fields: ordered,
-                    layout: layout,
-                    boardGroupFieldId: groupId
+                    collections: normalized,
+                    layout: layout
                 )
                 onSave?(tab)
                 dismiss()

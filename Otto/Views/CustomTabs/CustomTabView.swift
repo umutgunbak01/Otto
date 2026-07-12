@@ -14,18 +14,35 @@ struct CustomTabView: View {
     @State private var openRecordId: UUID?
     /// Freshly added record the table layout should drop into title editing.
     @State private var focusRecordId: UUID?
+    /// Multi-collection tabs on a record layout show one collection at a
+    /// time; header chips switch. nil / stale → first collection.
+    @State private var activeCollectionId: UUID?
 
-    private var allRecords: [CustomRecord] {
+    /// The collection the non-dashboard layouts render.
+    private var activeCollection: TabCollection? {
+        if let id = activeCollectionId, let c = tab.collections.first(where: { $0.id == id }) {
+            return c
+        }
+        return tab.sortedCollections.first
+    }
+
+    private var allTabRecords: [CustomRecord] {
         appState.customRecords
             .filter { $0.tabId == tab.id }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Active collection's records, search-filtered — what the record
+    /// layouts render.
     private var records: [CustomRecord] {
-        guard !searchText.isEmpty else { return allRecords }
-        return allRecords.filter {
-            $0.searchableText(in: tab).localizedCaseInsensitiveContains(searchText)
+        guard let collection = activeCollection else { return [] }
+        var result = allTabRecords.filter { tab.collection(for: $0)?.id == collection.id }
+        if !searchText.isEmpty {
+            result = result.filter {
+                $0.searchableText(in: tab).localizedCaseInsensitiveContains(searchText)
+            }
         }
+        return result
     }
 
     var body: some View {
@@ -66,7 +83,7 @@ struct CustomTabView: View {
     // MARK: - Header
 
     private var showsRecordControls: Bool {
-        !(tab.layout == .dashboard && tab.fields.isEmpty)
+        !(tab.layout == .dashboard && tab.collections.allSatisfy { $0.fields.isEmpty })
     }
 
     private var header: some View {
@@ -89,7 +106,7 @@ struct CustomTabView: View {
                 }
 
                 if showsRecordControls {
-                    OttoCountBadge(count: allRecords.count)
+                    OttoCountBadge(count: allTabRecords.count)
                 }
 
                 Spacer()
@@ -115,7 +132,7 @@ struct CustomTabView: View {
                 }
                 .buttonStyle(.plain)
 
-                if showsRecordControls && !tab.fields.isEmpty {
+                if showsRecordControls, activeCollection?.fields.isEmpty == false {
                     Button {
                         addRecord()
                     } label: {
@@ -156,6 +173,10 @@ struct CustomTabView: View {
                     )
                     .frame(maxWidth: 280)
 
+                    if tab.collections.count > 1 {
+                        collectionChips
+                    }
+
                     Spacer()
                 }
             }
@@ -163,12 +184,42 @@ struct CustomTabView: View {
         .padding(Theme.Spacing.lg)
     }
 
+    /// One chip per collection — the record layouts show one at a time.
+    private var collectionChips: some View {
+        HStack(spacing: 4) {
+            ForEach(tab.sortedCollections) { collection in
+                let isActive = activeCollection?.id == collection.id
+                let count = allTabRecords.filter { tab.collection(for: $0)?.id == collection.id }.count
+                Button {
+                    activeCollectionId = collection.id
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(collection.name)
+                            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                        Text("\(count)")
+                            .font(.system(size: 9.5, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+                    )
+                    .overlay(
+                        Capsule().strokeBorder(isActive ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+                    )
+                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     // MARK: - Layout routing
 
     @ViewBuilder
     private var content: some View {
-        switch tab.layout {
-        case .dashboard:
+        if tab.layout == .dashboard {
             if tab.blocks.isEmpty {
                 dashboardEmptyState
             } else {
@@ -181,13 +232,23 @@ struct CustomTabView: View {
                     .padding(Theme.Spacing.lg)
                 }
             }
+        } else if let collection = activeCollection {
+            recordsContent(collection)
+        } else {
+            emptyOrNoResults
+        }
+    }
 
+    @ViewBuilder
+    private func recordsContent(_ collection: TabCollection) -> some View {
+        switch tab.layout {
         case .table:
             if records.isEmpty {
                 emptyOrNoResults
             } else {
                 CustomTabTableView(
                     tab: tab,
+                    collection: collection,
                     records: records,
                     focusRecordId: $focusRecordId,
                     onDelete: { recordPendingDelete = $0 }
@@ -200,6 +261,7 @@ struct CustomTabView: View {
             } else {
                 RecordBoardView(
                     tab: tab,
+                    collection: collection,
                     records: records,
                     embedded: false,
                     onOpen: { openRecordId = $0.id },
@@ -215,6 +277,7 @@ struct CustomTabView: View {
                 ScrollView {
                     RecordListRows(
                         tab: tab,
+                        collection: collection,
                         records: records,
                         onOpen: { openRecordId = $0.id },
                         onDelete: { recordPendingDelete = $0 }
@@ -230,6 +293,7 @@ struct CustomTabView: View {
                 ScrollView {
                     RecordGalleryGrid(
                         tab: tab,
+                        collection: collection,
                         records: records,
                         onOpen: { openRecordId = $0.id },
                         onDelete: { recordPendingDelete = $0 }
@@ -237,6 +301,24 @@ struct CustomTabView: View {
                     .padding(Theme.Spacing.lg)
                 }
             }
+
+        case .calendar:
+            // Calendar renders even with zero records — the month grid is
+            // the empty state.
+            ScrollView {
+                RecordCalendarView(
+                    tab: tab,
+                    collection: collection,
+                    records: records,
+                    embedded: true,
+                    onOpen: { openRecordId = $0.id },
+                    onDelete: { recordPendingDelete = $0 }
+                )
+                .padding(Theme.Spacing.lg)
+            }
+
+        case .dashboard:
+            EmptyView()
         }
     }
 
@@ -255,7 +337,7 @@ struct CustomTabView: View {
                 Text("Add rows here, or just ask Otto — it can fill this tab for you.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textDim)
-                if !tab.fields.isEmpty {
+                if activeCollection?.fields.isEmpty == false {
                     Button {
                         addRecord()
                     } label: {
@@ -301,14 +383,15 @@ struct CustomTabView: View {
 
     // MARK: - Actions
 
-    /// Insert an empty row. Table layout drops into inline title editing;
-    /// every other layout opens the record editor sheet.
+    /// Insert an empty row into the active collection. Table layout drops
+    /// into inline title editing; every other layout opens the editor sheet.
     private func addRecord(presetOption: (field: CustomFieldDefinition, option: CustomFieldOption?)? = nil) {
+        guard let collection = activeCollection else { return }
         var values: [UUID: CustomFieldValue] = [:]
         if let preset = presetOption, let option = preset.option {
             values[preset.field.id] = .optionIds([option.id])
         }
-        let record = CustomRecord(tabId: tab.id, values: values)
+        let record = CustomRecord(tabId: tab.id, collectionId: collection.id, values: values)
         Task {
             await appState.addCustomRecord(record)
             if tab.layout == .table {
