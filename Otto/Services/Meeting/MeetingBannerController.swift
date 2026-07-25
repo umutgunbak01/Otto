@@ -23,24 +23,33 @@ final class MeetingBannerController {
     // MARK: - Public API
 
     func showPrompt(appName: String, meetingTitle: String?) {
-        model.state = .prompt(appName: appName, meetingTitle: meetingTitle)
+        // Fresh detection — clear any prep left over from a previous meeting.
+        model.resetPrep()
+        model.phase = .prompt(appName: appName, meetingTitle: meetingTitle)
         present()
     }
 
-    func showRecording(startedAt: Date, systemAudioAvailable: Bool) {
-        model.state = .recording(startedAt: startedAt, systemAudioAvailable: systemAudioAvailable)
+    /// Show the expanded prep panel. `recording: false` = prep-first (opened by
+    /// tapping the pill); `recording: true` = recording already underway with
+    /// its fields still editable.
+    func showExpanded(recording: Bool, startedAt: Date?, systemAudioAvailable: Bool) {
+        model.phase = .expanded(
+            recording: recording,
+            startedAt: startedAt,
+            systemAudioAvailable: systemAudioAvailable
+        )
         present()
     }
 
     func hide() {
-        model.state = .hidden
+        model.phase = .hidden
         panel?.orderOut(nil)
     }
 
     /// Hide only if we're still showing the detection prompt — used when the
     /// meeting app releases the mic before the user reacted.
     func hideIfPrompt() {
-        if case .prompt = model.state { hide() }
+        if case .prompt = model.phase { hide() }
     }
 
     // MARK: - Panel management
