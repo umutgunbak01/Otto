@@ -110,14 +110,21 @@ final class MeetingAnalysisService {
         // Assemble the Meeting record. The raw transcript goes into the
         // dedicated `transcript` field, rendered by the detail view's
         // transcript pane.
+        // Notes: Turkish is primary; the English mirror is appended in a
+        // clearly separated trailing section so it stays "on the side" for
+        // reference without cluttering the main Turkish read.
         var content = payload.notes
         if !payload.insights.isEmpty {
-            content += "\n\n## Insights\n" + payload.insights.map { "- \($0)" }.joined(separator: "\n")
+            content += "\n\n## Öne Çıkanlar\n" + payload.insights.map { "- \($0)" }.joined(separator: "\n")
+        }
+        let englishSection = Self.englishReferenceSection(payload)
+        if !englishSection.isEmpty {
+            content += "\n\n---\n\n" + englishSection
         }
 
         let actionItemsMarkdown = payload.actionItems.map { item -> String in
-            var line = "- **[\(item.isMine ? "Me" : "Them")]** \(item.title)"
-            if let due = item.dueDate, !due.isEmpty { line += " — due \(due)" }
+            var line = "- **[\(item.isMine ? "Ben" : "Onlar")]** \(item.title)"
+            if let due = item.dueDate, !due.isEmpty { line += " — son tarih \(due)" }
             if let notes = item.notes, !notes.isEmpty { line += " (\(notes))" }
             return line
         }.joined(separator: "\n")
@@ -149,7 +156,7 @@ final class MeetingAnalysisService {
         // Only the user's own commitments become to-dos.
         var created = 0
         for item in payload.actionItems where item.isMine && !item.title.isEmpty {
-            var description = "From meeting: \(meeting.title)"
+            var description = "Toplantıdan: \(meeting.title)"
             if let notes = item.notes, !notes.isEmpty { description += "\n\(notes)" }
             let todo = Todo(
                 title: item.title,
@@ -293,18 +300,27 @@ final class MeetingAnalysisService {
     private static let analysisSystemPrompt = """
     You analyze meeting transcripts for the user. The transcript labels speakers: "Me" is the user (the app's owner), "Them" is everyone else on the call. Do NOT call any tools — synthesize from the transcript alone.
 
+    LANGUAGE — this is important:
+    - The user is Turkish. Every human-readable field (`title`, `overview`, `insights`, `notes`, and each action item's `title` and `notes`) MUST be written in TURKISH — this is the primary output the user reads, regardless of what language the meeting was spoken in.
+    - Provide a faithful ENGLISH translation of the main text in the mirror fields `overview_en`, `insights_en`, `notes_en`, and each action item's `title_en`. These are kept on the side for reference only.
+    - Keep the Turkish field and its `*_en` mirror in sync: same content, same items, same order.
+
     Reply with STRICT JSON only — no markdown fences, no prose before or after the JSON object. Schema:
     {
-      "title": "short descriptive meeting title, ≤60 chars (use the calendar title if one was given)",
-      "overview": "2–4 sentence summary of what the meeting was about and what was decided",
-      "insights": ["notable takeaway, risk, opportunity, or decision — the non-obvious stuff worth remembering"],
-      "notes": "markdown notes of the discussion: key points organized under ## headings, concise but complete",
+      "title": "kısa, açıklayıcı Türkçe toplantı başlığı, ≤60 karakter (takvim başlığı verildiyse onu Türkçeleştirerek kullan)",
+      "overview": "2–4 cümlelik Türkçe özet: toplantı neyle ilgiliydi ve ne karara varıldı",
+      "overview_en": "the SAME overview, translated to English",
+      "insights": ["Türkçe önemli çıkarım, risk, fırsat veya karar — hatırlanmaya değer, aşikâr olmayan şeyler"],
+      "insights_en": ["the SAME insights in English, in the same order"],
+      "notes": "tartışmanın Türkçe markdown notları: ## başlıkları altında düzenlenmiş anahtar noktalar, öz ama eksiksiz",
+      "notes_en": "the SAME notes, translated to English markdown",
       "action_items": [
         {
-          "title": "imperative phrasing of the task",
+          "title": "görevin Türkçe, emir kipiyle ifadesi",
+          "title_en": "the SAME task, translated to English",
           "owner": "me" or "them",
           "due_date": "YYYY-MM-DD" or null,
-          "notes": "1 short sentence of context from the meeting" or null,
+          "notes": "toplantıdan 1 kısa Türkçe bağlam cümlesi" or null,
           "priority": "low" | "medium" | "high" | "urgent"
         }
       ],
@@ -317,8 +333,8 @@ final class MeetingAnalysisService {
     - Only real commitments made in the meeting; not ideas, not "we should someday".
 
     Using attendee names (when the prompt lists attendees):
-    - People address each other by name in conversation — use that plus the attendee list to attribute what "Them" said to specific people, and refer to people by name in notes, insights, and action items ("Emir will send the deck", not "they will send the deck").
-    - "participants" should be the real names of people actually on the call — attendee names where confirmed, plus anyone else clearly present from the conversation.
+    - People address each other by name in conversation — use that plus the attendee list to attribute what "Them" said to specific people, and refer to people by name in notes, insights, and action items ("Emir sunumu gönderecek", not "onlar sunumu gönderecek").
+    - "participants" should be the real names of people actually on the call — attendee names where confirmed, plus anyone else clearly present from the conversation. Leave participant names as-is (do not translate names).
     - Never invent or guess names. If the dialogue doesn't make clear who spoke, keep the generic phrasing.
 
     Limits: insights ≤6, action_items ≤10. Transcription is imperfect — ignore obvious mis-transcriptions and filler.
@@ -360,10 +376,31 @@ final class MeetingAnalysisService {
         return lines.joined(separator: "\n")
     }
 
+    /// Builds the trailing "English (reference)" block appended after the
+    /// Turkish notes. Only includes the pieces the agent actually translated —
+    /// if the `*_en` mirror fields came back empty (e.g. an older prompt or a
+    /// partial reply), the whole block is omitted so nothing broken is shown.
+    private static func englishReferenceSection(_ payload: Payload) -> String {
+        var parts: [String] = []
+        let overviewEn = payload.overviewEn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notesEn = payload.notesEn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let insightsEn = payload.insightsEn.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        if !overviewEn.isEmpty { parts.append(overviewEn) }
+        if !notesEn.isEmpty { parts.append(notesEn) }
+        if !insightsEn.isEmpty {
+            parts.append("### Insights\n" + insightsEn.map { "- \($0)" }.joined(separator: "\n"))
+        }
+
+        guard !parts.isEmpty else { return "" }
+        return "## English (reference)\n\n" + parts.joined(separator: "\n\n")
+    }
+
     // MARK: - Parsing
 
     private struct ActionItem: Decodable {
-        var title = ""
+        var title = ""       // Turkish (primary — this is what becomes a to-do)
+        var titleEn = ""     // English mirror, kept for reference only
         var owner: String?
         var dueDate: String?
         var notes: String?
@@ -373,12 +410,14 @@ final class MeetingAnalysisService {
 
         enum CodingKeys: String, CodingKey {
             case title, owner, notes, priority
+            case titleEn = "title_en"
             case dueDate = "due_date"
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             title = (try? c.decode(String.self, forKey: .title)) ?? ""
+            titleEn = (try? c.decode(String.self, forKey: .titleEn)) ?? ""
             owner = try? c.decode(String.self, forKey: .owner)
             dueDate = try? c.decode(String.self, forKey: .dueDate)
             notes = try? c.decode(String.self, forKey: .notes)
@@ -388,14 +427,20 @@ final class MeetingAnalysisService {
 
     private struct Payload: Decodable {
         var title = ""
-        var overview = ""
-        var insights: [String] = []
-        var notes = ""
+        var overview = ""            // Turkish (primary)
+        var overviewEn = ""          // English mirror
+        var insights: [String] = []  // Turkish (primary)
+        var insightsEn: [String] = [] // English mirror
+        var notes = ""               // Turkish (primary)
+        var notesEn = ""             // English mirror
         var actionItems: [ActionItem] = []
         var participants: [String] = []
 
         enum CodingKeys: String, CodingKey {
             case title, overview, insights, notes, participants
+            case overviewEn = "overview_en"
+            case insightsEn = "insights_en"
+            case notesEn = "notes_en"
             case actionItems = "action_items"
         }
 
@@ -403,8 +448,11 @@ final class MeetingAnalysisService {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             title = (try? c.decode(String.self, forKey: .title)) ?? ""
             overview = (try? c.decode(String.self, forKey: .overview)) ?? ""
+            overviewEn = (try? c.decode(String.self, forKey: .overviewEn)) ?? ""
             insights = (try? c.decode([String].self, forKey: .insights)) ?? []
+            insightsEn = (try? c.decode([String].self, forKey: .insightsEn)) ?? []
             notes = (try? c.decode(String.self, forKey: .notes)) ?? ""
+            notesEn = (try? c.decode(String.self, forKey: .notesEn)) ?? ""
             actionItems = (try? c.decode([ActionItem].self, forKey: .actionItems)) ?? []
             participants = (try? c.decode([String].self, forKey: .participants)) ?? []
         }

@@ -46,7 +46,7 @@ struct MeetingRowView: View {
 
             // Transcript chip + date/duration (mockup .end)
             HStack(spacing: Theme.Spacing.sm) {
-                if meeting.firefliesId != nil {
+                if meeting.hasTranscript {
                     AngularChip(fill: Theme.Colors.tintGreen) {
                         Text("transcript")
                             .font(Theme.Typography.monoSmall)
