@@ -39,6 +39,9 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
         }
         recorder.onStarted = { [weak self] in
             guard let self, let startedAt = self.recorder.startedAt else { return }
+            // Hide Otto's windows from screen capture for the duration of the
+            // recording (best-effort; see ScreenCapturePrivacyController).
+            ScreenCapturePrivacyController.shared.setRecording(true)
             // Recording began — expand the panel (fields stay editable live).
             MeetingBannerController.shared.showExpanded(
                 recording: true,
@@ -120,6 +123,9 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
 
     @MainActor
     private func stopRecording(reason: MeetingRecorder.StopReason) {
+        // Restore normal screen-share visibility — the sensitive activity is
+        // ending, and the user may legitimately want to share Otto afterwards.
+        ScreenCapturePrivacyController.shared.setRecording(false)
         MeetingBannerController.shared.hide()
         Task { [recorder] in
             await recorder.stop(reason: reason)

@@ -83,6 +83,11 @@ final class MeetingBannerController {
         panel.contentView = hosting
         panel.isReleasedWhenClosed = false
 
+        // Keep the banner out of screen shares — the "Transcribing" pill (and
+        // the "Meeting detected" prompt) are exactly what the user doesn't want
+        // the other party to see. The controller honors the user's setting.
+        ScreenCapturePrivacyController.shared.protectBannerPanel(panel)
+
         self.panel = panel
         self.hostingView = hosting
         return panel

@@ -34,6 +34,18 @@ enum MenuBarSettings {
     static let defaultEnabled: Bool = true
 }
 
+enum ScreenCapturePrivacySettings {
+    static let enabledKey = "screen_capture_privacy_enabled"
+    /// Default ON — while a meeting is being transcribed, Otto's banner and
+    /// windows are excluded from screen capture (`NSWindow.sharingType = .none`)
+    /// so people you screen-share with don't see that you're transcribing.
+    /// Best-effort: honored by browser-based shares (Meet, Zoom/Teams in a tab)
+    /// and legacy window capture, but a native full-display ScreenCaptureKit
+    /// recorder on macOS 15.4+ may still composite the window in. Users who want
+    /// to screen-share Otto during a call can turn it off.
+    static let defaultEnabled: Bool = true
+}
+
 // MARK: - Connections column layout
 //
 // Per-device preference for which CRM columns are visible, their order, and

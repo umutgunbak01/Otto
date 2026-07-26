@@ -76,6 +76,7 @@ struct SettingsView: View {
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
     @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
+    @AppStorage(ScreenCapturePrivacySettings.enabledKey) private var screenCapturePrivacyEnabled: Bool = ScreenCapturePrivacySettings.defaultEnabled
 
     private var selectedBackend: AgentBackend {
         AgentBackend(rawValue: rawBackend) ?? .claude
@@ -595,6 +596,12 @@ struct SettingsView: View {
                 title: "Detect meetings & offer transcription",
                 subtitle: "When another app starts using your microphone (Zoom, Meet, …), Otto shows a floating prompt to transcribe the meeting. Stopping — or leaving the call — turns the transcript into a meeting note, with your action items added to To-dos.",
                 isOn: $meetingDetectionEnabled
+            )
+
+            SettingsToggleRow(
+                title: "Hide Otto while transcribing",
+                subtitle: "While a meeting is being transcribed, keep Otto's banner and windows out of screen shares so the other party can't see you're transcribing. Works with browser-based shares (Meet, Zoom/Teams in a tab); a native full-screen recorder on the latest macOS may still capture it.",
+                isOn: $screenCapturePrivacyEnabled
             )
         }
     }

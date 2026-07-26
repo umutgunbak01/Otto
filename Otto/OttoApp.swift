@@ -15,6 +15,7 @@ struct OttoApp: App {
     @AppStorage(WakeWordSettings.enabledKey) private var wakeWordEnabled: Bool = WakeWordSettings.defaultEnabled
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
     @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
+    @AppStorage(ScreenCapturePrivacySettings.enabledKey) private var screenCapturePrivacyEnabled: Bool = ScreenCapturePrivacySettings.defaultEnabled
 
     #if os(macOS)
     /// Sparkle auto-update controller. Polls the appcast at SUFeedURL
@@ -70,6 +71,9 @@ struct OttoApp: App {
                 }
                 .onChange(of: menuBarEnabled) { _, _ in syncMenuBar() }
                 .onChange(of: meetingDetectionEnabled) { _, _ in syncMeetingDetection() }
+                .onChange(of: screenCapturePrivacyEnabled) { _, _ in
+                    ScreenCapturePrivacyController.shared.syncSetting()
+                }
             #endif
         }
         .windowStyle(.hiddenTitleBar)
