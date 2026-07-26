@@ -87,13 +87,72 @@ struct OttoTests {
         #expect(OttoTools.parseItemURL(try #require(URL(string: "otto://connection"))) == nil)
     }
 
+    // MARK: - Attachment flattening (uploads reaching the model)
+
+    @Test func flattenInlinesTextAttachmentContents() {
+        let md = ChatAttachment(
+            filename: "notes.md",
+            mediaType: "text/markdown",
+            data: Data("# Title\n\nSome **bold** body".utf8)
+        )
+        let turn = ChatTurn(role: "user", blocks: [.text("summarize this")], attachments: [md])
+        let flat = ChatTranscript.flatten([turn])
+        #expect(flat.contains("summarize this"))
+        #expect(flat.contains("Attached file: notes.md"))
+        #expect(flat.contains("# Title"))
+        #expect(flat.contains("Some **bold** body"))
+        #expect(flat.contains("End of attached file: notes.md"))
+    }
+
+    @Test func flattenStubsBinaryAttachments() {
+        let img = ChatAttachment(
+            filename: "photo.png",
+            mediaType: "image/png",
+            data: Data([0x89, 0x50, 0x4E, 0x47])
+        )
+        let turn = ChatTurn(role: "user", blocks: [.text("look at this")], attachments: [img])
+        let flat = ChatTranscript.flatten([turn])
+        #expect(flat.contains("photo.png"))
+        #expect(flat.contains("content not inlined"))
+    }
+
+    @Test func flattenTruncatesOversizedTextAttachments() {
+        let big = String(repeating: "a", count: 40_000)
+        let file = ChatAttachment(filename: "big.log", mediaType: "text/plain", data: Data(big.utf8))
+        let turn = ChatTurn(role: "user", blocks: [.text("read this")], attachments: [file])
+        let flat = ChatTranscript.flatten([turn])
+        #expect(flat.contains("truncated"))
+        #expect(flat.count < 33_000)  // 32k cap + markers, not the raw 40k
+    }
+
+    @Test func markdownAttachmentClassification() {
+        let md = ChatAttachment(filename: "README.md", mediaType: "text/markdown", data: Data("hello".utf8))
+        #expect(md.kind == .text)
+        #expect(md.isMarkdown)
+        #expect(md.textContent == "hello")
+
+        let csv = ChatAttachment(filename: "data.csv", mediaType: "text/csv", data: Data("a,b".utf8))
+        #expect(csv.kind == .text)
+        #expect(!csv.isMarkdown)
+
+        let xlsx = ChatAttachment(filename: "sheet.xlsx", mediaType: "application/vnd.ms-excel", data: Data([0x50]))
+        #expect(xlsx.kind == .binary)
+        #expect(xlsx.textContent == nil)
+    }
+
+    @Test func markdownFallbackMediaType() {
+        #expect(ChatAttachment.fallbackMediaType(forExtension: "md") == "text/markdown")
+        #expect(ChatAttachment.fallbackMediaType(forExtension: "MARKDOWN") == "text/markdown")
+        #expect(ChatAttachment.fallbackMediaType(forExtension: "bin") == "application/octet-stream")
+    }
+
     // MARK: - ACP tool_call rawInput parsing
 
     @Test func acpToolCallCarriesRawInput() throws {
         let line = """
         {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc1","title":"mcp__otto__attach_item_preview","kind":"fetch","rawInput":{"type":"connection","id":"E70011F6-539E-44BD-AC51-C5800F01C526"}}}}
         """
-        guard case .sessionUpdate(.toolCall(let id, let title, _, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
+        guard case .sessionUpdate(_, .toolCall(let id, let title, _, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
             Issue.record("Expected a toolCall session update")
             return
         }
@@ -107,7 +166,7 @@ struct OttoTests {
         let line = """
         {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc1","status":"completed","rawInput":{"type":"todo","id":"11111111-2222-3333-4444-555555555555"},"content":[{"type":"content","content":{"type":"text","text":"Attached preview: todo 11111111-2222-3333-4444-555555555555 — Ship it"}}]}}}
         """
-        guard case .sessionUpdate(.toolCallUpdate(let id, let status, let summary, let isError, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
+        guard case .sessionUpdate(_, .toolCallUpdate(let id, let status, let summary, let isError, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
             Issue.record("Expected a toolCallUpdate session update")
             return
         }
@@ -122,7 +181,7 @@ struct OttoTests {
         let line = """
         {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"tc2","title":"mcp__otto__search_items"}}}
         """
-        guard case .sessionUpdate(.toolCall(let id, _, _, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
+        guard case .sessionUpdate(_, .toolCall(let id, _, _, let rawInput)) = try #require(ACPParser.parse(line: line)) else {
             Issue.record("Expected a toolCall session update")
             return
         }

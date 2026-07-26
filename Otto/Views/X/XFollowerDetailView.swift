@@ -40,17 +40,16 @@ struct XFollowerDetailView: View {
                     // Stats
                     statsSection
 
+                    // Bio section
+                    if !follower.bio.isEmpty {
+                        OttoDivider()
+                        bioSection
+                    }
+
                     OttoDivider()
 
                     // Linked Connection
                     linkedConnectionSection
-
-                    OttoDivider()
-
-                    // Bio section
-                    if !follower.bio.isEmpty {
-                        bioSection
-                    }
                 }
                 .padding(Theme.Spacing.xl)
             }
@@ -88,18 +87,33 @@ struct XFollowerDetailView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
-                if !follower.displayName.isEmpty {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9))
-                        .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
-                    Text(follower.displayName)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                        .lineLimit(1)
-                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
+                Text(follower.displayLabel)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .lineLimit(1)
             }
 
             Spacer()
+
+            // Jump to the live profile on x.com
+            Button {
+                if let url = follower.profileURL {
+                    openURL(url)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Open in X")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(Theme.Colors.textDim)
+            }
+            .buttonStyle(GhostButtonStyle())
+            .help("Open @\(follower.username) on x.com")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -109,38 +123,50 @@ struct XFollowerDetailView: View {
 
     private var profileHeader: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.lg) {
-            // Avatar
-            ZStack {
-                Circle()
-                    .fill(ContentType.xFollower.color.opacity(0.12))
-                    .frame(width: 64, height: 64)
-
-                Text(follower.initials)
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(ContentType.xFollower.color)
-            }
+            // Real profile photo (high-res variant), initials fallback
+            XProfileImage(
+                urlString: follower.profileImageLargeUrl,
+                seed: follower.username,
+                initials: follower.initials,
+                size: 72
+            )
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text(follower.displayName)
+                Text(follower.displayLabel)
                     .font(Theme.Typography.largeTitle)
+                    .textSelection(.enabled)
 
-                Text("@\(follower.username)")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-
-                if follower.isMutual {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "arrow.left.arrow.right")
-                            .font(.system(size: 10))
-                        Text("Mutual")
-                            .font(Theme.Typography.caption)
-                    }
-                    .foregroundStyle(ContentType.xFollower.color)
-                    .padding(.horizontal, Theme.Spacing.sm)
-                    .padding(.vertical, Theme.Spacing.xs)
-                    .background(ContentType.xFollower.color.opacity(0.1))
-                    .clipShape(Capsule())
+                if follower.hasMeaningfulName {
+                    Text("@\(follower.username)")
+                        .font(Theme.Typography.monoBody)
+                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .textSelection(.enabled)
                 }
+
+                HStack(spacing: Theme.Spacing.sm) {
+                    if follower.isMutual {
+                        AngularChip(fill: Theme.Colors.selectTint) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.left.arrow.right")
+                                    .font(.system(size: 9))
+                                Text("Mutual")
+                                    .font(Theme.Typography.monoSmall)
+                            }
+                            .foregroundStyle(Theme.Colors.accentText)
+                        }
+                    } else {
+                        AngularChip {
+                            Text("Follows you")
+                                .font(Theme.Typography.monoSmall)
+                                .foregroundStyle(Theme.Colors.textDim)
+                        }
+                    }
+
+                    Text("Synced \(follower.syncUpdatedAt.formatted(.relative(presentation: .named)))")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+                .padding(.top, 2)
             }
 
             Spacer()
@@ -150,30 +176,52 @@ struct XFollowerDetailView: View {
     // MARK: - Stats Section
 
     private var statsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            Text("Stats")
-                .font(Theme.Typography.headline)
-
-            HStack(spacing: Theme.Spacing.xl) {
-                VStack(spacing: Theme.Spacing.xs) {
-                    Text("\(follower.followersCount)")
-                        .font(Theme.Typography.title)
-                        .foregroundStyle(Theme.Colors.text)
-                    Text("Followers")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
-
-                VStack(spacing: Theme.Spacing.xs) {
-                    Text("\(follower.followingCount)")
-                        .font(Theme.Typography.title)
-                        .foregroundStyle(Theme.Colors.text)
-                    Text("Following")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
-            }
+        HStack(spacing: Theme.Spacing.md) {
+            statTile(
+                value: OttoFormatters.compactCount(follower.followersCount),
+                exact: follower.followersCount,
+                label: "Followers"
+            )
+            statTile(
+                value: OttoFormatters.compactCount(follower.followingCount),
+                exact: follower.followingCount,
+                label: "Following"
+            )
+            statTile(
+                value: followerRatioText,
+                exact: nil,
+                label: "Ratio"
+            )
         }
+    }
+
+    /// Followers-per-following — quick signal for how notable an account
+    /// is. "—" when the account follows nobody.
+    private var followerRatioText: String {
+        guard follower.followingCount > 0 else { return "—" }
+        let ratio = Double(follower.followersCount) / Double(follower.followingCount)
+        if ratio >= 10 { return String(format: "%.0f×", ratio) }
+        return String(format: "%.1f×", ratio)
+    }
+
+    private func statTile(value: String, exact: Int?, label: String) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.Colors.text)
+
+            Text(label)
+                .hudLabel()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.md)
+        .cardStyle()
+        .help(exact.map { exactCountHelp($0, label: label) } ?? label)
+    }
+
+    private func exactCountHelp(_ count: Int, label: String) -> String {
+        let exact = OttoFormatters.decimal.string(from: NSNumber(value: count)) ?? "\(count)"
+        return "\(exact) \(label.lowercased())"
     }
 
     // MARK: - Linked Connection Section

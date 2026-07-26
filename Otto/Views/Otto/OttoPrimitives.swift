@@ -35,6 +35,19 @@ enum OttoFormatters {
         f.dateFormat = "HHmm · MMM · dd"
         return f
     }()
+
+    /// Compact social-metric count — "842", "1.2K", "34K", "1.5M".
+    static func compactCount(_ n: Int) -> String {
+        if n >= 1_000_000 {
+            let v = Double(n) / 1_000_000
+            return String(format: v >= 10 ? "%.0fM" : "%.1fM", v)
+        }
+        if n >= 1_000 {
+            let v = Double(n) / 1_000
+            return String(format: v >= 10 ? "%.0fK" : "%.1fK", v)
+        }
+        return "\(n)"
+    }
 }
 
 // MARK: - OttoDivider

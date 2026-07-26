@@ -39,6 +39,33 @@ struct XAvatar: View {
     }
 }
 
+/// Avatar that loads the real X profile image, falling back to the tinted
+/// initials circle while loading or when the account has no image URL.
+struct XProfileImage: View {
+    let urlString: String?
+    let seed: String
+    let initials: String
+    var size: CGFloat = 26
+
+    var body: some View {
+        if let urlString, let url = URL(string: urlString) {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    XAvatar(seed: seed, initials: initials, size: size)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(Circle())
+        } else {
+            XAvatar(seed: seed, initials: initials, size: size)
+        }
+    }
+}
+
 /// Row card: panel bg, rounded hairline border, stronger border on hover.
 struct XRowCard: ViewModifier {
     @State private var isHovered = false

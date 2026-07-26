@@ -9,6 +9,7 @@ struct XFollowerListView: View {
     /// user, "mutuals" hides accounts the user doesn't follow back.
     /// Stored in UserDefaults so the choice survives relaunches.
     @AppStorage("x_followers_filter_scope") private var filterScopeRaw: String = FilterScope.all.rawValue
+    @AppStorage("x_followers_sort") private var sortOptionRaw: String = SortOption.followers.rawValue
 
     private enum FilterScope: String, CaseIterable, Identifiable {
         case all
@@ -22,8 +23,27 @@ struct XFollowerListView: View {
         }
     }
 
+    private enum SortOption: String, CaseIterable, Identifiable {
+        case followers
+        case name
+        case recentlySynced
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .followers:      return "Followers"
+            case .name:           return "Name"
+            case .recentlySynced: return "Recently synced"
+            }
+        }
+    }
+
     private var filterScope: FilterScope {
         FilterScope(rawValue: filterScopeRaw) ?? .all
+    }
+
+    private var sortOption: SortOption {
+        SortOption(rawValue: sortOptionRaw) ?? .followers
     }
 
     var filteredFollowers: [XFollower] {
@@ -44,8 +64,23 @@ struct XFollowerListView: View {
             }
         }
 
-        // Sort alphabetically by display name
-        result.sort { $0.displayName.lowercased() < $1.displayName.lowercased() }
+        switch sortOption {
+        case .followers:
+            // Notable accounts first; a name tiebreak keeps the order
+            // stable across the long tail of zero-follower accounts.
+            result.sort {
+                if $0.followersCount != $1.followersCount {
+                    return $0.followersCount > $1.followersCount
+                }
+                return $0.displayLabel.lowercased() < $1.displayLabel.lowercased()
+            }
+        case .name:
+            // Sort on displayLabel so punctuation-named accounts don't
+            // clump at the top.
+            result.sort { $0.displayLabel.lowercased() < $1.displayLabel.lowercased() }
+        case .recentlySynced:
+            result.sort { $0.syncUpdatedAt > $1.syncUpdatedAt }
+        }
 
         return result
     }
@@ -128,7 +163,7 @@ struct XFollowerListView: View {
                     }
                 }
 
-                // Scope pills — view everyone or only mutuals
+                // Scope pills — view everyone or only mutuals — plus sort menu
                 HStack(spacing: 4) {
                     ForEach(FilterScope.allCases) { scope in
                         Button {
@@ -151,6 +186,34 @@ struct XFollowerListView: View {
                     }
 
                     Spacer()
+
+                    Menu {
+                        ForEach(SortOption.allCases) { option in
+                            Button {
+                                sortOptionRaw = option.rawValue
+                            } label: {
+                                HStack {
+                                    Text(option.label)
+                                    if sortOption == option {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.system(size: 9))
+                            Text(sortOption.label)
+                                .font(.system(size: 11))
+                        }
+                        .foregroundStyle(Theme.Colors.textDim)
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Sort followers")
                 }
 
                 // Search field
@@ -249,13 +312,18 @@ struct XFollowerListView: View {
                 selectedFollowerId = follower.id
             }
         } label: {
-            HStack(spacing: 8) {
-                // Initials avatar
-                XAvatar(seed: follower.username, initials: follower.initials)
+            HStack(spacing: 10) {
+                // Real profile photo, initials fallback
+                XProfileImage(
+                    urlString: follower.profileImageUrl,
+                    seed: follower.username,
+                    initials: follower.initials,
+                    size: 32
+                )
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Text(follower.displayName)
+                        Text(follower.displayLabel)
                             .font(.system(size: 13.5, weight: isSelected ? .medium : .regular))
                             .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.secondaryText)
                             .lineLimit(1)
@@ -268,10 +336,13 @@ struct XFollowerListView: View {
                         }
                     }
 
-                    Text("@\(follower.username)")
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                        .lineLimit(1)
+                    // Skip the handle line when it's already the title
+                    if follower.hasMeaningfulName {
+                        Text("@\(follower.username)")
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .lineLimit(1)
+                    }
 
                     if !follower.bio.isEmpty {
                         Text(follower.bio)
@@ -294,7 +365,7 @@ struct XFollowerListView: View {
                     }
 
                     HStack(spacing: 2) {
-                        Text("\(follower.followersCount)")
+                        Text(OttoFormatters.compactCount(follower.followersCount))
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                         Image(systemName: "person.2")
                             .font(.system(size: 8))
