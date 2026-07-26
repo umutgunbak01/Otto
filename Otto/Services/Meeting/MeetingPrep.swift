@@ -52,22 +52,24 @@ enum MeetingNoteStyle: String, CaseIterable, Equatable {
     }
 
     /// English guidance appended to the analysis prompt to shape the note
-    /// sections. The prompt is English by convention; the note *output* stays
-    /// Turkish (see MeetingAnalysisService.analysisSystemPrompt).
+    /// sections. Heading names are given in English; the LANGUAGE rules in
+    /// MeetingAnalysisService.analysisSystemPrompt tell the agent to render
+    /// them in whatever the primary notes language is (the user's
+    /// MeetingNotesLanguageSettings choice).
     var promptGuidance: String {
         switch self {
         case .general:
             return "General meeting — organize the notes under natural ## topic headings."
         case .oneOnOne:
-            return "1:1 meeting — use ## headings for Güncellemeler, Engeller, Geri bildirim, and Sonraki adımlar."
+            return "1:1 meeting — use ## headings for Updates, Blockers, Feedback, and Next steps."
         case .investor:
-            return "Investor meeting — use ## headings for Şirket/traction, Sorulan sorular, İtirazlar/endişeler, İstenenler & sonraki adımlar, and call out any figures mentioned (round size, valuation, key metrics)."
+            return "Investor meeting — use ## headings for Company/traction, Questions asked, Objections/concerns, Asks & next steps, and call out any figures mentioned (round size, valuation, key metrics)."
         case .sales:
-            return "Sales/customer call — use ## headings for İhtiyaç/sorun, Ürün uyumu, İtirazlar, Fiyatlandırma, and Sonraki adımlar."
+            return "Sales/customer call — use ## headings for Need/problem, Product fit, Objections, Pricing, and Next steps."
         case .teamSync:
-            return "Team sync — use one ## heading per person or workstream, plus Kararlar and Engeller."
+            return "Team sync — use one ## heading per person or workstream, plus Decisions and Blockers."
         case .interview:
-            return "Interview — use ## headings for Geçmiş/deneyim, Güçlü yönler, Endişeler, and Değerlendirme/öneri."
+            return "Interview — use ## headings for Background/experience, Strengths, Concerns, and Assessment/recommendation."
         }
     }
 

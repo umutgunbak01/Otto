@@ -77,6 +77,7 @@ struct SettingsView: View {
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
     @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
     @AppStorage(ScreenCapturePrivacySettings.enabledKey) private var screenCapturePrivacyEnabled: Bool = ScreenCapturePrivacySettings.defaultEnabled
+    @AppStorage(MeetingNotesLanguageSettings.key) private var rawNotesLanguage: String = MeetingNotesLanguageSettings.defaultValue.rawValue
 
     private var selectedBackend: AgentBackend {
         AgentBackend(rawValue: rawBackend) ?? .claude
@@ -603,6 +604,27 @@ struct SettingsView: View {
                 subtitle: "While a meeting is being transcribed, keep Otto's banner and windows out of screen shares so the other party can't see you're transcribing. Works with browser-based shares (Meet, Zoom/Teams in a tab); a native full-screen recorder on the latest macOS may still capture it.",
                 isOn: $screenCapturePrivacyEnabled
             )
+
+            HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Meeting notes language")
+                        .font(Theme.Typography.body)
+                        .foregroundStyle(Theme.Colors.text)
+                    Text("Primary language for the notes Otto writes from recorded meetings. \"Match meeting language\" follows whatever was spoken; when notes aren't in English, an English reference section is appended at the bottom.")
+                        .font(Theme.Typography.small)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Picker("", selection: $rawNotesLanguage) {
+                    ForEach(MeetingNotesLanguage.allCases, id: \.rawValue) { lang in
+                        Text(lang.displayName).tag(lang.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
         }
     }
 

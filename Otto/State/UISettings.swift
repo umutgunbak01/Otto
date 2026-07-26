@@ -26,6 +26,39 @@ enum MeetingDetectionSettings {
     static let defaultEnabled: Bool = true
 }
 
+/// Primary language for the notes generated from locally recorded meetings.
+/// `.auto` follows whatever language the meeting was mostly spoken in; the
+/// fixed choices force one language regardless of what was spoken. When the
+/// primary language isn't English, an "## English (reference)" section is
+/// appended to the notes.
+enum MeetingNotesLanguage: String, CaseIterable {
+    case auto
+    case english
+    case turkish
+
+    var displayName: String {
+        switch self {
+        case .auto:    return "Match meeting language"
+        case .english: return "English"
+        case .turkish: return "Türkçe"
+        }
+    }
+}
+
+enum MeetingNotesLanguageSettings {
+    static let key = "meeting_notes_language"
+    /// Default `.auto` — notes come out in the language the meeting was held
+    /// in, which is what a note-taker is expected to do. (The pre-setting
+    /// behaviour of always-English was an artifact of the prompt, not a
+    /// choice; English meetings still produce English notes under `.auto`.)
+    static let defaultValue: MeetingNotesLanguage = .auto
+
+    static var current: MeetingNotesLanguage {
+        let raw = UserDefaults.standard.string(forKey: key) ?? ""
+        return MeetingNotesLanguage(rawValue: raw) ?? defaultValue
+    }
+}
+
 enum MenuBarSettings {
     static let enabledKey = "menubar_enabled"
     /// Default ON — gives users the time + next-event surface they

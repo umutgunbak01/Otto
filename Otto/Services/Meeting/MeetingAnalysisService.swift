@@ -81,6 +81,8 @@ final class MeetingAnalysisService {
             event: context?.calendarEvent, appState: appState
         )
 
+        let notesLanguage = MeetingNotesLanguageSettings.current
+
         let payload: Payload
         do {
             let executor = OttoToolExecutor(appState: appState)
@@ -94,7 +96,7 @@ final class MeetingAnalysisService {
                 backend: backend,
                 sessionKey: UUID(),   // fresh key: system prompt always delivered, run isolated
                 turns: turns,
-                systemPrompt: Self.analysisSystemPrompt,
+                systemPrompt: Self.analysisSystemPrompt(language: notesLanguage),
                 executor: executor
             )
             let text = Self.finalAssistantText(result)
@@ -108,17 +110,42 @@ final class MeetingAnalysisService {
             return
         }
 
+        // The fixed strings Otto weaves around the agent's text (headings,
+        // owner labels) are kept in Turkish or English. Under `.auto` the
+        // agent reports what it wrote in via `language`; a third language
+        // gets its notes verbatim but English fixed strings.
+        let turkishPrimary: Bool
+        switch notesLanguage {
+        case .turkish: turkishPrimary = true
+        case .english: turkishPrimary = false
+        case .auto:    turkishPrimary = payload.language.lowercased().hasPrefix("tr")
+        }
+        let englishPrimary = notesLanguage == .english
+            || (notesLanguage == .auto && (payload.language.isEmpty || payload.language.lowercased().hasPrefix("en")))
+
         // Assemble the Meeting record. The raw transcript goes into the
         // dedicated `transcript` field, rendered by the detail view's
         // transcript pane.
         var content = payload.notes
         if !payload.insights.isEmpty {
-            content += "\n\n## Insights\n" + payload.insights.map { "- \($0)" }.joined(separator: "\n")
+            content += "\n\n" + (turkishPrimary ? "## Öne Çıkanlar" : "## Insights")
+                + "\n" + payload.insights.map { "- \($0)" }.joined(separator: "\n")
+        }
+        // Non-English notes carry an English mirror at the bottom, clearly
+        // separated so it stays "on the side" for sharing/reference.
+        if !englishPrimary {
+            let englishSection = Self.englishReferenceSection(payload)
+            if !englishSection.isEmpty {
+                content += "\n\n---\n\n" + englishSection
+            }
         }
 
         let actionItemsMarkdown = payload.actionItems.map { item -> String in
-            var line = "- **[\(item.isMine ? "Me" : "Them")]** \(item.title)"
-            if let due = item.dueDate, !due.isEmpty { line += " — due \(due)" }
+            let owner = item.isMine ? (turkishPrimary ? "Ben" : "Me") : (turkishPrimary ? "Onlar" : "Them")
+            var line = "- **[\(owner)]** \(item.title)"
+            if let due = item.dueDate, !due.isEmpty {
+                line += turkishPrimary ? " — son tarih \(due)" : " — due \(due)"
+            }
             if let notes = item.notes, !notes.isEmpty { line += " (\(notes))" }
             return line
         }.joined(separator: "\n")
@@ -157,7 +184,7 @@ final class MeetingAnalysisService {
         // Only the user's own commitments become to-dos.
         var created = 0
         for item in payload.actionItems where item.isMine && !item.title.isEmpty {
-            var description = "From meeting: \(meeting.title)"
+            var description = (turkishPrimary ? "Toplantıdan: " : "From meeting: ") + meeting.title
             if let notes = item.notes, !notes.isEmpty { description += "\n\(notes)" }
             let todo = Todo(
                 title: item.title,
@@ -298,15 +325,49 @@ final class MeetingAnalysisService {
 
     // MARK: - Prompts
 
-    private static let analysisSystemPrompt = """
+    private static func analysisSystemPrompt(language: MeetingNotesLanguage) -> String {
+        let languageRules: String
+        switch language {
+        case .english:
+            languageRules = """
+            LANGUAGE:
+            - Write every human-readable field (`title`, `overview`, `insights`, `notes`, and each action item's `title` and `notes`) in ENGLISH, regardless of what language the meeting was spoken in. Section headings too — including any headings named in the note-style guidance.
+            - Never translate people's names.
+            - Set `language` to "en". Omit the `*_en` mirror fields.
+            """
+        case .turkish:
+            languageRules = """
+            LANGUAGE:
+            - Write every human-readable field (`title`, `overview`, `insights`, `notes`, and each action item's `title` and `notes`) in TURKISH, regardless of what language the meeting was spoken in. Section headings too — including any headings named in the note-style guidance.
+            - Also provide a faithful ENGLISH translation of the main text in the mirror fields `overview_en`, `insights_en`, and `notes_en` — same content, same items, same order.
+            - Never translate people's names.
+            - Set `language` to "tr".
+            """
+        case .auto:
+            languageRules = """
+            LANGUAGE:
+            - Detect the language the meeting was mostly spoken in, and write every human-readable field (`title`, `overview`, `insights`, `notes`, and each action item's `title` and `notes`) in THAT language. Section headings too — including any headings named in the note-style guidance.
+            - If that language is not English, also provide a faithful ENGLISH translation of the main text in the mirror fields `overview_en`, `insights_en`, and `notes_en` — same content, same items, same order. If it is English, omit the mirror fields.
+            - Never translate people's names.
+            - Set `language` to the primary language's two-letter code ("en", "tr", "de", …).
+            """
+        }
+
+        return """
     You analyze meeting transcripts for the user. The transcript labels speakers: "Me" is the user (the app's owner), "Them" is everyone else on the call. Do NOT call any tools — synthesize from the transcript alone.
+
+    \(languageRules)
 
     Reply with STRICT JSON only — no markdown fences, no prose before or after the JSON object. Schema:
     {
       "title": "short descriptive meeting title, ≤60 chars (use the calendar title if one was given)",
+      "language": "two-letter code of the primary language the fields are written in",
       "overview": "2–4 sentence summary of what the meeting was about and what was decided",
+      "overview_en": "the SAME overview in English (only when the primary language is not English)",
       "insights": ["notable takeaway, risk, opportunity, or decision — the non-obvious stuff worth remembering"],
+      "insights_en": ["the SAME insights in English, same order (only when the primary language is not English)"],
       "notes": "markdown notes of the discussion: key points organized under ## headings, concise but complete",
+      "notes_en": "the SAME notes in English markdown (only when the primary language is not English)",
       "action_items": [
         {
           "title": "imperative phrasing of the task",
@@ -331,6 +392,27 @@ final class MeetingAnalysisService {
 
     Limits: insights ≤6, action_items ≤10. Transcription is imperfect — ignore obvious mis-transcriptions and filler.
     """
+    }
+
+    /// Builds the trailing "## English (reference)" block appended after
+    /// non-English notes. Only includes the pieces the agent actually
+    /// translated — if the `*_en` mirror fields came back empty, the whole
+    /// block is omitted rather than showing something broken.
+    private static func englishReferenceSection(_ payload: Payload) -> String {
+        var parts: [String] = []
+        let overviewEn = payload.overviewEn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notesEn = payload.notesEn.trimmingCharacters(in: .whitespacesAndNewlines)
+        let insightsEn = payload.insightsEn.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        if !overviewEn.isEmpty { parts.append(overviewEn) }
+        if !notesEn.isEmpty { parts.append(notesEn) }
+        if !insightsEn.isEmpty {
+            parts.append("### Insights\n" + insightsEn.map { "- \($0)" }.joined(separator: "\n"))
+        }
+
+        guard !parts.isEmpty else { return "" }
+        return "## English (reference)\n\n" + parts.joined(separator: "\n\n")
+    }
 
     private static func userPrompt(
         transcript: String,
@@ -416,23 +498,38 @@ final class MeetingAnalysisService {
 
     private struct Payload: Decodable {
         var title = ""
+        /// Two-letter code of the language the agent wrote the fields in —
+        /// how `.auto` mode learns what the meeting's language was.
+        var language = ""
         var overview = ""
         var insights: [String] = []
         var notes = ""
+        /// English mirrors, present only when the primary language isn't
+        /// English — rendered as the "## English (reference)" section.
+        var overviewEn = ""
+        var insightsEn: [String] = []
+        var notesEn = ""
         var actionItems: [ActionItem] = []
         var participants: [String] = []
 
         enum CodingKeys: String, CodingKey {
-            case title, overview, insights, notes, participants
+            case title, language, overview, insights, notes, participants
+            case overviewEn = "overview_en"
+            case insightsEn = "insights_en"
+            case notesEn = "notes_en"
             case actionItems = "action_items"
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             title = (try? c.decode(String.self, forKey: .title)) ?? ""
+            language = (try? c.decode(String.self, forKey: .language)) ?? ""
             overview = (try? c.decode(String.self, forKey: .overview)) ?? ""
             insights = (try? c.decode([String].self, forKey: .insights)) ?? []
             notes = (try? c.decode(String.self, forKey: .notes)) ?? ""
+            overviewEn = (try? c.decode(String.self, forKey: .overviewEn)) ?? ""
+            insightsEn = (try? c.decode([String].self, forKey: .insightsEn)) ?? []
+            notesEn = (try? c.decode(String.self, forKey: .notesEn)) ?? ""
             actionItems = (try? c.decode([ActionItem].self, forKey: .actionItems)) ?? []
             participants = (try? c.decode([String].self, forKey: .participants)) ?? []
         }

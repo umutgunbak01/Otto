@@ -52,6 +52,19 @@ struct Meeting: Identifiable, Codable {
         self.updatedAt = updatedAt
     }
 
+    /// Whether a transcript exists to show — either a Fireflies transcript
+    /// fetched live via `firefliesId`, or one captured locally by Otto's own
+    /// meeting recorder (stored in `transcript`). The Meetings list keys its
+    /// transcript chip off this; checking only `firefliesId` wrongly labeled
+    /// locally-recorded meetings "no transcript".
+    var hasTranscript: Bool {
+        if firefliesId != nil { return true }
+        if let transcript, !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
+    }
+
     var formattedDuration: String {
         let minutes = duration / 60
         if minutes < 60 {
