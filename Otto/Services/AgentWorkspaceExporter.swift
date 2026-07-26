@@ -11,13 +11,16 @@ import Foundation
 /// returns only the matching lines. `search_items` stays for freshness and
 /// single lookups; `get_item` stays for full detail (email bodies etc.).
 ///
-/// Flow per turn (Claude/Codex CLI backends only — Hermes runs remotely over
-/// SSH and never sees local files):
+/// Flow per turn (Claude/Codex CLI backends only — Hermes is a local sibling
+/// process, but each backend has its own working dir, so Hermes reaches the
+/// same tables through the `grep_data` MCP tool instead of these files):
 ///   1. `AgentService.buildSystemPrompt` embeds `promptSection(from:)` — the
 ///      file list with row counts + columns, so the agent knows what exists.
 ///   2. `ClaudeCLIService` / `CodexCLIService` call `snapshot(from:)` on the
-///      main actor, then `write(_:into:)` into the turn's tmpDir before spawn.
-///   3. The tmpDir (0700) is deleted when the turn ends, same as before.
+///      main actor, then `write(_:into:)` into the conversation's session dir
+///      before spawn — skipped entirely when `isCurrent` says no store write
+///      happened since the last export (see the revision marker below).
+///   3. Session dirs (0700) live under $TMPDIR and are reclaimed by the OS.
 ///
 /// Records are one-per-line (newlines inside fields are flattened) so `grep`
 /// always returns whole records. Long text fields are clipped — the row always
@@ -86,10 +89,28 @@ enum AgentWorkspaceExporter {
 
     // MARK: - Write
 
+    /// Marker file recording which `PersistenceService.revision` the files in
+    /// a workspace dir were exported at — lets follow-up turns in a stable
+    /// per-session dir skip the whole multi-MB re-serialize when no store
+    /// write happened in between.
+    private static let revisionMarker = ".otto_workspace_revision"
+
+    /// True when `dir` already holds an export stamped with `revision`.
+    static func isCurrent(_ dir: URL, revision: Int) -> Bool {
+        let markerURL = dir.appendingPathComponent(revisionMarker)
+        guard let stamp = try? String(contentsOf: markerURL, encoding: .utf8),
+              stamp.trimmingCharacters(in: .whitespacesAndNewlines) == String(revision),
+              FileManager.default.fileExists(atPath: dir.appendingPathComponent("_manifest.md").path)
+        else { return false }
+        return true
+    }
+
     /// Serialize the snapshot into `dir` (the CLI's cwd for this turn) plus a
     /// `_manifest.md` describing the files. Best-effort: a failed file is
-    /// logged and skipped — the agent falls back to search_items.
-    static func write(_ snap: Snapshot, into dir: URL) {
+    /// logged and skipped — the agent falls back to search_items. Pass
+    /// `revision` (from `PersistenceService.revision` at snapshot time) to
+    /// stamp the dir for `isCurrent` skip checks on later turns.
+    static func write(_ snap: Snapshot, into dir: URL, revision: Int? = nil) {
         let specs = fileSpecs(from: snap, includeContent: true)
         guard !specs.isEmpty else { return }
 
@@ -111,6 +132,10 @@ enum AgentWorkspaceExporter {
 
         let manifestURL = dir.appendingPathComponent("_manifest.md")
         try? manifest.joined(separator: "\n").write(to: manifestURL, atomically: true, encoding: .utf8)
+        if let revision {
+            let markerURL = dir.appendingPathComponent(revisionMarker)
+            try? String(revision).write(to: markerURL, atomically: true, encoding: .utf8)
+        }
         // tmpDir already lives under the user-private $TMPDIR; tighten anyway.
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
     }
@@ -122,9 +147,9 @@ enum AgentWorkspaceExporter {
         /// CLI backends (Claude Code / Codex): real files exported into the
         /// agent subprocess's cwd — searched with its own Read/Grep tools.
         case localFiles
-        /// Remote backends (Hermes over SSH): no local filesystem access —
-        /// the same tables are served through the `grep_data` MCP tool,
-        /// generated fresh on every call.
+        /// MCP-only backends (Hermes): runs locally but in its own working
+        /// dir without these files — the same tables are served through the
+        /// `grep_data` MCP tool, generated fresh on every call.
         case mcpGrep
     }
 

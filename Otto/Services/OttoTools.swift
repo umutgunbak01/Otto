@@ -15,6 +15,8 @@ enum OttoTools {
         case complete_todo, uncomplete_todo, complete_reminder
         case delete_item
         case search_items, grep_data, get_item
+        case remember, update_memory
+        case search_sessions, get_session
         case attach_item_preview
         case visualize
         case open_url
@@ -22,6 +24,8 @@ enum OttoTools {
         case read_file
         case create_file
         case genmedia_search_models, genmedia_get_model_schema, genmedia_run, genmedia_upload_file
+        case creative_list_workflows, creative_create_workflow, creative_get_workflow
+        case creative_edit_workflow, creative_run
         case create_tab, update_tab, get_tab
         case set_tab_blocks, update_tab_block
         case add_tab_records, update_tab_record
@@ -96,13 +100,17 @@ enum OttoTools {
         return token.flatMap { UUID(uuidString: String($0)) }
     }
 
-    /// True when `raw` names the genmedia_run tool under any backend's
-    /// naming — bare, MCP-prefixed, or humanized ("Mcp Otto Genmedia Run").
+    /// True when `raw` names a media-generating run tool (genmedia_run or
+    /// creative_run) under any backend's naming — bare, MCP-prefixed, or
+    /// humanized ("Mcp Otto Genmedia Run"). Both tools return the same
+    /// `"files": [{"file_id": …}]` payload, so their chips get the same
+    /// inline-media upgrade.
     static func isGenmediaRun(_ raw: String) -> Bool {
         let normalized = canonicalToolName(raw)
             .lowercased()
             .replacingOccurrences(of: " ", with: "_")
         return normalized.hasSuffix(Name.genmedia_run.rawValue)
+            || normalized.hasSuffix(Name.creative_run.rawValue)
     }
 
     /// Recover the imported files' ids from a genmedia_run result payload so
@@ -587,7 +595,7 @@ enum OttoTools {
             "description": "Search and/or list items with optional text match, date range, and sort order. Returns id, type, title, a short snippet, and the 'date' each result was ranked by. Use get_item for full content, or `read_file` for the full text of `file` items. You can call this with NO query to simply list items by date — e.g. 'most recent emails', 'reminders due next', 'notes from last week', 'files I imported', 'X posts about the launch', 'DMs from Sam'.",
             "input_schema": objectSchema(
                 properties: [
-                    "query": stringProp("Optional free-text query (case-insensitive substring match on title/content; also matches file names, tags, OCR'd / extracted text, X post text, follower bio/handle, DM body). Omit to list everything matching the other filters."),
+                    "query": stringProp("Optional free-text query. Multi-word queries match items containing EVERY word (any field, case-insensitive — words don't need to be adjacent, so \"AI infra\" matches \"infrastructure for AI\"); when nothing hits all words, any-word matches are returned instead (response's match_mode says which). Results are relevance-ranked by default: title hits outweigh body hits, exact phrases score extra, recency breaks ties. Searches titles/content plus file names, tags, OCR'd / extracted text, X post text, follower bio/handle, DM body. Omit to list everything matching the other filters."),
                     "types": [
                         "type": "array",
                         "description": "Limit to these types. Default: all of (todo, note, idea, reminder, bookmark, meeting, email, connection, network, company, event, community, file, x_post, x_follower, x_dm"
@@ -599,9 +607,14 @@ enum OttoTools {
                         ]
                     ],
                     "sort": enumProp(
-                        ["recent", "oldest", "due_soonest", "title"],
-                        "Sort order. 'recent' (default) = newest first by the item's primary date (emails=receivedDate, meetings=meetingDate, reminders=reminderDate, else updatedAt). 'oldest' = opposite. 'due_soonest' = ascending for todos/reminders with a date, others placed after. 'title' = alphabetical."
+                        ["relevance", "recent", "oldest", "due_soonest", "title"],
+                        "Sort order. 'relevance' (default when a query is given) = best match first, recency breaking ties. 'recent' (default without a query) = newest first by the item's primary date (emails=receivedDate, meetings=meetingDate, reminders=reminderDate, else updatedAt). 'oldest' = opposite. 'due_soonest' = ascending for todos/reminders with a date, others placed after. 'title' = alphabetical."
                     ),
+                    "offset": [
+                        "type": "integer",
+                        "description": "Skip this many results (pagination). The response's next_offset, when present, is the value to pass for the following page.",
+                        "minimum": 0
+                    ],
                     "since": stringProp("ISO8601 datetime lower bound (inclusive) on the primary date, e.g. 2026-04-10T00:00:00Z. Filters out anything older."),
                     "until": stringProp("ISO8601 datetime upper bound (inclusive) on the primary date. Filters out anything newer."),
                     "include_completed": [
@@ -624,7 +637,7 @@ enum OttoTools {
                 + (customTypeSlugs.isEmpty ? "." : ", plus one per custom tab: " + customTypeSlugs.map { "custom_\($0).csv" }.joined(separator: ", ") + "."),
             "input_schema": objectSchema(
                 properties: [
-                    "file": stringProp("Table filename, e.g. \"connections.csv\" or \"emails.jsonl\"."),
+                    "file": stringProp("Table filename, e.g. \"connections.csv\" or \"emails.jsonl\". Comma-separate several to sweep them in one call (each table capped at max_results), e.g. \"emails.jsonl,meetings.jsonl,notes.jsonl\"."),
                     "pattern": stringProp("Regular expression, matched case-insensitively against each record line."),
                     "max_results": [
                         "type": "integer",
@@ -638,16 +651,88 @@ enum OttoTools {
         ],
         [
             "name": Name.get_item.rawValue,
-            "description": "Fetch full details of a single item by id and type. For files, returns metadata plus a short text preview — use `read_file` for the full extracted content.",
+            "description": "Fetch full details of a single item by id and type. Long text fields (meeting content + transcript, email body) are clipped at max_chars with an explicit truncation note — pass a larger max_chars to read a full transcript. For files, returns metadata plus a short text preview — use `read_file` for the full extracted content.",
             "input_schema": objectSchema(
                 properties: [
                     "id": stringProp("UUID of the item."),
                     "type": enumProp(
                         ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "habit", "file", "x_post", "x_follower", "x_dm"] + customTypeSlugs,
                         "Which collection the item lives in."
-                    )
+                    ),
+                    "max_chars": [
+                        "type": "integer",
+                        "description": "Cap on long text fields (default 4000, max 100000). Raise it to read a full meeting transcript or email body.",
+                        "minimum": 500,
+                        "maximum": 100_000
+                    ]
                 ],
                 required: ["id", "type"]
+            )
+        ],
+        // MARK: Memory & chat history
+        [
+            "name": Name.remember.rawValue,
+            "description": "Save one durable memory that persists across ALL future conversations (injected into your system prompt every turn). Use when the user states a lasting preference (\"keep follow-up drafts short\"), a standing instruction (\"always X when Y\"), or a durable fact about themselves / people / projects worth carrying forward. One memory per call, phrased as a standalone sentence. Do NOT remember one-off task details, things already stored as items (todos, notes, contacts), or trivia. Check the '## Persistent memory' section of your prompt first — if a memory on the same subject exists, call update_memory with its id instead of creating a near-duplicate.",
+            "input_schema": objectSchema(
+                properties: [
+                    "content": stringProp("The memory, as one standalone sentence (required)."),
+                    "category": enumProp(
+                        AgentMemoryEntry.Category.allCases.map(\.rawValue),
+                        "Kind of memory; defaults to fact."
+                    )
+                ],
+                required: ["content"]
+            )
+        ],
+        [
+            "name": Name.update_memory.rawValue,
+            "description": "Edit or delete one persistent memory by id (ids are shown in the '## Persistent memory' section of your prompt). Use when a memory is outdated, wrong, or superseded — pass `content` to rewrite it, or `delete: true` to remove it.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the memory."),
+                    "content": stringProp("Replacement text for the memory."),
+                    "category": enumProp(
+                        AgentMemoryEntry.Category.allCases.map(\.rawValue),
+                        "New category, if it should change."
+                    ),
+                    "delete": [
+                        "type": "boolean",
+                        "description": "True to delete the memory instead of editing it."
+                    ]
+                ],
+                required: ["id"]
+            )
+        ],
+        [
+            "name": Name.search_sessions.rawValue,
+            "description": "Search PAST chat conversations (titles + transcript text, including tool results). Use when the user references an earlier discussion — \"what did we decide about X\", \"the plan from last week\", \"you mentioned a restaurant once\". Returns session id, title, last-active date, and a matching snippet per hit; follow up with get_session to read a full transcript.",
+            "input_schema": objectSchema(
+                properties: [
+                    "query": stringProp("Free-text query; every word must appear somewhere in the session (case-insensitive). Omit to list the most recent sessions."),
+                    "limit": [
+                        "type": "integer",
+                        "description": "Max sessions to return (default 10, max 50).",
+                        "minimum": 1,
+                        "maximum": 50
+                    ]
+                ],
+                required: []
+            )
+        ],
+        [
+            "name": Name.get_session.rawValue,
+            "description": "Fetch the full transcript of one past chat session by id (from search_sessions). Tool calls and results appear in compact bracketed form.",
+            "input_schema": objectSchema(
+                properties: [
+                    "id": stringProp("UUID of the session."),
+                    "max_chars": [
+                        "type": "integer",
+                        "description": "Max transcript characters to return, newest kept (default 20000, max 100000).",
+                        "minimum": 1000,
+                        "maximum": 100_000
+                    ]
+                ],
+                required: ["id"]
             )
         ],
         [
@@ -924,12 +1009,81 @@ enum OttoTools {
         ],
         [
             "name": Name.genmedia_upload_file.rawValue,
-            "description": "Upload one of the user's existing Otto files to fal's CDN via `genmedia upload`. Returns a CDN URL you can pass into another model's inputs (e.g. as `image_url` for an image-to-image flow). Use when the user references an image/video they already have in Files.",
+            "description": "Upload one of the user's existing Otto files to fal's CDN via `genmedia upload`. Returns a CDN URL you can pass into another model's inputs (e.g. as `image_url` for an image-to-image flow, or as a param value on a Creative canvas node). Use when the user references an image/video they already have in Files.",
             "input_schema": objectSchema(
                 properties: [
                     "file_id": stringProp("UUID of an Otto File (from `search_items` with type=file).")
                 ],
                 required: ["file_id"]
+            )
+        ],
+
+        // MARK: Creative canvas (node workflows over fal.ai)
+        //
+        // The Creative tab is an infinite node canvas: fal endpoints become
+        // nodes, outputs wire into inputs, and the graph runs in dependency
+        // order. These tools let the agent build canvases the user can see,
+        // tweak, and re-run — prefer them over one-shot genmedia_run when the
+        // task chains models (e.g. image → video → add audio) or the user
+        // wants a reusable setup.
+        [
+            "name": Name.creative_list_workflows.rawValue,
+            "description": "List the workflows (canvases) in Otto's Creative tab — the infinite node canvas where fal.ai models are wired into pipelines. Returns each workflow's id, name, node/edge counts, and which one is currently open.",
+            "input_schema": objectSchema(properties: [:], required: [])
+        ],
+        [
+            "name": Name.creative_create_workflow.rawValue,
+            "description": "Create a new, empty canvas in the Creative tab and make it current. Building and running happen in the background — the user can keep chatting, or open the Creative tab in the sidebar to watch live; mention that option in your reply. Follow up with creative_edit_workflow to add nodes and wires. Use a short, descriptive name (a few words — it's shown in the canvas toolbar).",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Workflow name, e.g. \"Puppy music video\".")
+                ],
+                required: ["name"]
+            )
+        ],
+        [
+            "name": Name.creative_get_workflow.rawValue,
+            "description": "Read a Creative canvas: its nodes (with endpoint ids, current param values, input/output ports and their types, which inputs are wired from where, and whether each node has a result) plus all edges. Call this before editing an existing canvas, and to discover port names for connections. For a model's full parameter documentation use genmedia_get_model_schema.",
+            "input_schema": objectSchema(
+                properties: [
+                    "workflow_id": stringProp("Workflow UUID from creative_list_workflows. Omit for the currently open one.")
+                ],
+                required: []
+            )
+        ],
+        [
+            "name": Name.creative_edit_workflow.rawValue,
+            "description": """
+            Edit a Creative canvas with a batch of operations, applied in order (stops at the first failure). Build a whole pipeline in ONE call. Operations (each an object with an "op" field):
+            - {"op":"add_node", "endpoint_id":"fal-ai/flux/dev", "ref":"img", "params":{"prompt":"…"}, "position":{"x":80,"y":80}} — add a fal model node. "ref" is a temporary handle later ops in this batch can use as a node id; "params" seeds input values (match the model's schema field names; media params take URLs — from genmedia_upload_file or a previous node's output edge); "position" is optional (omit it and nodes are auto-laid-out left→right by dependency).
+            - {"op":"set_params", "node":"<node id or ref>", "params":{"prompt":"new"}} — merge param values into an existing node (JSON null clears a param).
+            - {"op":"connect", "from":"<node/ref>", "from_port":"images", "to":"<node/ref>", "to_param":"image_url"} — wire an output port into an input param (port names come from creative_get_workflow; an input holds one wire, media types must match, arrays coerce to first element automatically).
+            - {"op":"disconnect", "node":"<node/ref>", "param":"image_url"} — remove the wire into an input.
+            - {"op":"delete_node", "node":"<node/ref>"} — remove a node and its wires.
+            - {"op":"rename_workflow", "name":"New name"} — rename the canvas.
+            Unknown endpoint ids fail their op with the reason. Nothing runs until creative_run.
+            """,
+            "input_schema": objectSchema(
+                properties: [
+                    "workflow_id": stringProp("Workflow UUID. Omit for the currently open one."),
+                    "operations": [
+                        "type": "array",
+                        "description": "Ordered operation objects — see the tool description for shapes.",
+                        "items": ["type": "object"]
+                    ] as [String: Any]
+                ],
+                required: ["operations"]
+            )
+        ],
+        [
+            "name": Name.creative_run.rawValue,
+            "description": "Run a Creative canvas (or a subset of its nodes) and wait for completion. Dependencies execute in order, independent branches in parallel; if a requested node's inputs come from nodes that haven't run yet, those upstream nodes run automatically first — already-computed upstream results are reused, not regenerated. Final outputs (media from nodes nothing else consumes) are saved into Otto's Files tab and get inline previews in the chat AUTOMATICALLY — do NOT call attach_item_preview for them and don't re-describe the media; a one-line caption is enough. Text outputs (LLM nodes) come back in the payload. Generation can take 10s–several minutes for video models; the user's fal account is billed directly.",
+            "input_schema": objectSchema(
+                properties: [
+                    "workflow_id": stringProp("Workflow UUID. Omit for the currently open one."),
+                    "node_ids": arrayOfStrings("Optional node ids to run as a sub-workflow (missing upstream joins automatically). Omit to run the whole graph.")
+                ],
+                required: []
             )
         ],
 

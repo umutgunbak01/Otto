@@ -102,6 +102,21 @@ actor HermesAgentService {
     /// on the conversation's first turn after connect.
     private var acpSessions: [UUID: String] = [:]
 
+    /// Otto conversation id → hash of the custom-tab manifest last sent into
+    /// that ACP session. The session's seeded system prompt freezes at
+    /// creation, so when tabs change mid-session we re-send the manifest as a
+    /// context block with the next user message.
+    private var sessionManifestHash: [UUID: Int] = [:]
+
+    /// ACP session id → last time the agent showed signs of life (any
+    /// session/update or permission request). Drives the stall watchdog.
+    private var turnLastActivity: [String: Date] = [:]
+
+    /// Abort a turn after this much silence — no streamed chunks, no tool
+    /// calls, no permission requests. Generous: deep "thinking" stretches on
+    /// hard prompts are silent but legitimate.
+    private static let stallTimeout: TimeInterval = 300
+
     /// In-flight turn state, keyed by ACP session id. Installed at the start
     /// of `streamChatWithTools`, removed at the end. Multiple sessions can
     /// have a turn in flight at once; `session/update` frames carry the
@@ -133,6 +148,7 @@ actor HermesAgentService {
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> [ChatTurn] {
 
+        let turnStart = Date()
         try await ensureConnected()
         guard case .live = state else {
             throw HermesError.disconnected
@@ -144,14 +160,29 @@ actor HermesAgentService {
         // same compromise CodexCLIService makes) plus a compact replay of any
         // earlier turns, so continuing a conversation that predates this
         // session (say, after an app restart) doesn't lose its context.
-        let lastUserText = turns.reversed().first { $0.role == "user" }
-            .flatMap { turn -> String? in
-                let text = turn.blocks.compactMap { block -> String? in
-                    if case .text(let s) = block { return s }
-                    return nil
-                }.joined(separator: "\n\n")
-                return text.isEmpty ? nil : text
-            } ?? ""
+        let lastUserTurn = turns.last { $0.role == "user" }
+        var lastUserText = lastUserTurn.map { turn in
+            turn.blocks.compactMap { block -> String? in
+                if case .text(let s) = block { return s }
+                return nil
+            }.joined(separator: "\n\n")
+        } ?? ""
+        // Attachments ride along as inlined text (md/csv/txt…) or filename
+        // stubs — Hermes runs remotely, so a local file path would be useless.
+        if let turn = lastUserTurn,
+           let attachmentSection = ChatTranscript.attachmentSection(turn.attachments) {
+            lastUserText = lastUserText.isEmpty
+                ? attachmentSection
+                : lastUserText + "\n\n" + attachmentSection
+        }
+
+        // Current custom-tab manifest — hashed to detect mid-session changes.
+        // (The seeded system prompt freezes at session start; see below.)
+        let manifestNow: String? = await MainActor.run {
+            guard let appState = OttoMCPServer.shared.appState else { return nil }
+            return AgentService.customTabsSection(from: appState)
+        }
+        let manifestHash = (manifestNow ?? "").hashValue
 
         var combined: String
         if isFreshSession {
@@ -162,8 +193,24 @@ actor HermesAgentService {
             }
             pieces.append(lastUserText)
             combined = pieces.joined(separator: "\n\n")
+            sessionManifestHash[sessionKey] = manifestHash
         } else {
-            combined = lastUserText
+            // Context refresher — the ACP session's system prompt was seeded
+            // once and never updates, so anything time- or shape-sensitive in
+            // it goes stale as the session lives on. Ride a compact refresh
+            // along with each user message: the current date/time always
+            // (otherwise "today" resolves against the seed timestamp), plus
+            // the custom-tab manifest when it changed since last sent.
+            var refresh: [String] = [AgentService.nowStamp()]
+            if sessionManifestHash[sessionKey] != manifestHash {
+                sessionManifestHash[sessionKey] = manifestHash
+                if let manifestNow {
+                    refresh.append("Custom tabs changed since earlier in this session — current manifest:\n\(manifestNow)")
+                } else {
+                    refresh.append("All custom tabs have been deleted since earlier in this session.")
+                }
+            }
+            combined = "[context refresh — not from the user]\n\(refresh.joined(separator: "\n\n"))\n\n\(lastUserText)"
         }
 
         // Screen-vision handoff: IntentRouter stashes a PNG path on AppState.
@@ -199,7 +246,11 @@ actor HermesAgentService {
         // updates to the right turn. Guaranteed removal even on throw, so a
         // later turn isn't routed to a stale closure.
         activeTurns[sessionId] = TurnContext(onDelta: onDelta, onEvent: onEvent)
-        defer { activeTurns[sessionId] = nil }
+        turnLastActivity[sessionId] = Date()
+        defer {
+            activeTurns[sessionId] = nil
+            turnLastActivity[sessionId] = nil
+        }
 
         // Send session/prompt and await the stopReason response. Tool calls,
         // approval round-trips, and streaming chunks all flow asynchronously
@@ -210,6 +261,21 @@ actor HermesAgentService {
             sessionId: sessionId,
             text: combined
         )
+
+        // Stall watchdog — a hung Hermes otherwise pins this turn forever
+        // (`sendAndAwait` has no deadline of its own). Any session/update or
+        // permission request counts as activity; a pending approval card
+        // pauses the clock (the user may be away).
+        let watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if Task.isCancelled { return }
+                guard let self else { return }
+                if await self.fireIfStalled(sessionId: sessionId, promptId: promptId) { return }
+            }
+        }
+        defer { watchdog.cancel() }
+
         do {
             _ = try await sendAndAwait(id: promptId, request: request)
         } catch {
@@ -232,8 +298,12 @@ actor HermesAgentService {
         let blocks = turnBlocks.isEmpty
             ? [ChatBlock.text(assistantText)]
             : turnBlocks
+        let stats = TurnStats(
+            durationMs: Int(Date().timeIntervalSince(turnStart) * 1000),
+            backend: AgentBackend.hermes.rawValue
+        )
         var updated = turns
-        updated.append(ChatTurn(role: "assistant", blocks: blocks))
+        updated.append(ChatTurn(role: "assistant", blocks: blocks, stats: stats))
         return updated
     }
 
@@ -256,27 +326,42 @@ actor HermesAgentService {
 
     /// Compact text replay of every turn before the final user turn — used to
     /// seed a fresh ACP session with a conversation that already has history
-    /// (continued after an app restart or backend switch). Text blocks only;
-    /// tool chatter is noise at this altitude. Tail-capped so a monster
-    /// conversation doesn't blow up the prompt.
+    /// (continued after an app restart or backend switch).
+    ///
+    /// Turn-aware: newest turns are kept whole (via `ChatTranscript.flattenTurn`,
+    /// so tool calls/results ride along in bracketed form — much of a
+    /// conversation's substance lives only in tool payloads), accumulating
+    /// backwards until the budget is spent. Beats the old blind 12k-char tail
+    /// slice, which cut mid-sentence and dropped everything but prose.
+    private static let replayBudget = 30_000
+
     private static func historyReplay(turns: [ChatTurn]) -> String? {
         guard let lastUserIdx = turns.lastIndex(where: { $0.role == "user" }),
               lastUserIdx > 0 else { return nil }
-        var lines: [String] = []
-        for turn in turns[..<lastUserIdx] {
-            let text = turn.blocks.compactMap { block -> String? in
-                if case .text(let s) = block { return s }
-                return nil
-            }.joined(separator: "\n")
-            guard !text.isEmpty else { continue }
-            lines.append("\(turn.role == "user" ? "User" : "Assistant"): \(text)")
+        var kept: [String] = []
+        var budget = replayBudget
+        var omitted = 0
+        // Attachments ride along automatically — flattenTurn appends each
+        // turn's attachment section itself.
+        for turn in turns[..<lastUserIdx].reversed() {
+            guard let flat = ChatTranscript.flattenTurn(turn) else { continue }
+            if flat.count <= budget {
+                kept.append(flat)
+                budget -= flat.count
+            } else if kept.isEmpty {
+                // A single monster turn — keep its tail so we return something.
+                kept.append("…" + String(flat.suffix(budget)))
+                budget = 0
+            } else {
+                omitted += 1
+            }
         }
-        guard !lines.isEmpty else { return nil }
-        let replay = lines.joined(separator: "\n\n")
-        if replay.count > 12_000 {
-            return "…" + String(replay.suffix(12_000))
+        guard !kept.isEmpty else { return nil }
+        var out = kept.reversed().joined(separator: "\n\n")
+        if omitted > 0 {
+            out = "(\(omitted) earlier turn\(omitted == 1 ? "" : "s") omitted for length)\n\n" + out
         }
-        return replay
+        return out
     }
 
     /// Idempotent: spawns `hermes acp` and runs the ACP handshake if we
@@ -352,6 +437,8 @@ actor HermesAgentService {
         toolCallInputs.removeAll()
         acpSessions.removeAll()
         activeTurns.removeAll()
+        sessionManifestHash.removeAll()
+        turnLastActivity.removeAll()
 
         state = .disconnected(nil)
     }
@@ -679,9 +766,11 @@ actor HermesAgentService {
             }
 
         case .sessionUpdate(let sessionId, let update):
+            touchActivity(sessionId)
             handleSessionUpdate(sessionId: sessionId, update)
 
         case .requestPermission(let id, let sessionId, let toolCallId, let options):
+            touchActivity(sessionId)
             handlePermissionRequest(id: id, sessionId: sessionId, toolCallId: toolCallId, options: options)
 
         case .unknown:
@@ -689,6 +778,40 @@ actor HermesAgentService {
             // here. We don't surface them — they're advisory.
             break
         }
+    }
+
+    /// Record sign-of-life for the stall watchdog. Frames with an empty
+    /// sessionId (single-turn agents) touch the sole running turn.
+    private func touchActivity(_ sessionId: String) {
+        if let resolved = resolveTurnSession(sessionId) {
+            turnLastActivity[resolved] = Date()
+        } else if activeTurns.count == 1, let only = activeTurns.keys.first {
+            turnLastActivity[only] = Date()
+        }
+    }
+
+    /// Watchdog probe: aborts the turn (resuming its continuation with an
+    /// error and best-effort cancelling agent-side) when the agent has been
+    /// silent past `stallTimeout`. Returns true when the watchdog is done —
+    /// either it fired, or the turn already ended.
+    private func fireIfStalled(sessionId: String, promptId: Int) -> Bool {
+        guard activeTurns[sessionId] != nil else { return true }
+        // An approval card the user hasn't answered isn't a stall — they may
+        // be away from the keyboard. Keep the clock parked while any is open.
+        guard pendingApprovals.isEmpty else {
+            turnLastActivity[sessionId] = Date()
+            return false
+        }
+        let last = turnLastActivity[sessionId] ?? Date()
+        guard Date().timeIntervalSince(last) > Self.stallTimeout else { return false }
+        NSLog("[Hermes] turn stalled — no activity for %.0fs, aborting", Self.stallTimeout)
+        writeFrame(ACPParser.cancelNotification(sessionId: sessionId))
+        if let cont = pendingResponses.removeValue(forKey: promptId) {
+            cont.resume(throwing: HermesError.promptFailed(
+                "No agent activity for \(Int(Self.stallTimeout))s — turn aborted. Hermes may be stalled; try again, or restart it from Settings → Agent."
+            ))
+        }
+        return true
     }
 
     /// Resolve which in-flight turn an agent frame belongs to. Frames carry

@@ -27,6 +27,7 @@ struct OttoDataStore: Codable {
     var blockedSenders: [String]
     var askHistory: [AskHistoryItem]
     var chatSessions: [ChatSession]
+    var agentMemories: [AgentMemoryEntry]
     var lastGmailSync: Date?
     var lastCalendarSync: Date?
     var lastXSync: Date?
@@ -41,6 +42,7 @@ struct OttoDataStore: Codable {
         case customTabs, customRecords
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
+        case agentMemories
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
     }
 
@@ -71,6 +73,7 @@ struct OttoDataStore: Codable {
         blockedSenders: [String] = [],
         askHistory: [AskHistoryItem] = [],
         chatSessions: [ChatSession] = [],
+        agentMemories: [AgentMemoryEntry] = [],
         lastGmailSync: Date? = nil,
         lastCalendarSync: Date? = nil,
         lastXSync: Date? = nil,
@@ -102,6 +105,7 @@ struct OttoDataStore: Codable {
         self.blockedSenders = blockedSenders
         self.askHistory = askHistory
         self.chatSessions = chatSessions
+        self.agentMemories = agentMemories
         self.lastGmailSync = lastGmailSync
         self.lastCalendarSync = lastCalendarSync
         self.lastXSync = lastXSync
@@ -152,6 +156,8 @@ struct OttoDataStore: Codable {
         askHistory = (try? container.decode([AskHistoryItem].self, forKey: .askHistory)) ?? []
         // Rich chat sessions are a newer addition than askHistory.
         chatSessions = (try? container.decode([ChatSession].self, forKey: .chatSessions)) ?? []
+        // Agent memory is a newer addition — fall back to empty for older stores.
+        agentMemories = (try? container.decode([AgentMemoryEntry].self, forKey: .agentMemories)) ?? []
         lastGmailSync = try? container.decode(Date.self, forKey: .lastGmailSync)
         lastCalendarSync = try? container.decode(Date.self, forKey: .lastCalendarSync)
         lastXSync = try? container.decode(Date.self, forKey: .lastXSync)
@@ -166,6 +172,25 @@ actor PersistenceService {
     private var cachedData: OttoDataStore?
 
     static let shared = PersistenceService()
+
+    /// Monotonic store-write counter — a cheap cross-actor change signal for
+    /// the workspace-export cache (the CLI backends skip re-serializing their
+    /// snapshot files when nothing has been saved since the last export).
+    /// Process-local, never persisted.
+    nonisolated(unsafe) private static var _revision: Int = 1
+    private static let revisionLock = NSLock()
+
+    nonisolated static var revision: Int {
+        revisionLock.lock()
+        defer { revisionLock.unlock() }
+        return _revision
+    }
+
+    nonisolated private static func bumpRevision() {
+        revisionLock.lock()
+        _revision += 1
+        revisionLock.unlock()
+    }
 
     private init() {
         // `urls(for:in:)` is documented to always return at least one URL on
@@ -224,6 +249,7 @@ actor PersistenceService {
             ofItemAtPath: fileURL.path
         )
         cachedData = mutableStore
+        Self.bumpRevision()
     }
 
     func updateTodos(_ todos: [Todo]) async throws {
@@ -253,6 +279,12 @@ actor PersistenceService {
     func updateTags(_ tags: [DomainTag]) async throws {
         var store = try await load()
         store.domainTags = tags
+        try await save(store)
+    }
+
+    func updateAgentMemories(_ memories: [AgentMemoryEntry]) async throws {
+        var store = try await load()
+        store.agentMemories = memories
         try await save(store)
     }
 

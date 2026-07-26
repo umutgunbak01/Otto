@@ -257,6 +257,10 @@ struct SettingsView: View {
             case .codex:  codexBackendBlock
             case .hermes: hermesBackendBlock
             }
+
+            AgentMemorySettingsCard()
+
+            AgentSafetySettingsCard()
         }
     }
 

@@ -64,6 +64,10 @@ final class OttoToolExecutor {
         case .search_items:     result = searchItems(input)
         case .grep_data:        result = grepData(input)
         case .get_item:         result = getItem(input)
+        case .remember:         result = await rememberTool(input)
+        case .update_memory:    result = await updateMemoryTool(input)
+        case .search_sessions:  result = searchSessionsTool(input)
+        case .get_session:      result = getSessionTool(input)
         case .attach_item_preview: result = attachItemPreview(input)
         case .visualize:        result = renderVisualization(input)
         case .open_url:         result = openURLTool(input)
@@ -78,6 +82,11 @@ final class OttoToolExecutor {
         case .genmedia_get_model_schema:  result = await genmediaGetModelSchema(input)
         case .genmedia_run:               result = await genmediaRun(input)
         case .genmedia_upload_file:       result = await genmediaUploadFile(input)
+        case .creative_list_workflows:    result = await creativeListWorkflows(input)
+        case .creative_create_workflow:   result = await creativeCreateWorkflow(input)
+        case .creative_get_workflow:      result = await creativeGetWorkflow(input)
+        case .creative_edit_workflow:     result = await creativeEditWorkflow(input)
+        case .creative_run:               result = await creativeRun(input)
         case .create_tab:        result = await createTab(input)
         case .update_tab:        result = await updateTab(input)
         case .get_tab:           result = getTab(input)
@@ -104,6 +113,7 @@ final class OttoToolExecutor {
         .create_community, .update_community,
         .complete_todo, .uncomplete_todo, .complete_reminder,
         .delete_item,
+        .remember, .update_memory,
         .create_habit, .update_habit, .log_habit_entry, .complete_habit,
         // A successful genmedia_run lands a real artifact in the Files tab,
         // so it earns the same "thing happened" chime as the create_* tools.
@@ -121,23 +131,175 @@ final class OttoToolExecutor {
     /// see those, so it greps the same snapshot through this tool — one call
     /// with an alternation pattern instead of a chain of search_items calls.
     private func grepData(_ input: [String: Any]) -> ToolResult {
-        let file = (input["file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileArg = (input["file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = input["pattern"] as? String ?? ""
         let maxResults = min(max(input["max_results"] as? Int ?? 50, 1), 200)
-        guard !file.isEmpty, !pattern.isEmpty else {
+        guard !fileArg.isEmpty, !pattern.isEmpty else {
             return err("grep_data needs both `file` and `pattern`.", summary: "grep_data: missing arguments")
         }
-        let out = AgentWorkspaceExporter.grep(
-            file: file,
-            pattern: pattern,
-            maxResults: maxResults,
-            appState: appState
-        )
-        if out.isError {
-            return err(out.text, summary: "grep \(file) failed")
+        // Comma-separated table list — one call sweeps several tables (each
+        // capped at max_results). A single unknown table is still a hard
+        // error; in a multi-table sweep it degrades to an inline note.
+        let files = fileArg.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var sections: [String] = []
+        var totalMatches = 0
+        var okCount = 0
+        for file in files {
+            let out = AgentWorkspaceExporter.grep(
+                file: file,
+                pattern: pattern,
+                maxResults: maxResults,
+                appState: appState
+            )
+            if out.isError {
+                if files.count == 1 {
+                    return err(out.text, summary: "grep \(file) failed")
+                }
+                sections.append("# \(file): \(out.text)")
+            } else {
+                okCount += 1
+                totalMatches += out.matchCount
+                sections.append(out.text)
+            }
         }
-        let noun = out.matchCount == 1 ? "match" : "matches"
-        return ok(out.text, summary: "\(out.matchCount) \(noun) in \(file)")
+        guard okCount > 0 else {
+            return err(sections.joined(separator: "\n\n"), summary: "grep_data: no valid tables")
+        }
+        let noun = totalMatches == 1 ? "match" : "matches"
+        let scope = files.count == 1 ? files[0] : "\(files.count) tables"
+        return ok(sections.joined(separator: "\n\n"), summary: "\(totalMatches) \(noun) in \(scope)")
+    }
+
+    // MARK: - Agent memory
+
+    private func rememberTool(_ input: [String: Any]) async -> ToolResult {
+        guard let content = string(input, "content")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return err("remember needs non-empty `content`.", summary: "remember: missing content")
+        }
+        // Near-duplicate guard: identical text (case-insensitive) refreshes the
+        // existing memory instead of stacking a copy.
+        if let existing = appState.agentMemories.first(where: {
+            $0.content.lowercased() == content.lowercased()
+        }) {
+            return ok(
+                "Already remembered (id: \(existing.id.uuidString)). Use update_memory to change it.",
+                summary: "Already remembered"
+            )
+        }
+        let category = string(input, "category")
+            .flatMap(AgentMemoryEntry.Category.init(rawValue:)) ?? .fact
+        let entry = AgentMemoryEntry(content: content, category: category)
+        await appState.addAgentMemory(entry)
+        return ok(
+            "Remembered [\(category.rawValue)] (id: \(entry.id.uuidString)): \(content)",
+            summary: "Remembered: \(String(content.prefix(60)))"
+        )
+    }
+
+    private func updateMemoryTool(_ input: [String: Any]) async -> ToolResult {
+        guard let idStr = string(input, "id"), let id = UUID(uuidString: idStr) else {
+            return err("update_memory needs a valid `id` UUID.", summary: "update_memory: bad id")
+        }
+        guard var entry = appState.agentMemories.first(where: { $0.id == id }) else {
+            return err("No memory with id \(idStr).", summary: "Memory not found")
+        }
+        if (input["delete"] as? Bool) == true {
+            await appState.deleteAgentMemory(id: id)
+            return ok("Deleted memory: \(entry.content)", summary: "Forgot: \(String(entry.content.prefix(60)))")
+        }
+        if let content = string(input, "content")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty {
+            entry.content = content
+        }
+        if let cat = string(input, "category").flatMap(AgentMemoryEntry.Category.init(rawValue:)) {
+            entry.category = cat
+        }
+        await appState.updateAgentMemory(entry)
+        return ok(
+            "Updated memory (id: \(idStr)): [\(entry.category.rawValue)] \(entry.content)",
+            summary: "Updated memory"
+        )
+    }
+
+    // MARK: - Chat session history
+
+    /// Searchable text for one past session: title + flattened transcript
+    /// (tool payloads ride along in bracketed form, so results mention things
+    /// the prose never repeated).
+    private func sessionSearchText(_ session: ChatSession) -> String {
+        session.title + "\n" + ChatTranscript.flatten(session.turns)
+    }
+
+    private func searchSessionsTool(_ input: [String: Any]) -> ToolResult {
+        let query = (string(input, "query") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let limit = min(max(input["limit"] as? Int ?? 10, 1), 50)
+        let tokens = query.lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+
+        let sessions = appState.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
+        var lines: [String] = []
+        var matched = 0
+        for session in sessions {
+            guard !session.turns.isEmpty else { continue }
+            var snippet = ""
+            if !tokens.isEmpty {
+                let haystack = sessionSearchText(session)
+                let lowered = haystack.lowercased()
+                guard tokens.allSatisfy({ lowered.contains($0) }) else { continue }
+                if let range = lowered.range(of: tokens[0]) {
+                    let start = haystack.index(range.lowerBound, offsetBy: -80, limitedBy: haystack.startIndex) ?? haystack.startIndex
+                    let end = haystack.index(range.upperBound, offsetBy: 80, limitedBy: haystack.endIndex) ?? haystack.endIndex
+                    snippet = haystack[start..<end]
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .trimmingCharacters(in: .whitespaces)
+                }
+            }
+            matched += 1
+            guard lines.count < limit else { continue }
+            let current = session.id == appState.activeChatSessionId ? " (current session)" : ""
+            var line = "- \(session.id.uuidString)\(current) — \"\(session.title)\" — \(session.turns.count) turns, last active \(df.string(from: session.updatedAt))"
+            if !snippet.isEmpty { line += "\n  …\(snippet)…" }
+            lines.append(line)
+        }
+        guard !lines.isEmpty else {
+            return ok(
+                query.isEmpty ? "No past chat sessions." : "No past sessions match \"\(query)\".",
+                summary: "0 sessions"
+            )
+        }
+        let header = "\(matched) session\(matched == 1 ? "" : "s") matched, showing \(lines.count). Use get_session with an id for the full transcript."
+        return ok(header + "\n" + lines.joined(separator: "\n"), summary: "\(matched) session\(matched == 1 ? "" : "s")")
+    }
+
+    private func getSessionTool(_ input: [String: Any]) -> ToolResult {
+        guard let idStr = string(input, "id"), let id = UUID(uuidString: idStr) else {
+            return err("get_session needs a valid `id` UUID.", summary: "get_session: bad id")
+        }
+        guard let session = appState.chatSessions.first(where: { $0.id == id }) else {
+            return err("No chat session with id \(idStr).", summary: "Session not found")
+        }
+        let maxChars = min(max(input["max_chars"] as? Int ?? 20_000, 1_000), 100_000)
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        var transcript = ChatTranscript.flatten(session.turns)
+        var clippedNote = ""
+        if transcript.count > maxChars {
+            transcript = String(transcript.suffix(maxChars))
+            clippedNote = " (older portion clipped — raise max_chars for more)"
+        }
+        let header = "Session \"\(session.title)\" — \(session.turns.count) turns, \(df.string(from: session.createdAt)) → \(df.string(from: session.updatedAt))\(clippedNote)\n\n"
+        return ok(header + transcript, summary: "Read session: \(String(session.title.prefix(50)))")
     }
 
     // MARK: - Open URL
@@ -1550,6 +1712,12 @@ final class OttoToolExecutor {
             else { return nil }
             return q.lowercased()
         }()
+        // Tokenized query terms. Multi-word queries no longer demand the
+        // exact phrase — every word must appear somewhere in the item (an
+        // any-word fallback kicks in when that yields nothing at all).
+        let tokens: [String] = needle.map { n in
+            n.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        } ?? []
         let types: Set<String> = {
             if let arr = input["types"] as? [String], !arr.isEmpty { return Set(arr.map { $0.lowercased() }) }
             var defaults: Set<String> = ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "file", "x_post", "x_follower", "x_dm"]
@@ -1557,7 +1725,10 @@ final class OttoToolExecutor {
             return defaults
         }()
         let limit = max(1, min((input["limit"] as? Int) ?? 20, 100))
-        let sortKey = (string(input, "sort") ?? "recent").lowercased()
+        let offset = max(0, (input["offset"] as? Int) ?? 0)
+        // With a query, relevance is the default ranking; without one there's
+        // nothing to rank by, so fall back to newest-first.
+        let sortKey = (string(input, "sort") ?? (needle == nil ? "recent" : "relevance")).lowercased()
         let since = parseDate(string(input, "since"))
         let until = parseDate(string(input, "until"))
         let includeCompleted = (input["include_completed"] as? Bool) ?? true
@@ -1572,15 +1743,50 @@ final class OttoToolExecutor {
             let date: Date
             /// Optional due/reminder date used by the `due_soonest` sort.
             let dueDate: Date?
+            /// Relevance score from the last `textMatches` call (0 = no query).
+            var score: Int = 0
+            /// True when every query token matched. Items that hit all tokens
+            /// crowd out partial hits after collection (AND with OR fallback).
+            var hitAllTokens: Bool = true
         }
         var matches: [Match] = []
 
-        // Text-match helper. Returns true when no query or when any of the candidate
-        // fields contains the needle (case-insensitive).
+        // Scoring text-match helper. `candidates[0]` is the item's title-ish
+        // field; hits there weigh 3× a body hit, and the intact phrase earns
+        // a bonus so exact matches still float above scattered-word ones.
+        // Collects any-word matches; when at least one item hits every token,
+        // the partial hits are dropped afterwards. Sets `lastScore` /
+        // `lastHitAll` as side effects for the append that follows.
+        var lastScore = 0
+        var lastHitAll = true
         func textMatches(_ candidates: [String]) -> Bool {
-            guard let needle else { return true }
-            for c in candidates where c.lowercased().contains(needle) { return true }
-            return false
+            guard let needle else {
+                lastScore = 0
+                lastHitAll = true
+                return true
+            }
+            let lowered = candidates.map { $0.lowercased() }
+            let title = lowered.first ?? ""
+            var score = 0
+            var hitAll = true
+            for token in tokens {
+                if title.contains(token) {
+                    score += 3
+                } else if lowered.dropFirst().contains(where: { $0.contains(token) }) {
+                    score += 1
+                } else {
+                    hitAll = false
+                }
+            }
+            guard score > 0 else { return false }
+            if title.contains(needle) {
+                score += 4
+            } else if lowered.contains(where: { $0.contains(needle) }) {
+                score += 2
+            }
+            lastScore = score
+            lastHitAll = hitAll
+            return true
         }
 
         if types.contains("todo") {
@@ -1589,21 +1795,21 @@ final class OttoToolExecutor {
                 if !textMatches([t.title, t.description]) { continue }
                 matches.append(.init(id: t.id, type: "todo", title: t.title,
                                      snippet: String(t.description.prefix(140)),
-                                     date: t.updatedAt, dueDate: t.dueDate))
+                                     date: t.updatedAt, dueDate: t.dueDate, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("note") {
             for n in appState.notes where textMatches([n.title, n.content]) {
                 matches.append(.init(id: n.id, type: "note", title: n.title,
                                      snippet: String(n.content.prefix(140)),
-                                     date: n.updatedAt, dueDate: nil))
+                                     date: n.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("idea") {
             for i in appState.ideas where textMatches([i.title, i.content]) {
                 matches.append(.init(id: i.id, type: "idea", title: i.title,
                                      snippet: String(i.content.prefix(140)),
-                                     date: i.updatedAt, dueDate: nil))
+                                     date: i.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("reminder") {
@@ -1612,35 +1818,35 @@ final class OttoToolExecutor {
                 if !textMatches([r.title]) { continue }
                 matches.append(.init(id: r.id, type: "reminder", title: r.title,
                                      snippet: df.string(from: r.reminderDate),
-                                     date: r.reminderDate, dueDate: r.reminderDate))
+                                     date: r.reminderDate, dueDate: r.reminderDate, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("bookmark") {
             for b in appState.bookmarks where textMatches([b.title, b.url, b.description]) {
                 matches.append(.init(id: b.id, type: "bookmark", title: b.title,
                                      snippet: b.url,
-                                     date: b.updatedAt, dueDate: nil))
+                                     date: b.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("meeting") {
             for m in appState.meetings where textMatches([m.title, m.overview, m.content]) {
                 matches.append(.init(id: m.id, type: "meeting", title: m.title,
                                      snippet: String(m.overview.prefix(140)),
-                                     date: m.meetingDate, dueDate: nil))
+                                     date: m.meetingDate, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("email") {
             for e in appState.emails where textMatches([e.subject, e.body, e.displaySender]) {
                 matches.append(.init(id: e.id, type: "email", title: e.subject,
                                      snippet: "From: \(e.displaySender)",
-                                     date: e.receivedDate, dueDate: nil))
+                                     date: e.receivedDate, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("connection") {
             for c in appState.connections where textMatches([c.fullName, c.headline, c.company]) {
                 matches.append(.init(id: c.id, type: "connection", title: c.fullName,
                                      snippet: c.displayInfo,
-                                     date: c.updatedAt, dueDate: nil))
+                                     date: c.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("network") {
@@ -1650,7 +1856,7 @@ final class OttoToolExecutor {
                 matches.append(.init(id: n.id, type: "network",
                                      title: n.name.isEmpty ? n.company : n.name,
                                      snippet: n.displayInfo,
-                                     date: n.updatedAt, dueDate: nil))
+                                     date: n.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("company") {
@@ -1658,7 +1864,7 @@ final class OttoToolExecutor {
                 let snippet = [c.type.label, c.location, c.isCustomer ? "Customer" : "", c.formattedCommitment ?? ""]
                     .filter { !$0.isEmpty }.joined(separator: " · ")
                 matches.append(.init(id: c.id, type: "company", title: c.name,
-                                     snippet: snippet, date: c.updatedAt, dueDate: nil))
+                                     snippet: snippet, date: c.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("event") {
@@ -1666,7 +1872,7 @@ final class OttoToolExecutor {
                 let snippet = [e.type.label, e.location, e.status.label, e.dateRangeText]
                     .filter { !$0.isEmpty }.joined(separator: " · ")
                 matches.append(.init(id: e.id, type: "event", title: e.name,
-                                     snippet: snippet, date: e.updatedAt, dueDate: e.startDate))
+                                     snippet: snippet, date: e.updatedAt, dueDate: e.startDate, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("community") {
@@ -1674,7 +1880,7 @@ final class OttoToolExecutor {
                 let snippet = [cm.type.label, cm.location, cm.builderSupportPerk ? "Builder perk" : ""]
                     .filter { !$0.isEmpty }.joined(separator: " · ")
                 matches.append(.init(id: cm.id, type: "community", title: cm.name,
-                                     snippet: snippet, date: cm.updatedAt, dueDate: nil))
+                                     snippet: snippet, date: cm.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("file") {
@@ -1690,7 +1896,7 @@ final class OttoToolExecutor {
                 }()
                 matches.append(.init(id: f.id, type: "file", title: f.name,
                                      snippet: snippet,
-                                     date: f.updatedAt, dueDate: nil))
+                                     date: f.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("x_post") {
@@ -1698,7 +1904,7 @@ final class OttoToolExecutor {
                 let title = "@\(p.authorUsername): \(String(p.text.prefix(60)))"
                 matches.append(.init(id: p.id, type: "x_post", title: title,
                                      snippet: String(p.text.prefix(140)),
-                                     date: p.createdAt, dueDate: nil))
+                                     date: p.createdAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("x_follower") {
@@ -1709,7 +1915,7 @@ final class OttoToolExecutor {
                     : String(fol.bio.prefix(140))
                 matches.append(.init(id: fol.id, type: "x_follower", title: title,
                                      snippet: snippet,
-                                     date: fol.syncUpdatedAt, dueDate: nil))
+                                     date: fol.syncUpdatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         if types.contains("x_dm") {
@@ -1717,7 +1923,7 @@ final class OttoToolExecutor {
                 let title = "DM from @\(dm.senderUsername): \(String(dm.text.prefix(50)))"
                 matches.append(.init(id: dm.id, type: "x_dm", title: title,
                                      snippet: String(dm.text.prefix(140)),
-                                     date: dm.createdAt, dueDate: nil))
+                                     date: dm.createdAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
             }
         }
         for tab in appState.customTabs where types.contains(tab.slug) {
@@ -1729,7 +1935,19 @@ final class OttoToolExecutor {
                     .joined(separator: " · ")
                 matches.append(.init(id: r.id, type: tab.slug, title: r.displayTitle(in: tab),
                                      snippet: String(snippet.prefix(140)),
-                                     date: r.updatedAt, dueDate: nil))
+                                     date: r.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
+            }
+        }
+
+        // AND-with-fallback: when at least one item matched every query
+        // token, drop the partial (any-word) hits; when none did, keep the
+        // any-word hits rather than returning nothing.
+        var matchMode = "all_words"
+        if needle != nil, tokens.count > 1 {
+            if matches.contains(where: { $0.hitAllTokens }) {
+                matches.removeAll { !$0.hitAllTokens }
+            } else if !matches.isEmpty {
+                matchMode = "any_word"
             }
         }
 
@@ -1754,11 +1972,15 @@ final class OttoToolExecutor {
                 case (nil, nil):         return a.date > b.date
                 }
             }
+        case "relevance":
+            // Best score first; recency breaks ties (and orders everything
+            // when there's no query — every score is 0 then).
+            matches.sort { $0.score != $1.score ? $0.score > $1.score : $0.date > $1.date }
         default: // "recent"
             matches.sort { $0.date > $1.date }
         }
 
-        let top = Array(matches.prefix(limit))
+        let top = Array(matches.dropFirst(offset).prefix(limit))
 
         var out: [[String: Any]] = []
         for m in top {
@@ -1770,13 +1992,18 @@ final class OttoToolExecutor {
                 "date": df.string(from: m.date)
             ])
         }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "query": needle ?? "",
             "sort": sortKey,
             "total_matches": matches.count,
             "returned": top.count,
             "items": out
         ]
+        if needle != nil { payload["match_mode"] = matchMode }
+        if offset > 0 { payload["offset"] = offset }
+        if offset + top.count < matches.count {
+            payload["next_offset"] = offset + top.count
+        }
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
         let text = String(data: data, encoding: .utf8) ?? "{}"
         let summary: String = {
@@ -1789,6 +2016,14 @@ final class OttoToolExecutor {
         return ok(text, summary: summary)
     }
 
+    /// Clip a long text field, appending an explicit truncation note so the
+    /// agent knows it can re-fetch with a larger `max_chars`.
+    private func clipped(_ s: String, _ maxChars: Int) -> String {
+        guard s.count > maxChars else { return s }
+        return String(s.prefix(maxChars))
+            + "\n…[truncated — \(s.count - maxChars) more chars; call again with max_chars up to 100000]"
+    }
+
     private func getItem(_ input: [String: Any]) -> ToolResult {
         guard let id = parseUUID(string(input, "id")) else {
             return err("Missing or invalid 'id'.", summary: "Fetch failed")
@@ -1797,6 +2032,9 @@ final class OttoToolExecutor {
             return err("Missing 'type'.", summary: "Fetch failed")
         }
         let df = ISO8601DateFormatter()
+        // Cap on long text fields (meeting content/transcript, email body).
+        // Default keeps responses compact; raise to read a full transcript.
+        let maxChars = min(max(input["max_chars"] as? Int ?? 4_000, 500), 100_000)
         var payload: [String: Any]?
         switch type {
         case "todo":
@@ -1859,7 +2097,8 @@ final class OttoToolExecutor {
                     "overview": m.overview,
                     "action_items": m.actionItems,
                     "participants": m.participants,
-                    "content": String(m.content.prefix(4000))
+                    "content": clipped(m.content, maxChars),
+                    "transcript": m.transcript.map { clipped($0, maxChars) } ?? NSNull()
                 ]
             }
         case "email":
@@ -1870,7 +2109,7 @@ final class OttoToolExecutor {
                     "sender": e.displaySender,
                     "recipients": e.recipients,
                     "received_date": df.string(from: e.receivedDate),
-                    "body": String(e.body.prefix(4000))
+                    "body": clipped(e.body, maxChars)
                 ]
             }
         case "connection":
@@ -2402,6 +2641,457 @@ final class OttoToolExecutor {
         } catch {
             return err(error.localizedDescription, summary: "Upload failed")
         }
+    }
+
+    // MARK: - Creative canvas (node workflows over fal.ai)
+
+    private var creative: CreativeCanvasController { CreativeCanvasController.shared }
+
+    private static func creativeJSON(_ payload: [String: Any]) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])) ?? Data()
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    /// Resolves the target workflow (switching to it when needed) or explains
+    /// why it can't. Omitted/empty id = the currently open workflow.
+    private func creativeResolveWorkflow(_ input: [String: Any]) async -> (ok: Bool, error: String?) {
+        await creative.bootstrap()
+        guard let idString = string(input, "workflow_id"), !idString.isEmpty else {
+            return (true, nil)
+        }
+        guard let id = UUID(uuidString: idString) else {
+            return (false, "Invalid workflow_id '\(idString)'.")
+        }
+        if creative.workflow.id == id { return (true, nil) }
+        guard creative.workflows.contains(where: { $0.id == id }) else {
+            return (false, "No workflow with id \(idString). Call creative_list_workflows first.")
+        }
+        creative.switchTo(workflowId: id)
+        guard creative.workflow.id == id else {
+            return (false, "Can't switch canvases while a run is active — wait for it to finish.")
+        }
+        return (true, nil)
+    }
+
+    /// Loads (and caches) the spec for a model node so port-type validation
+    /// and result parsing work. Best-effort — unknown endpoints just skip.
+    private func creativeEnsureSpec(for node: CreativeNode) async {
+        guard node.kind == .model, let endpointId = node.endpointId,
+              creative.specs[endpointId] == nil else { return }
+        if let spec = try? await FalWorkflowAPI.shared.nodeSpec(for: endpointId) {
+            creative.specs[endpointId] = spec
+        }
+    }
+
+    private func creativeListWorkflows(_ input: [String: Any]) async -> ToolResult {
+        await creative.bootstrap()
+        let formatter = ISO8601DateFormatter()
+        let items: [[String: Any]] = creative.workflows.map { wf in
+            [
+                "workflow_id": wf.id.uuidString,
+                "name": wf.name,
+                "nodes": wf.nodes.count,
+                "edges": wf.edges.count,
+                "updated_at": formatter.string(from: wf.updatedAt),
+                "is_current": wf.id == creative.workflow.id
+            ]
+        }
+        let payload: [String: Any] = [
+            "current_workflow_id": creative.workflow.id.uuidString,
+            "workflows": items
+        ]
+        let label = items.count == 1 ? "1 canvas" : "\(items.count) canvases"
+        return ok(Self.creativeJSON(payload), summary: "Listed \(label)")
+    }
+
+    private func creativeCreateWorkflow(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name")?.trimmingCharacters(in: .whitespaces), !name.isEmpty else {
+            return err("Missing required 'name'.", summary: "Create canvas failed")
+        }
+        await creative.bootstrap()
+        guard !creative.anyNodeActive else {
+            return err("A run is active on the current canvas — wait for it to finish before creating a new one.",
+                       summary: "Create canvas failed")
+        }
+        creative.newWorkflow()
+        creative.renameWorkflow(to: name)
+        // Deliberately no auto-navigation: agent builds run in the background
+        // and the user opens the Creative tab themselves if they want to watch.
+        let payload: [String: Any] = [
+            "workflow_id": creative.workflow.id.uuidString,
+            "name": creative.workflow.name
+        ]
+        return ok(Self.creativeJSON(payload), summary: "Created canvas “\(name)”")
+    }
+
+    private func creativeGetWorkflow(_ input: [String: Any]) async -> ToolResult {
+        let resolved = await creativeResolveWorkflow(input)
+        guard resolved.ok else {
+            return err(resolved.error ?? "Unknown workflow.", summary: "Read canvas failed")
+        }
+        let wf = creative.workflow
+        let formatter = ISO8601DateFormatter()
+
+        var nodes: [[String: Any]] = []
+        for node in wf.nodes {
+            await creativeEnsureSpec(for: node)
+            var entry: [String: Any] = [
+                "node_id": node.id,
+                "kind": node.kind.rawValue,
+                "title": node.title
+            ]
+            switch node.kind {
+            case .model:
+                entry["endpoint_id"] = node.endpointId ?? ""
+                entry["params"] = node.params.mapValues(\.anyValue)
+                entry["has_result"] = node.lastResult != nil
+                if let at = node.lastRunAt { entry["last_run_at"] = formatter.string(from: at) }
+                if let spec = creative.spec(for: node) {
+                    entry["inputs"] = spec.inputs.map { param -> [String: Any] in
+                        var p: [String: Any] = [
+                            "key": param.key,
+                            "type": param.kind.rawValue,
+                            "required": param.required
+                        ]
+                        if let edge = wf.edge(into: node.id, param: param.key) {
+                            p["connected_from"] = edge.referenceLabel
+                        }
+                        return p
+                    }
+                    entry["outputs"] = spec.outputs.map {
+                        ["key": $0.key, "type": $0.kind.rawValue] as [String: Any]
+                    }
+                }
+            case .media:
+                if let asset = node.media {
+                    entry["media_kind"] = asset.kind.rawValue
+                    entry["file_name"] = asset.fileName
+                    entry["uploaded_to_fal"] = asset.falURL != nil
+                    entry["outputs"] = [["key": "url", "type": asset.kind.portKind.rawValue]]
+                }
+            }
+            nodes.append(entry)
+        }
+
+        let payload: [String: Any] = [
+            "workflow_id": wf.id.uuidString,
+            "name": wf.name,
+            "nodes": nodes,
+            "edges": wf.edges.map {
+                ["from": $0.fromNode, "from_port": $0.fromPort, "to": $0.toNode, "to_param": $0.toParam]
+            }
+        ]
+        return ok(Self.creativeJSON(payload), summary: "Read canvas “\(wf.name)”")
+    }
+
+    /// Best-effort registry lookup so agent-added nodes get real titles and
+    /// thumbnails on the canvas; falls back to a prettified endpoint id.
+    private func creativeModelSummary(for endpointId: String) async -> CreativeModelSummary {
+        if let page = try? await FalWorkflowAPI.shared.searchModels(
+            query: endpointId.components(separatedBy: "/").last ?? endpointId,
+            categories: [],
+            page: 1
+        ), let hit = page.items.first(where: { $0.id == endpointId }) {
+            return hit
+        }
+        let pretty = endpointId
+            .components(separatedBy: "/")
+            .dropFirst()
+            .joined(separator: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .capitalized
+        return CreativeModelSummary(
+            id: endpointId,
+            title: pretty.isEmpty ? endpointId : pretty,
+            category: "unknown",
+            shortDescription: "",
+            thumbnailUrl: nil
+        )
+    }
+
+    private func creativeEditWorkflow(_ input: [String: Any]) async -> ToolResult {
+        let resolved = await creativeResolveWorkflow(input)
+        guard resolved.ok else {
+            return err(resolved.error ?? "Unknown workflow.", summary: "Edit canvas failed")
+        }
+        guard let operations = input["operations"] as? [[String: Any]], !operations.isEmpty else {
+            return err("Missing 'operations' array.", summary: "Edit canvas failed")
+        }
+        guard !creative.anyNodeActive else {
+            return err("A run is active on this canvas — wait for it to finish before editing.",
+                       summary: "Edit canvas failed")
+        }
+
+        var refs: [String: String] = [:]
+        func resolveNodeId(_ raw: String?) -> String? {
+            guard let raw, !raw.isEmpty else { return nil }
+            let id = refs[raw] ?? raw
+            return creative.workflow.node(id) != nil ? id : nil
+        }
+        func applyParams(_ params: [String: Any], to nodeId: String) {
+            for (key, value) in params {
+                if value is NSNull {
+                    creative.setParam(nodeId: nodeId, key: key, value: nil)
+                } else {
+                    creative.setParam(nodeId: nodeId, key: key, value: JSONValue.from(any: value))
+                }
+            }
+        }
+
+        var results: [[String: Any]] = []
+        var autoLayoutIds: Set<String> = []
+        var stopped = false
+
+        for (index, op) in operations.enumerated() {
+            guard !stopped else { break }
+            let kind = (op["op"] as? String) ?? ""
+            func fail(_ message: String) {
+                results.append(["index": index, "op": kind, "ok": false, "error": message])
+                stopped = true
+            }
+
+            switch kind {
+            case "add_node":
+                guard let endpointId = (op["endpoint_id"] as? String)?.trimmingCharacters(in: .whitespaces),
+                      !endpointId.isEmpty else {
+                    fail("add_node needs 'endpoint_id'."); continue
+                }
+                let spec: CreativeNodeSpec
+                do {
+                    spec = try await FalWorkflowAPI.shared.nodeSpec(for: endpointId)
+                } catch {
+                    fail("Unknown endpoint '\(endpointId)' (\(error.localizedDescription)). Find ids with genmedia_search_models.")
+                    continue
+                }
+                creative.specs[endpointId] = spec
+
+                var position: CGPoint?
+                if let p = op["position"] as? [String: Any],
+                   let x = (p["x"] as? NSNumber)?.doubleValue,
+                   let y = (p["y"] as? NSNumber)?.doubleValue {
+                    position = CGPoint(x: x, y: y)
+                }
+                let summary = await creativeModelSummary(for: endpointId)
+                let node = creative.addModelNode(summary, at: position ?? CGPoint(x: 80, y: 80))
+                if position == nil { autoLayoutIds.insert(node.id) }
+                if let params = op["params"] as? [String: Any] {
+                    applyParams(params, to: node.id)
+                }
+                if let ref = op["ref"] as? String, !ref.isEmpty {
+                    refs[ref] = node.id
+                }
+                results.append(["index": index, "op": kind, "ok": true, "node_id": node.id])
+
+            case "set_params":
+                guard let nodeId = resolveNodeId(op["node"] as? String) else {
+                    fail("set_params: unknown node '\(op["node"] as? String ?? "")'."); continue
+                }
+                guard let params = op["params"] as? [String: Any], !params.isEmpty else {
+                    fail("set_params needs a 'params' object."); continue
+                }
+                applyParams(params, to: nodeId)
+                results.append(["index": index, "op": kind, "ok": true, "node_id": nodeId])
+
+            case "connect":
+                guard let fromId = resolveNodeId(op["from"] as? String),
+                      let toId = resolveNodeId(op["to"] as? String) else {
+                    fail("connect: unknown 'from'/'to' node."); continue
+                }
+                guard let fromPort = op["from_port"] as? String, !fromPort.isEmpty,
+                      let toParam = op["to_param"] as? String, !toParam.isEmpty else {
+                    fail("connect needs 'from_port' and 'to_param'."); continue
+                }
+                // Specs drive type checks — make sure both ends are loaded.
+                if let n = creative.workflow.node(fromId) { await creativeEnsureSpec(for: n) }
+                if let n = creative.workflow.node(toId) { await creativeEnsureSpec(for: n) }
+                if let error = creative.connectValidated(
+                    from: CreativePortRef(nodeId: fromId, portKey: fromPort, side: .output),
+                    to: CreativePortRef(nodeId: toId, portKey: toParam, side: .input)
+                ) {
+                    fail("connect \(fromId).\(fromPort) → \(toId).\(toParam): \(error)")
+                    continue
+                }
+                results.append(["index": index, "op": kind, "ok": true])
+
+            case "disconnect":
+                guard let nodeId = resolveNodeId(op["node"] as? String) else {
+                    fail("disconnect: unknown node."); continue
+                }
+                guard let param = op["param"] as? String, !param.isEmpty else {
+                    fail("disconnect needs 'param'."); continue
+                }
+                creative.disconnectParam(nodeId: nodeId, param: param)
+                results.append(["index": index, "op": kind, "ok": true])
+
+            case "delete_node":
+                guard let nodeId = resolveNodeId(op["node"] as? String) else {
+                    fail("delete_node: unknown node."); continue
+                }
+                creative.deleteNode(nodeId)
+                autoLayoutIds.remove(nodeId)
+                results.append(["index": index, "op": kind, "ok": true])
+
+            case "rename_workflow":
+                guard let name = (op["name"] as? String)?.trimmingCharacters(in: .whitespaces), !name.isEmpty else {
+                    fail("rename_workflow needs 'name'."); continue
+                }
+                creative.renameWorkflow(to: name)
+                results.append(["index": index, "op": kind, "ok": true])
+
+            default:
+                fail("Unknown op '\(kind)'. Valid: add_node, set_params, connect, disconnect, delete_node, rename_workflow.")
+            }
+        }
+
+        if !autoLayoutIds.isEmpty {
+            creative.autoLayout(nodeIds: autoLayoutIds)
+        }
+
+        var payload: [String: Any] = [
+            "workflow_id": creative.workflow.id.uuidString,
+            "applied": results
+        ]
+        if stopped {
+            payload["note"] = "Stopped at the first failed operation; later operations were not applied."
+        }
+        let appliedCount = results.filter { ($0["ok"] as? Bool) == true }.count
+        if stopped && appliedCount == 0 {
+            return err(Self.creativeJSON(payload), summary: "Edit canvas failed")
+        }
+        return ok(Self.creativeJSON(payload), summary: "Edited canvas (\(appliedCount) op\(appliedCount == 1 ? "" : "s"))")
+    }
+
+    private func creativeRun(_ input: [String: Any]) async -> ToolResult {
+        let resolved = await creativeResolveWorkflow(input)
+        guard resolved.ok else {
+            return err(resolved.error ?? "Unknown workflow.", summary: "Run canvas failed")
+        }
+        let wf = creative.workflow
+        guard !wf.nodes.isEmpty else {
+            return err("The canvas is empty — add nodes with creative_edit_workflow first.",
+                       summary: "Run canvas failed")
+        }
+
+        var targets: Set<String>
+        if let requested = input["node_ids"] as? [String], !requested.isEmpty {
+            targets = []
+            for raw in requested {
+                guard wf.node(raw) != nil else {
+                    return err("Unknown node id '\(raw)'. Use ids from creative_get_workflow.",
+                               summary: "Run canvas failed")
+                }
+                targets.insert(raw)
+            }
+        } else {
+            targets = Set(wf.nodes.map(\.id))
+        }
+
+        let (ran, runError) = await creative.runNodesAndWait(targets)
+        if let runError {
+            return err(runError, summary: "Run canvas failed")
+        }
+
+        // Sinks of this run = executed nodes whose output no other executed
+        // node consumes — their media are "the result" and flow to chat.
+        let consumedWithinRun = Set(
+            creative.workflow.edges
+                .filter { ran.contains($0.fromNode) && ran.contains($0.toNode) }
+                .map(\.fromNode)
+        )
+        let sinkIds = ran.subtracting(consumedWithinRun)
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("otto-creative-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        var nodeReports: [[String: Any]] = []
+        var files: [[String: Any]] = []
+        var textOutputs: [[String: Any]] = []
+        var succeeded = 0
+        var mediaBudget = 8   // keep the chat readable on multi-output graphs
+
+        for nodeId in ran.sorted() {
+            guard let node = creative.workflow.node(nodeId) else { continue }
+            var report: [String: Any] = ["node_id": nodeId, "title": node.title]
+
+            switch creative.runStates[nodeId] ?? .idle {
+            case .succeeded(let duration):
+                succeeded += 1
+                report["status"] = "succeeded"
+                report["duration_seconds"] = (duration * 10).rounded() / 10
+            case .failed(let message):
+                report["status"] = "failed"
+                report["error"] = message
+            case .skipped(let reason):
+                report["status"] = "skipped"
+                report["error"] = reason
+            default:
+                report["status"] = "cancelled"
+            }
+
+            if sinkIds.contains(nodeId), node.kind == .model, let result = node.lastResult {
+                let items = CreativeResultItems(
+                    result: result,
+                    outputs: creative.spec(for: node)?.outputs ?? [],
+                    nodeTitle: node.title
+                )
+                for text in items.texts {
+                    textOutputs.append([
+                        "node_id": nodeId,
+                        "port": text.key,
+                        "text": String(text.value.prefix(4000))
+                    ])
+                }
+                for media in items.medias {
+                    guard mediaBudget > 0 else { break }
+                    do {
+                        let temp = try await FalWorkflowAPI.shared.download(from: media.urlString)
+                        var ext = URL(string: media.urlString)?.pathExtension ?? ""
+                        if ext.isEmpty {
+                            switch media.kind {
+                            case .image: ext = "png"
+                            case .video: ext = "mp4"
+                            case .audio: ext = "mp3"
+                            case .file:  ext = "bin"
+                            }
+                        }
+                        let staged = scratch.appendingPathComponent("\(node.title.prefix(40))-\(files.count + 1).\(ext)")
+                        try? FileManager.default.removeItem(at: staged)
+                        try FileManager.default.moveItem(at: temp, to: staged)
+                        var file = try await appState.importFile(from: staged)
+                        file.notes = "Creative canvas: \(creative.workflow.name)\nNode: \(node.title) (\(node.endpointId ?? ""))"
+                        file.tags = ["creative"]
+                        await appState.updateFile(file)
+                        mediaBudget -= 1
+                        files.append([
+                            "file_id": file.id.uuidString,
+                            "node_id": nodeId,
+                            "name": file.name,
+                            "file_type": file.fileType.rawValue
+                        ])
+                    } catch {
+                        report["media_import_error"] = error.localizedDescription
+                    }
+                }
+            }
+            nodeReports.append(report)
+        }
+
+        let payload: [String: Any] = [
+            "workflow_id": creative.workflow.id.uuidString,
+            "ran": nodeReports,
+            "files": files,
+            "text_outputs": textOutputs
+        ]
+        let failedCount = ran.count - succeeded
+        let summaryLine = failedCount == 0
+            ? "Ran \(ran.count) node\(ran.count == 1 ? "" : "s") on “\(creative.workflow.name)”"
+            : "Ran \(ran.count) nodes — \(failedCount) failed"
+        if succeeded == 0 {
+            return err(Self.creativeJSON(payload), summary: "Run canvas failed")
+        }
+        return ok(Self.creativeJSON(payload), summary: summaryLine)
     }
 
     // MARK: - Habits

@@ -42,6 +42,11 @@ struct ChatUIEntry: Identifiable {
         /// flips to true once the user clicks a button so the buttons
         /// fade out and stop accepting input.
         case approvalRequest(approvalId: String, toolName: String, argsSummary: String, resolved: Bool)
+        /// Subtle telemetry caption under an assistant turn — duration, tool
+        /// count, tokens/cost where the backend reports them.
+        case turnStats(TurnStats, toolCalls: Int)
+        /// Degraded-turn warning (e.g. tools unavailable) — dim caption row.
+        case notice(String)
 
         var isUser: Bool { if case .userText = self { return true }; return false }
         var isToolStep: Bool { if case .toolStep = self { return true }; return false }
@@ -184,6 +189,13 @@ final class ChatRunController {
                     self.pendingBlocks = []
                     self.streamBuffer = ""
                     self.isRunning = false
+                    // Telemetry caption for the turn that just finished.
+                    if let last = updated.last, last.role == "assistant", let stats = last.stats {
+                        let toolCalls = last.blocks.filter {
+                            if case .toolUse = $0 { return true }; return false
+                        }.count
+                        self.entries.append(ChatUIEntry(kind: .turnStats(stats, toolCalls: toolCalls)))
+                    }
                 }
                 // Persist the canonical session (turns + tool calls) and the
                 // legacy flattened askHistory in parallel so old code paths
@@ -547,6 +559,8 @@ final class ChatRunController {
                     resolved: false
                 )
             ))
+        case .notice(let text):
+            entries.append(ChatUIEntry(kind: .notice(text)))
         }
     }
 
@@ -648,6 +662,9 @@ final class ChatRunController {
                 }.joined(separator: "\n")
                 out.append(ChatUIEntry(kind: .userText(text: text, attachments: turn.attachments)))
             case "assistant":
+                let toolCallCount = turn.blocks.filter {
+                    if case .toolUse = $0 { return true }; return false
+                }.count
                 for block in turn.blocks {
                     switch block {
                     case .text(let s):
@@ -772,6 +789,9 @@ final class ChatRunController {
                             )
                         }
                     }
+                }
+                if let stats = turn.stats {
+                    out.append(ChatUIEntry(kind: .turnStats(stats, toolCalls: toolCallCount)))
                 }
             default:
                 break

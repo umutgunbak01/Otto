@@ -40,7 +40,9 @@ final class MeetingPrepService: @unchecked Sendable {
     // MARK: - Dependencies
 
     private weak var appState: AppState?
-    private let claudeCLI = ClaudeCLIService.shared
+    /// Routed through `AgentService` so prep follows the user's selected
+    /// backend (Claude / Codex / Hermes) instead of hardcoding one CLI.
+    private let agent = AgentService.shared
     private let notifications = NotificationService.shared
 
     // MARK: - State
@@ -108,10 +110,24 @@ final class MeetingPrepService: @unchecked Sendable {
         // OttoToolExecutor is @MainActor-isolated — hop to construct it.
         let executor = await MainActor.run { OttoToolExecutor(appState: appState) }
 
+        // Skip quietly when the selected backend isn't usable (not signed in
+        // / not installed) — same guard the daily briefing applies.
+        let usable: Bool = {
+            switch AgentBackend.current {
+            case .claude: return ClaudeAuthService.shared.effectiveAuthMode() != .none
+            case .codex:  return CodexAuthService.shared.effectiveAuthMode() != .none
+            case .hermes: return HermesInstallation.binaryPath() != nil
+            }
+        }()
+        guard usable else {
+            NSLog("[MeetingPrep] backend %@ not usable — skipping prep for %@", AgentBackend.current.rawValue, event.title)
+            return
+        }
+
         let briefText: String
         do {
             let userTurn = ChatTurn(role: "user", blocks: [.text(prompt)])
-            let turns = try await claudeCLI.streamChatWithTools(
+            let turns = try await agent.streamChatWithTools(
                 sessionKey: UUID(),   // one-shot background run, own key
                 turns: [userTurn],
                 systemPrompt: systemPrompt,
@@ -125,7 +141,7 @@ final class MeetingPrepService: @unchecked Sendable {
                 return nil
             }.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         } catch {
-            NSLog("[MeetingPrep] Claude run failed for \(event.title): \(error.localizedDescription)")
+            NSLog("[MeetingPrep] agent run failed for \(event.title): \(error.localizedDescription)")
             return
         }
 

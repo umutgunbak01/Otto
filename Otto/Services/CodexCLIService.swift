@@ -41,6 +41,11 @@ actor CodexCLIService {
     /// ends. Access is serialized by the actor.
     private var activeProcesses: [UUID: Process] = [:]
 
+    /// Abort a turn when the CLI produces no stdout for this long — a wedged
+    /// subprocess otherwise hangs the turn forever (waitUntilExit has no
+    /// deadline). Generous: silent reasoning stretches are legitimate.
+    private static let stallTimeout: TimeInterval = 300
+
     /// `nc` is used as a stdio ↔ Unix-socket bridge so the Codex CLI can talk
     /// to Otto's MCP server (which lives at a Unix socket path) without us
     /// implementing the streamable-HTTP MCP transport.
@@ -84,6 +89,7 @@ actor CodexCLIService {
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> [ChatTurn] {
 
+        let turnStart = Date()
         let authMode = CodexAuthService.shared.effectiveAuthMode()
         guard authMode != .none else {
             throw CLIError.notSignedIn
@@ -144,13 +150,18 @@ actor CodexCLIService {
         // so we inject an `mcp_servers.otto` entry that launches `nc -U` and
         // points it at our Unix socket. Both Claude and Codex consume the
         // same MCP server, so the tool surface is identical.
-        if let socketPath = OttoMCPServer.shared.ensureStarted() {
+        // ensureStarted is idempotent — the second call is a cheap one-shot
+        // retry if the first bind failed.
+        if let socketPath = OttoMCPServer.shared.ensureStarted() ?? OttoMCPServer.shared.ensureStarted() {
             args.append(contentsOf: [
                 "-c", "mcp_servers.otto.command=\"\(netcatPath)\"",
                 "-c", "mcp_servers.otto.args=[\"-U\",\"\(socketPath)\"]"
             ])
         } else {
             NSLog("[CodexCLI] MCP server unavailable — Otto tools disabled this turn")
+            await MainActor.run {
+                onEvent(.notice("Otto's tools are unavailable this turn — the internal MCP server failed to start, so this reply can't read or change your data. Web tools still work."))
+            }
         }
 
         // Also inject each user-registered Supabase project as a
@@ -275,14 +286,36 @@ actor CodexCLIService {
         // until process exit on the error path.
         defer { stderrHandle.readabilityHandler = nil }
 
+        // Stall watchdog — waitUntilExit has no deadline, so a wedged CLI
+        // otherwise pins this turn until the user hits Stop. Touched on every
+        // stdout chunk; silence past the timeout kills the subprocess and the
+        // turn throws `.timeout` instead of `.crashed`.
+        let clock = StallClock()
+        let watchdog = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if Task.isCancelled { return }
+                if clock.secondsSinceTouch() > Self.stallTimeout {
+                    clock.markStalled()
+                    proc.terminate()
+                    return
+                }
+            }
+        }
+        defer { watchdog.cancel() }
+
         let parsed = try await parseStreamJSON(
             stdout: stdoutPipe.fileHandleForReading,
+            clock: clock,
             onDelta: onDelta,
             onEvent: onEvent
         )
 
         proc.waitUntilExit()
 
+        if clock.wasStalled {
+            throw CLIError.timeout
+        }
         if proc.terminationStatus != 0 {
             let msg = String(data: stderrBuffer, encoding: .utf8) ?? "(no stderr)"
             NSLog("[CodexCLI] exited \(proc.terminationStatus): \(msg)")
@@ -311,7 +344,15 @@ actor CodexCLIService {
         // Persist the full block log (text + toolUse + toolResult) — same as
         // the Hermes path — so reopened sessions rebuild tool chips, preview
         // cards, and media previews instead of just the prose.
-        updated.append(ChatTurn(role: "assistant", blocks: blocks))
+        let stats = TurnStats(
+            durationMs: Int(Date().timeIntervalSince(turnStart) * 1000),
+            backend: AgentBackend.codex.rawValue,
+            model: AgentService.Codex.getModel(),
+            inputTokens: parsed.usage?.input,
+            outputTokens: parsed.usage?.output,
+            costUSD: nil
+        )
+        updated.append(ChatTurn(role: "assistant", blocks: blocks, stats: stats))
         return updated
     }
 
@@ -395,14 +436,22 @@ actor CodexCLIService {
         return out.joined(separator: "\n\n")
     }
 
+    /// Token usage reported by the terminal `turn.completed` event.
+    struct StreamUsage {
+        var input: Int
+        var output: Int
+    }
+
     /// Everything one CLI run produced: the concatenated message text (voice
     /// TTS + fallback), the ordered canonical blocks (text segments + tool
-    /// calls + tool results, mirroring what Hermes persists), and any text
-    /// that never got folded into a block (degenerate streams only).
+    /// calls + tool results, mirroring what Hermes persists), any text
+    /// that never got folded into a block (degenerate streams only), and
+    /// usage stats for turn telemetry.
     private struct ParsedTurn {
         let text: String
         let blocks: [ChatBlock]
         let unfinalized: String
+        var usage: StreamUsage?
     }
 
     /// Mutable parse state threaded through `parseEvent` line by line.
@@ -434,9 +483,10 @@ actor CodexCLIService {
     ///     `agent_reasoning` updates stream a growing summary which makes
     ///     a decent "thinking…" indicator even though Codex doesn't
     ///     stream the final agent_message per-token.
-    ///   - `turn.completed` — usage stats, no-op
+    ///   - `turn.completed` — token usage, captured for turn telemetry
     private func parseStreamJSON(
         stdout: FileHandle,
+        clock: StallClock? = nil,
         onDelta: @escaping @MainActor (String) -> Void,
         onEvent: @escaping @MainActor (ChatEvent) -> Void
     ) async throws -> ParsedTurn {
@@ -445,10 +495,12 @@ actor CodexCLIService {
         var blocks: [ChatBlock] = []
         var unfinalized = ""
         var state = ParserState()
+        var usage: StreamUsage?
 
         while true {
             let chunk = try await readChunk(from: stdout)
             if chunk.isEmpty { break }
+            clock?.touch()
             guard let s = String(data: chunk, encoding: .utf8) else { continue }
             leftover += s
             while let newlineRange = leftover.range(of: "\n") {
@@ -464,6 +516,7 @@ actor CodexCLIService {
                     }
                     blocks.append(contentsOf: parsed.blocks)
                     if parsed.finalizedSegment { unfinalized = "" }
+                    if let u = parsed.usage { usage = u }
                     for ev in parsed.events {
                         let captured = ev
                         await MainActor.run { onEvent(captured) }
@@ -471,7 +524,7 @@ actor CodexCLIService {
                 }
             }
         }
-        return ParsedTurn(text: textBuffer, blocks: blocks, unfinalized: unfinalized)
+        return ParsedTurn(text: textBuffer, blocks: blocks, unfinalized: unfinalized, usage: usage)
     }
 
     private func readChunk(from handle: FileHandle) async throws -> Data {
@@ -491,6 +544,7 @@ actor CodexCLIService {
         var events: [ChatEvent] = []
         var blocks: [ChatBlock] = []
         var finalizedSegment: Bool = false
+        var usage: StreamUsage?
     }
 
     /// Extract deltas, ChatEvents, and canonical blocks from one JSONL line.
@@ -574,7 +628,18 @@ actor CodexCLIService {
             if delta.isEmpty { return ParsedEvent() }
             return ParsedEvent(events: [.thinkingDelta(delta)])
 
-        case "thread.started", "turn.started", "turn.completed":
+        case "turn.completed":
+            // Usage stats for turn telemetry. Input is fresh + cached —
+            // summed so the stat reflects the full context consumed.
+            guard let usage = obj["usage"] as? [String: Any] else { return ParsedEvent() }
+            let input = (usage["input_tokens"] as? Int ?? 0)
+                + (usage["cached_input_tokens"] as? Int ?? 0)
+            let output = usage["output_tokens"] as? Int ?? 0
+            var out = ParsedEvent()
+            out.usage = StreamUsage(input: input, output: output)
+            return out
+
+        case "thread.started", "turn.started":
             return ParsedEvent()
 
         default:

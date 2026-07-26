@@ -106,6 +106,11 @@ final class AppState {
     var chatSessions: [ChatSession] = []
     var activeChatSessionId: UUID?
 
+    // Persistent agent memory — durable facts / preferences / standing
+    // instructions injected into every system prompt. Curated by the agent
+    // via `remember` / `update_memory` and by the user in Settings → Agent.
+    var agentMemories: [AgentMemoryEntry] = []
+
 
     // UI State
     // Assigning a built-in tab always leaves custom-tab mode — every existing
@@ -312,6 +317,7 @@ final class AppState {
             migrateCustomRecordCollectionIds()
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
+            agentMemories = store.agentMemories
             domainTags = store.domainTags
             importedMeetings = store.importedMeetings
             blockedSenders = store.blockedSenders
@@ -1113,6 +1119,9 @@ final class AppState {
         )
         customTabs.append(tab)
         try? await persistence.updateCustomTabs(customTabs)
+        // New tab → new generated create_/update_ tools; tell long-lived MCP
+        // clients (Hermes) to re-fetch the catalogue mid-session.
+        OttoMCPServer.shared.notifyToolsListChanged()
         return tab
     }
 
@@ -1179,6 +1188,9 @@ final class AppState {
 
         try? await persistence.updateCustomTabs(customTabs)
         if recordsChanged { try? await persistence.updateCustomRecords(customRecords) }
+        // Field / option / collection changes reshape the generated tool
+        // schemas — broadcast so long-lived MCP clients re-list.
+        OttoMCPServer.shared.notifyToolsListChanged()
     }
 
     @MainActor
@@ -1197,6 +1209,7 @@ final class AppState {
         customRecords.removeAll { $0.tabId == tab.id }
         try? await persistence.updateCustomTabs(customTabs)
         try? await persistence.updateCustomRecords(customRecords)
+        OttoMCPServer.shared.notifyToolsListChanged()
     }
 
     // MARK: - Custom Tab Blocks
@@ -1622,6 +1635,29 @@ final class AppState {
         if let exact = active.first(where: { $0.title.lowercased() == q }) { return exact }
         if let prefix = active.first(where: { $0.title.lowercased().hasPrefix(q) }) { return prefix }
         return active.first(where: { $0.title.lowercased().contains(q) })
+    }
+
+    // MARK: - Agent Memory Operations
+
+    @MainActor
+    func addAgentMemory(_ entry: AgentMemoryEntry) async {
+        agentMemories.append(entry)
+        try? await persistence.updateAgentMemories(agentMemories)
+    }
+
+    @MainActor
+    func updateAgentMemory(_ entry: AgentMemoryEntry) async {
+        guard let idx = agentMemories.firstIndex(where: { $0.id == entry.id }) else { return }
+        var updated = entry
+        updated.updatedAt = Date()
+        agentMemories[idx] = updated
+        try? await persistence.updateAgentMemories(agentMemories)
+    }
+
+    @MainActor
+    func deleteAgentMemory(id: UUID) async {
+        agentMemories.removeAll { $0.id == id }
+        try? await persistence.updateAgentMemories(agentMemories)
     }
 
     // MARK: - Ask History Operations

@@ -301,49 +301,32 @@ actor AgentService {
         - When the best answer to a request is a live webpage (music to play, a news article, a booking page, a reference URL), call `open_url` with an https URL to open it in the user's default browser. Construct a sensible search URL (youtube.com/results?search_query=…, google.com/search?q=…) if you don't have a specific canonical link. Only call this when the user is clearly asking for something actionable on the web — don't volunteer URLs for every question.
         - For "world status" / news-briefing phrases — "what's going on in the world", "world monitor", "monitor the situation", "brief me", "morning briefing", "catch me up on the news" — this is a MUST-USE-WEB-TOOLS situation. Immediately call WebSearch (e.g. "top world news today") to get current headlines. Pick the 1–2 most important stories. Call `open_url` with the URL of the single most important article so it opens in the user's browser. Then deliver a crisp 2–3 sentence spoken summary covering just those 1–2 stories. Never decline by saying you can't access news — you can.
         - Only create items the user clearly asks for — don't volunteer extras.
+        - PERSISTENT MEMORY: you carry a '## Persistent memory' list (below, when non-empty) into every conversation. When the user states a durable preference, a standing instruction, or a lasting fact about themselves / their people / their projects — or corrects how you did something — call `remember` (one standalone sentence per memory). When an existing memory is wrong or superseded, call `update_memory` with its id. Don't memorize one-off task details or anything already stored as an item.
+        - PAST CONVERSATIONS: when the user references an earlier chat ("what did we decide about X", "that plan from last week"), call `search_sessions`, then `get_session` on the best hit — don't guess from a cold start.
         """)
 
-        // Custom tabs — user-defined tables, each with generated CRUD tools.
-        if !appState.customTabs.isEmpty {
+        // Persistent agent memory — the durable context layer. Shown with ids
+        // so the agent can update/delete entries it decides are stale.
+        if !appState.agentMemories.isEmpty {
             var section: [String] = []
-            section.append("### Existing custom tabs")
-            section.append("Rows: `add_tab_records`/`update_tab_record` (generic, take a `collection` param on multi-collection tabs; single-collection tabs also have generated `create_<slug>`/`update_<slug>` tools); `delete_item(type=\"<slug>\")` removes one; find rows via `search_items(types=[\"<slug>\"])` or `grep_data` on the tab's CSV (single collection: `custom_<slug>.csv`; multiple: `custom_<slug>__<collection>.csv`). Tab shape/dashboard: `get_tab`, `update_tab`, `set_tab_blocks`, `update_tab_block`. Custom-tab records do NOT support otto:// inline links or attach_item_preview — reference them by title in plain prose.")
-            func columnsDoc(_ collection: TabCollection) -> String {
-                collection.fieldKeys().map { col -> String in
-                    switch col.field.kind {
-                    case .singleSelect:
-                        return "\(col.key) (one of: \(col.field.options.map(\.label).joined(separator: "|")))"
-                    case .multiSelect:
-                        return "\(col.key) (any of: \(col.field.options.map(\.label).joined(separator: "|")))"
-                    default:
-                        return "\(col.key) (\(col.field.kind.label.lowercased()))"
-                    }
-                }.joined(separator: ", ")
-            }
-            for tab in appState.customTabs {
-                let count = appState.customRecords.filter { $0.tabId == tab.id }.count
-                var line = "- \"\(tab.name)\" — slug `\(tab.slug)`, layout \(tab.layout.rawValue), \(count) record\(count == 1 ? "" : "s")."
-                if tab.collections.count == 1, let only = tab.collections.first {
-                    let columns = columnsDoc(only)
-                    if !columns.isEmpty { line += " Columns: \(columns)." }
-                } else {
-                    for collection in tab.sortedCollections {
-                        line += " Collection `\(collection.key)` (\(collection.name)): \(columnsDoc(collection))."
-                    }
-                }
-                if !tab.blocks.isEmpty {
-                    line += " Dashboard blocks: \(tab.blocks.map { "\($0.id) (\($0.typeName))" }.joined(separator: ", "))."
-                }
-                section.append(line)
+            section.append("## Persistent memory")
+            section.append("Durable notes you saved in earlier conversations (curate with `remember` / `update_memory`):")
+            for m in appState.agentMemories.sorted(by: { $0.createdAt < $1.createdAt }).suffix(150) {
+                section.append("- [\(m.category.rawValue)] \(m.content) (id: \(m.id.uuidString))")
             }
             parts.append("\n" + section.joined(separator: "\n"))
         }
 
+        // Custom tabs — user-defined tables, each with generated CRUD tools.
+        if let tabsSection = Self.customTabsSection(from: appState) {
+            parts.append("\n" + tabsSection)
+        }
+
         // Data workspace — the CLI backends run in a local working directory
         // that ClaudeCLIService / CodexCLIService populate with per-tab
-        // snapshot files (see AgentWorkspaceExporter). Hermes runs remotely
-        // over SSH and never sees those files, so it reaches the same tables
-        // through the `grep_data` MCP tool instead.
+        // snapshot files (see AgentWorkspaceExporter). Hermes is a local
+        // sibling process but has its own working dir without those files,
+        // so it reaches the same tables through the `grep_data` MCP tool.
         let workspaceAccess: AgentWorkspaceExporter.Access =
             AgentBackend.current == .hermes ? .mcpGrep : .localFiles
         if let workspace = AgentWorkspaceExporter.promptSection(from: appState, access: workspaceAccess) {
@@ -494,5 +477,65 @@ actor AgentService {
     nonisolated private func formatHabitNumber(_ n: Double) -> String {
         if n == n.rounded() { return String(Int(n)) }
         return String(format: "%.1f", n)
+    }
+
+    /// The "### Existing custom tabs" manifest — tab slugs, layouts, columns,
+    /// dashboard block ids. Factored out of `buildSystemPrompt` because the
+    /// Hermes backend also re-sends it mid-session as a context refresher when
+    /// tabs change (its long-lived session otherwise keeps a manifest frozen
+    /// at session start). Call on the MainActor (reads AppState).
+    nonisolated static func customTabsSection(from appState: AppState) -> String? {
+        guard !appState.customTabs.isEmpty else { return nil }
+        var section: [String] = []
+        section.append("### Existing custom tabs")
+        section.append("Rows: `add_tab_records`/`update_tab_record` (generic, take a `collection` param on multi-collection tabs; single-collection tabs also have generated `create_<slug>`/`update_<slug>` tools); `delete_item(type=\"<slug>\")` removes one; find rows via `search_items(types=[\"<slug>\"])` or `grep_data` on the tab's CSV (single collection: `custom_<slug>.csv`; multiple: `custom_<slug>__<collection>.csv`). Tab shape/dashboard: `get_tab`, `update_tab`, `set_tab_blocks`, `update_tab_block`. Custom-tab records do NOT support otto:// inline links or attach_item_preview — reference them by title in plain prose.")
+        func columnsDoc(_ collection: TabCollection) -> String {
+            collection.fieldKeys().map { col -> String in
+                switch col.field.kind {
+                case .singleSelect:
+                    return "\(col.key) (one of: \(col.field.options.map(\.label).joined(separator: "|")))"
+                case .multiSelect:
+                    return "\(col.key) (any of: \(col.field.options.map(\.label).joined(separator: "|")))"
+                default:
+                    return "\(col.key) (\(col.field.kind.label.lowercased()))"
+                }
+            }.joined(separator: ", ")
+        }
+        for tab in appState.customTabs {
+            let count = appState.customRecords.filter { $0.tabId == tab.id }.count
+            var line = "- \"\(tab.name)\" — slug `\(tab.slug)`, layout \(tab.layout.rawValue), \(count) record\(count == 1 ? "" : "s")."
+            if tab.collections.count == 1, let only = tab.collections.first {
+                let columns = columnsDoc(only)
+                if !columns.isEmpty { line += " Columns: \(columns)." }
+            } else {
+                for collection in tab.sortedCollections {
+                    line += " Collection `\(collection.key)` (\(collection.name)): \(columnsDoc(collection))."
+                }
+            }
+            if !tab.blocks.isEmpty {
+                line += " Dashboard blocks: \(tab.blocks.map { "\($0.id) (\($0.typeName))" }.joined(separator: ", "))."
+            }
+            section.append(line)
+        }
+        return section.joined(separator: "\n")
+    }
+
+    /// One-line "now" stamp for mid-session context refreshers. The system
+    /// prompt's date/time freezes at Hermes session start; this line rides
+    /// along with each later user message so "today" / "in 2 hours" resolve
+    /// against reality instead of the seed timestamp.
+    nonisolated static func nowStamp() -> String {
+        let tz = TimeZone.current
+        let offsetSec = tz.secondsFromGMT(for: Date())
+        let sign = offsetSec >= 0 ? "+" : "-"
+        let absSec = abs(offsetSec)
+        let offsetStr = String(format: "%@%02d:%02d", sign, absSec / 3600, (absSec % 3600) / 60)
+        let localIsoFmt = ISO8601DateFormatter()
+        localIsoFmt.timeZone = tz
+        localIsoFmt.formatOptions = [.withInternetDateTime]
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        return "Now: \(df.string(from: Date())) local (\(tz.identifier), UTC\(offsetStr)) — ISO8601 \(localIsoFmt.string(from: Date())). Resolve relative dates against THIS, not earlier timestamps in the session."
     }
 }
