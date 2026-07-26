@@ -7,6 +7,7 @@ struct OttoSidebar: View {
     @Environment(AppState.self) private var appState
     @Binding var showingHome: Bool
     @Binding var showingMap: Bool
+    @Binding var showingCreative: Bool
     @Binding var showingSettings: Bool
     @Binding var showingIntegrations: Bool
 
@@ -30,8 +31,8 @@ struct OttoSidebar: View {
                         systemImage: "house",
                         label: "Home",
                         count: nil,
-                        isActive: showingHome && !showingMap,
-                        action: { showingHome = true; showingMap = false }
+                        isActive: showingHome && !showingMap && !showingCreative,
+                        action: { showingHome = true; showingMap = false; showingCreative = false }
                     )
                     .padding(.top, 2)
 
@@ -40,7 +41,15 @@ struct OttoSidebar: View {
                         label: "Map",
                         count: nil,
                         isActive: showingMap,
-                        action: { showingMap = true; showingHome = false }
+                        action: { showingMap = true; showingHome = false; showingCreative = false }
+                    )
+
+                    OttoNavItem(
+                        systemImage: "wand.and.stars",
+                        label: "Creative",
+                        count: nil,
+                        isActive: showingCreative,
+                        action: { showingCreative = true; showingHome = false; showingMap = false }
                     )
 
                     sectionHeader("Library")
@@ -121,6 +130,7 @@ struct OttoSidebar: View {
                 // Jump straight into the freshly created tab.
                 showingHome = false
                 showingMap = false
+                showingCreative = false
                 appState.selectedCustomTabId = tab.id
             }
         }
@@ -143,12 +153,13 @@ struct OttoSidebar: View {
             systemImage: type.icon,
             label: type.label,
             count: type.count(appState),
-            isActive: !showingHome && !showingMap
+            isActive: !showingHome && !showingMap && !showingCreative
                 && appState.selectedCustomTabId == nil
                 && appState.selectedTab == type.tab,
             action: {
                 showingHome = false
                 showingMap = false
+                showingCreative = false
                 appState.selectedTab = type.tab
             }
         )
@@ -159,10 +170,12 @@ struct OttoSidebar: View {
             systemImage: tab.icon,
             label: tab.name,
             count: appState.customRecords.filter { $0.tabId == tab.id }.count,
-            isActive: !showingHome && !showingMap && appState.selectedCustomTabId == tab.id,
+            isActive: !showingHome && !showingMap && !showingCreative
+                && appState.selectedCustomTabId == tab.id,
             action: {
                 showingHome = false
                 showingMap = false
+                showingCreative = false
                 appState.selectedCustomTabId = tab.id
             }
         )

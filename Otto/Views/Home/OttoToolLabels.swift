@@ -37,6 +37,23 @@ enum OttoToolLabels {
         if normalized.hasSuffix("genmedia_upload_file") {
             return Label(verb: "Uploading to fal:", arg: resolveFileName(input: input, appState: appState))
         }
+        if normalized.hasSuffix("creative_list_workflows") {
+            return Label(verb: "Listing Creative canvases", arg: nil)
+        }
+        if normalized.hasSuffix("creative_create_workflow") {
+            return Label(verb: "Creating canvas:", arg: quoted(string(input, "name")))
+        }
+        if normalized.hasSuffix("creative_get_workflow") {
+            return Label(verb: "Reading canvas", arg: nil)
+        }
+        if normalized.hasSuffix("creative_edit_workflow") {
+            let count = (input["operations"] as? [[String: Any]])?.count ?? 0
+            return Label(verb: "Building canvas:", arg: count > 0 ? "\(count) step\(count == 1 ? "" : "s")" : nil)
+        }
+        if normalized.hasSuffix("creative_run") {
+            let count = (input["node_ids"] as? [Any])?.count ?? 0
+            return Label(verb: "Running canvas", arg: count > 0 ? "(\(count) nodes)" : nil)
+        }
         // Backend built-in tools (Claude Code's WebSearch/Read/…, Codex's
         // shell/web_search, Hermes's own equivalents) — friendlier than the
         // default underscores-to-Title-Case fallback.

@@ -21,6 +21,7 @@ struct MainView: View {
     @State private var showingIntegrations = false
     @State private var showingHome = true
     @State private var showingMap = false
+    @State private var showingCreative = false
 
     #if os(macOS)
     @State private var undoMonitor: Any?
@@ -33,6 +34,7 @@ struct MainView: View {
                     // Jump to Home and open universal search.
                     showingHome = true
                     showingMap = false
+                    showingCreative = false
                     appState.homeSearchRequested = true
                 })
                 .frame(height: 48)
@@ -41,6 +43,7 @@ struct MainView: View {
                     OttoSidebar(
                         showingHome: $showingHome,
                         showingMap: $showingMap,
+                        showingCreative: $showingCreative,
                         showingSettings: $showingSettings,
                         showingIntegrations: $showingIntegrations
                     )
@@ -96,6 +99,7 @@ struct MainView: View {
             if itemId != nil {
                 showingHome = false
                 showingMap = false
+                showingCreative = false
             }
         }
         .onChange(of: appState.pendingChatPrompt) { _, prompt in
@@ -104,6 +108,7 @@ struct MainView: View {
             if prompt != nil {
                 showingHome = true
                 showingMap = false
+                showingCreative = false
             }
         }
         .onChange(of: appState.showVoiceOverlay) { _, shown in
@@ -113,6 +118,7 @@ struct MainView: View {
             if shown {
                 showingHome = true
                 showingMap = false
+                showingCreative = false
             }
         }
         .task {
@@ -139,7 +145,9 @@ struct MainView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if showingMap {
+        if showingCreative {
+            CreativeView()
+        } else if showingMap {
             MapView()
                 .background(Theme.Colors.bg0)
         } else if showingHome {
