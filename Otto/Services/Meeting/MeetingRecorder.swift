@@ -30,6 +30,9 @@ final class MeetingRecorder: @unchecked Sendable {
     struct Context {
         var appName: String
         var calendarEvent: CalendarEvent?
+        /// Pre-meeting details the user typed in the notch panel (often while
+        /// recording). Read at analysis time via `updatePrep`.
+        var prep: MeetingPrep = MeetingPrep()
 
         var displayTitle: String {
             calendarEvent?.title ?? "Meeting (\(appName))"
@@ -105,6 +108,15 @@ final class MeetingRecorder: @unchecked Sendable {
 
     func configure(appState: AppState) {
         self.appState = appState
+    }
+
+    /// Update the live prep details for the in-flight recording. The notch
+    /// panel calls this as the user edits participant names / purpose / focus /
+    /// template while recording, so the final `Context` handed to analysis
+    /// reflects everything they entered. No-op when not recording.
+    @MainActor
+    func updatePrep(_ prep: MeetingPrep) {
+        context?.prep = prep
     }
 
     // MARK: - Start

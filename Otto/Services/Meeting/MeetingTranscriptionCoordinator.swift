@@ -20,6 +20,10 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
     private let detection = MeetingDetectionService()
     private weak var appState: AppState?
     private var enabled = false
+    /// App that grabbed the mic for the current detection — remembered so
+    /// `startRecording()` can build the Context even after the banner has
+    /// expanded past the `.prompt` phase (which used to carry the name).
+    private var lastDetectedAppName: String?
 
     var isRecording: Bool { recorder.isRecording }
 
@@ -35,7 +39,9 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
         }
         recorder.onStarted = { [weak self] in
             guard let self, let startedAt = self.recorder.startedAt else { return }
-            MeetingBannerController.shared.showRecording(
+            // Recording began — expand the panel (fields stay editable live).
+            MeetingBannerController.shared.showExpanded(
+                recording: true,
                 startedAt: startedAt,
                 systemAudioAvailable: self.recorder.systemAudioAvailable
             )
@@ -45,9 +51,20 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
         }
 
         let banner = MeetingBannerController.shared.model
-        banner.onStart = { [weak self] in self?.startRecording() }
+        // Başlat → start recording immediately; the panel expands via onStarted.
+        banner.onStartNow = { [weak self] in self?.startRecording() }
+        // Tap the pill → open the prep panel first, without recording yet.
+        banner.onOpenPrep = {
+            MeetingBannerController.shared.showExpanded(
+                recording: false, startedAt: nil, systemAudioAvailable: true
+            )
+        }
         banner.onStop = { [weak self] in self?.stopRecording(reason: .user) }
         banner.onDismiss = { MeetingBannerController.shared.hide() }
+        // Fields edited while recording → keep the recorder's context in sync.
+        banner.onPrepChanged = { [weak self] in
+            self?.recorder.updatePrep(banner.prep)
+        }
     }
 
     @MainActor
@@ -73,6 +90,7 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
         guard enabled, !recorder.isRecording else { return }
         // Don't prompt over Otto's own voice mode.
         if appState?.showVoiceOverlay == true { return }
+        lastDetectedAppName = appName
         let event = currentCalendarEvent()
         MeetingBannerController.shared.showPrompt(appName: appName, meetingTitle: event?.title)
     }
@@ -91,13 +109,13 @@ final class MeetingTranscriptionCoordinator: @unchecked Sendable {
     private func startRecording() {
         guard !recorder.isRecording else { return }
         let event = currentCalendarEvent()
-        let appName: String = {
-            if case .prompt(let name, _) = MeetingBannerController.shared.model.state { return name }
-            return "meeting app"
-        }()
-        // Banner flips to the recording face via recorder.onStarted (start
+        let appName = lastDetectedAppName ?? "meeting app"
+        // Whatever the user has typed in the prep panel so far rides along; it
+        // keeps updating live via banner.onPrepChanged → recorder.updatePrep.
+        let prep = MeetingBannerController.shared.model.prep
+        // Banner expands to the recording face via recorder.onStarted (start
         // can be async behind the first-run mic permission prompt).
-        recorder.start(context: .init(appName: appName, calendarEvent: event))
+        recorder.start(context: .init(appName: appName, calendarEvent: event, prep: prep))
     }
 
     @MainActor

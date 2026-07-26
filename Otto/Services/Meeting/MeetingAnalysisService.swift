@@ -86,7 +86,8 @@ final class MeetingAnalysisService {
             let executor = OttoToolExecutor(appState: appState)
             let userPrompt = Self.userPrompt(
                 transcript: transcript, context: context, startedAt: startedAt,
-                duration: duration, attendees: resolved.others, selfEmail: resolved.selfEmail
+                duration: duration, attendees: resolved.others, selfEmail: resolved.selfEmail,
+                prep: context?.prep ?? MeetingPrep()
             )
             let turns = [ChatTurn(role: "user", blocks: [.text(userPrompt)])]
             let result = try await Self.runBackend(
@@ -122,9 +123,16 @@ final class MeetingAnalysisService {
             return line
         }.joined(separator: "\n")
 
-        // Resolved calendar names are authoritative; anyone else the agent
-        // heard being addressed in the conversation is appended after.
+        // Participant names the user typed in the prep panel are authoritative
+        // (they know who was there); calendar names come next, then anyone the
+        // agent additionally heard addressed in the conversation.
         var participants = resolved.others.map(\.shortName)
+        for manual in (context?.prep.participantNames ?? []) {
+            let lower = manual.lowercased()
+            if !participants.contains(where: { $0.lowercased() == lower }) {
+                participants.insert(manual, at: 0)
+            }
+        }
         for extra in payload.participants {
             let lower = extra.lowercased()
             if !participants.contains(where: {
@@ -330,7 +338,8 @@ final class MeetingAnalysisService {
         startedAt: Date,
         duration: Int,
         attendees: [ResolvedParticipant],
-        selfEmail: String?
+        selfEmail: String?,
+        prep: MeetingPrep
     ) -> String {
         let headerFormatter = DateFormatter()
         headerFormatter.dateFormat = "EEEE, MMMM d, yyyy 'at' HH:mm"
@@ -345,8 +354,27 @@ final class MeetingAnalysisService {
         } else if let appName = context?.appName {
             lines.append("Captured from: \(appName)")
         }
+
+        // Prep the user entered in the notch panel. Purpose/focus steer the
+        // synthesis; the note style dictates the section structure.
+        let purpose = prep.purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !purpose.isEmpty {
+            lines.append("Meeting purpose (stated by the user): \(purpose)")
+        }
+        lines.append("Note style: \(prep.noteStyle.promptGuidance)")
+        let focus = prep.focusPoints.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !focus.isEmpty {
+            lines.append("The user asked you to pay special attention to: \(focus) — make sure the notes and action items cover this.")
+        }
+
         if let selfEmail {
             lines.append("The user — the \"Me\" speaker — is \(selfEmail).")
+        }
+
+        // Names the user typed in are the ground truth for who was on the call —
+        // use them to attribute what "Them" said instead of generic phrasing.
+        if !prep.participantNames.isEmpty {
+            lines.append("People on the call (entered by the user — treat as authoritative for attribution): \(prep.participantNames.joined(separator: ", ")).")
         }
         if !attendees.isEmpty {
             lines.append("Other attendees from the calendar invite (resolved against the user's contacts; these are the likely \"Them\" speakers):")
