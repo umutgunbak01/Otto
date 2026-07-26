@@ -46,10 +46,37 @@ struct ChatAttachment: Identifiable, Codable, Hashable {
             return .image
         case "pdf":
             return .pdf
-        case "csv", "txt", "md", "json", "log", "tsv", "yaml", "yml", "xml", "html", "htm":
+        case "csv", "txt", "md", "markdown", "json", "log", "tsv", "yaml", "yml", "xml", "html", "htm":
             return .text
         default:
             return .binary
+        }
+    }
+
+    /// Markdown attachments render formatted (headings, bold, bullets) in
+    /// previews; the rest of the text family shows as monospaced raw text.
+    var isMarkdown: Bool {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        return ext == "md" || ext == "markdown"
+    }
+
+    /// Decoded contents for `.text`-kind attachments (UTF-8 first, ISO-Latin-1
+    /// fallback — same policy as FileStorageService). nil for binary kinds or
+    /// undecodable data.
+    var textContent: String? {
+        guard kind == .text else { return nil }
+        return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+    }
+
+    /// MIME fallback for extensions whose UTType carries no preferred MIME
+    /// type on a stock system (markdown's UTI is often dynamic).
+    static func fallbackMediaType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "md", "markdown": return "text/markdown"
+        case "tsv":            return "text/tab-separated-values"
+        case "yaml", "yml":    return "application/yaml"
+        case "log":            return "text/plain"
+        default:               return "application/octet-stream"
         }
     }
 
@@ -153,6 +180,10 @@ enum ChatTranscript {
     /// Per-block caps keep one giant tool payload from eating the budget.
     private static let toolInputCap = 2_000
     private static let toolResultCap = 800
+    /// Per-attachment inline cap — generous enough for a real README, small
+    /// enough that one file can't eat the whole prompt (the conversation is
+    /// re-flattened on every CLI run).
+    private static let attachmentTextCap = 32_000
 
     /// Every turn, role-prefixed, blank-line separated. Empty turns dropped.
     static func flatten(_ turns: [ChatTurn]) -> String {
@@ -175,9 +206,37 @@ enum ChatTranscript {
                 pieces.append("[\(isError ? "tool error" : "tool result"): \(clip(trimmed, toolResultCap))]")
             }
         }
+        if let attachments = attachmentSection(turn.attachments) {
+            pieces.append(attachments)
+        }
         guard !pieces.isEmpty else { return nil }
         let role = turn.role == "assistant" ? "Assistant" : "User"
         return "\(role): \(pieces.joined(separator: "\n"))"
+    }
+
+    /// Prompt-side rendering of a turn's attachments — the only channel
+    /// through which uploaded files reach the model (all three backends feed
+    /// history as text). Text-family files (md / csv / txt / json…) are
+    /// inlined verbatim inside labeled markers; binary kinds (images, PDFs,
+    /// spreadsheets) become filename stubs so the model at least knows they
+    /// were attached.
+    static func attachmentSection(_ attachments: [ChatAttachment]) -> String? {
+        guard !attachments.isEmpty else { return nil }
+        let pieces = attachments.map { a -> String in
+            let size = ByteCountFormatter.string(fromByteCount: Int64(a.data.count), countStyle: .file)
+            guard let text = a.textContent?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else {
+                return "[Attached file: \(a.filename) (\(a.mediaType), \(size)) — content not inlined; ask the user to import it via the Files tab if you need to read it]"
+            }
+            var body = text
+            var truncationNote = ""
+            if body.count > attachmentTextCap {
+                body = String(body.prefix(attachmentTextCap))
+                truncationNote = "\n[…truncated — showing the first \(attachmentTextCap) of \(text.count) characters]"
+            }
+            return "[Attached file: \(a.filename) (\(a.mediaType), \(size))]\n\(body)\(truncationNote)\n[End of attached file: \(a.filename)]"
+        }
+        return pieces.joined(separator: "\n\n")
     }
 
     private static func clip(_ s: String, _ limit: Int) -> String {
@@ -195,6 +254,35 @@ enum ChatTranscript {
 
 // MARK: - Tool-calling chat types
 
+/// Per-turn run telemetry, stamped onto the assistant `ChatTurn` by whichever
+/// backend produced it. Duration + backend are always present; token counts
+/// and cost only where the backend reports them (Claude/Codex CLI stream
+/// usage events; the Hermes ACP stream has no usage frames).
+struct TurnStats: Codable, Hashable {
+    var durationMs: Int
+    var backend: String        // AgentBackend rawValue
+    var model: String?
+    var inputTokens: Int?
+    var outputTokens: Int?
+    var costUSD: Double?
+
+    /// "12.4s · 8.1k tok · $0.04" — nil-safe compact caption for the UI.
+    /// Tool-call count is derived from the turn's blocks by the caller.
+    var caption: String {
+        var parts: [String] = [String(format: "%.1fs", Double(durationMs) / 1000)]
+        if let input = inputTokens, let output = outputTokens {
+            let total = input + output
+            parts.append(total >= 1000
+                ? String(format: "%.1fk tok", Double(total) / 1000)
+                : "\(total) tok")
+        }
+        if let cost = costUSD, cost > 0 {
+            parts.append(cost < 0.01 ? "<$0.01" : String(format: "$%.2f", cost))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// A full conversational turn — one role speaking once, potentially multiple content blocks
 /// (text + tool calls + tool results). Mirrors Anthropic's messages[].content array.
 struct ChatTurn: Identifiable, Codable, Hashable {
@@ -203,23 +291,28 @@ struct ChatTurn: Identifiable, Codable, Hashable {
     var blocks: [ChatBlock]
     var attachments: [ChatAttachment]
     let timestamp: Date
+    /// Run telemetry — assistant turns only, and only for turns produced
+    /// since stats capture shipped.
+    var stats: TurnStats?
 
     init(
         id: UUID = UUID(),
         role: String,
         blocks: [ChatBlock],
         attachments: [ChatAttachment] = [],
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        stats: TurnStats? = nil
     ) {
         self.id = id
         self.role = role
         self.blocks = blocks
         self.attachments = attachments
         self.timestamp = timestamp
+        self.stats = stats
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, blocks, attachments, timestamp
+        case id, role, blocks, attachments, timestamp, stats
     }
 
     init(from decoder: Decoder) throws {
@@ -229,6 +322,7 @@ struct ChatTurn: Identifiable, Codable, Hashable {
         self.blocks = try c.decode([ChatBlock].self, forKey: .blocks)
         self.attachments = (try? c.decode([ChatAttachment].self, forKey: .attachments)) ?? []
         self.timestamp = try c.decode(Date.self, forKey: .timestamp)
+        self.stats = try? c.decode(TurnStats.self, forKey: .stats)
     }
 }
 
@@ -313,6 +407,10 @@ enum ChatEvent {
     /// short one-line description (e.g. "search_items query=\"groceries\"")
     /// safe to display.
     case approvalRequest(id: String, toolName: String, argsSummary: String)
+    /// A degraded-turn warning the user should see (e.g. the MCP server
+    /// failed to start, so Otto's tools are unavailable this turn). Rendered
+    /// as a dim caption row in the transcript, not an error banner.
+    case notice(String)
 }
 
 /// A small Codable wrapper for arbitrary JSON values (tool_use inputs).

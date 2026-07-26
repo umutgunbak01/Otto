@@ -307,17 +307,29 @@ struct FileDetailView: View {
         Group {
             if let text = csvContent, !text.isEmpty {
                 ScrollView {
-                    Text(text)
-                        .font(Theme.Typography.monoBody)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Theme.Spacing.md)
+                    if isMarkdownFile {
+                        // Markdown renders formatted — same block styling as
+                        // assistant chat bubbles — instead of raw mono text.
+                        SelectableMessageText(attributed: ChatMessageRenderer.markdown(text))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Theme.Spacing.md)
+                    } else {
+                        Text(text)
+                            .font(Theme.Typography.monoBody)
+                            .foregroundStyle(Theme.Colors.text)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Theme.Spacing.md)
+                    }
                 }
             } else {
                 placeholderPreview(icon: "doc.text", message: "Unable to load text content")
             }
         }
+    }
+
+    private var isMarkdownFile: Bool {
+        ["md", "markdown"].contains(file.fileExtension.lowercased())
     }
 
     private var csvContent: String? {

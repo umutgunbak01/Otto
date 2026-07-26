@@ -46,6 +46,11 @@ struct OttoChatView: View {
     /// app hangs its sheet on the list/container view for the same reason.
     @State private var previewDetail: PreviewDetail?
 
+    /// Full-size preview for a clicked attachment chip (staged in the
+    /// composer or inside a sent message). Same hoisting rationale as
+    /// `previewDetail`.
+    @State private var previewAttachment: ChatAttachment?
+
     /// Tool-call groups the user has expanded via "See tool calls", keyed by
     /// the group's leading entry id. Default (absent) = collapsed.
     @State private var expandedToolGroups: Set<UUID> = []
@@ -83,10 +88,14 @@ struct OttoChatView: View {
             .plainText,
             .json
         ]
-        if let xlsx = UTType(filenameExtension: "xlsx") { types.append(xlsx) }
-        if let xls = UTType(filenameExtension: "xls") { types.append(xls) }
-        if let md = UTType(filenameExtension: "md") { types.append(md) }
-        if let tsv = UTType(filenameExtension: "tsv") { types.append(tsv) }
+        // Extensions without first-class UTType constants. Markdown gets both
+        // spellings — depending on installed apps, .md can resolve to a
+        // declared type (net.daringfireball.markdown) or a dynamic one, and
+        // listing the exact per-extension type keeps the picker permissive
+        // either way.
+        for ext in ["xlsx", "xls", "md", "markdown", "tsv", "yaml", "yml", "log"] {
+            if let t = UTType(filenameExtension: ext) { types.append(t) }
+        }
         return types
     }()
 
@@ -131,6 +140,10 @@ struct OttoChatView: View {
         // start()/stop() lifecycle twice.
         .sheet(item: $previewDetail) { detail in
             previewDetailSheet(detail)
+        }
+        .sheet(item: $previewAttachment) { attachment in
+            AttachmentPreviewPopup(attachment: attachment, onClose: { previewAttachment = nil })
+                .frame(width: 760, height: 560)
         }
         .onAppear {
             loadActiveSession()
@@ -405,6 +418,8 @@ struct OttoChatView: View {
         case .userText(let text, let attachments):
             MessageBubble(text: text, isUser: true, attachments: attachments, onOttoLink: { url in
                 openOttoItem(url)
+            }, onPreviewAttachment: { attachment in
+                previewAttachment = attachment
             })
         case .assistantText(let text):
             MessageBubble(text: text, isUser: false, attachments: [], onOttoLink: { url in
@@ -454,7 +469,34 @@ struct OttoChatView: View {
                     isAllow: isAllow
                 )
             }
+        case .turnStats(let stats, let toolCalls):
+            turnStatsRow(stats, toolCalls: toolCalls)
+        case .notice(let text):
+            HStack(spacing: 5) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(text)
+                    .font(Theme.Typography.caption)
+            }
+            .foregroundStyle(Theme.Colors.textDim)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, Theme.Spacing.sm)
         }
+    }
+
+    /// Subtle telemetry caption under an assistant turn: duration, tool
+    /// count, and tokens/cost where the backend reports them.
+    private func turnStatsRow(_ stats: TurnStats, toolCalls: Int) -> some View {
+        var parts: [String] = [stats.caption]
+        if toolCalls > 0 {
+            parts.insert("\(toolCalls) tool\(toolCalls == 1 ? "" : "s")", at: 1)
+        }
+        return Text(parts.joined(separator: " · "))
+            .font(Theme.Typography.caption)
+            .foregroundStyle(Theme.Colors.tertiaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, Theme.Spacing.sm)
+            .padding(.top, -4)
     }
 
     /// Open the detail popup for an inline `otto://<type>/<id>` chip clicked
@@ -598,7 +640,7 @@ struct OttoChatView: View {
                     .padding(.horizontal, 2)
 
                 HStack(spacing: 10) {
-                    ComposerGhostButton(icon: "plus", help: "Attach files (csv, xlsx, pdf, png, jpeg…)") {
+                    ComposerGhostButton(icon: "plus", help: "Attach files (md, csv, xlsx, pdf, png, jpeg…)") {
                         showFileImporter = true
                     }
 
@@ -701,9 +743,13 @@ struct OttoChatView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(pendingAttachments) { attachment in
-                    AttachmentChip(attachment: attachment) {
-                        pendingAttachments.removeAll { $0.id == attachment.id }
-                    }
+                    AttachmentChip(
+                        attachment: attachment,
+                        onRemove: {
+                            pendingAttachments.removeAll { $0.id == attachment.id }
+                        },
+                        onTap: { previewAttachment = attachment }
+                    )
                 }
             }
             .padding(.horizontal, 2)
@@ -909,8 +955,11 @@ struct OttoChatView: View {
                         attachmentError = "\(url.lastPathComponent) is \(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)) — 20 MB max per file."
                         continue
                     }
+                    // Dynamic UTIs (md on a stock system, tsv…) carry no MIME
+                    // type — fall back by extension so markdown lands as
+                    // text/markdown instead of application/octet-stream.
                     let mediaType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                        ?? "application/octet-stream"
+                        ?? ChatAttachment.fallbackMediaType(forExtension: url.pathExtension)
                     pendingAttachments.append(
                         ChatAttachment(filename: url.lastPathComponent, mediaType: mediaType, data: data)
                     )
@@ -976,6 +1025,8 @@ private struct MessageBubble: View {
     let attachments: [ChatAttachment]
     /// Click handler for inline `otto://` item chips in assistant text.
     var onOttoLink: ((URL) -> Void)? = nil
+    /// Click handler for attachment chips — opens the full-size preview.
+    var onPreviewAttachment: ((ChatAttachment) -> Void)? = nil
 
     @State private var isHovering = false
     @State private var justCopied = false
@@ -995,7 +1046,9 @@ private struct MessageBubble: View {
                 if !attachments.isEmpty {
                     VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
                         ForEach(attachments) { a in
-                            AttachmentChip(attachment: a, onRemove: nil)
+                            AttachmentChip(attachment: a, onRemove: nil, onTap: {
+                                onPreviewAttachment?(a)
+                            })
                         }
                     }
                 }
@@ -1073,6 +1126,11 @@ private struct MessageBubble: View {
 private struct AttachmentChip: View {
     let attachment: ChatAttachment
     let onRemove: (() -> Void)?
+    /// Opens the full-size attachment preview. The remove button (when
+    /// present) keeps priority over the chip tap.
+    var onTap: (() -> Void)? = nil
+
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -1105,12 +1163,16 @@ private struct AttachmentChip: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(Theme.Colors.panel)
+                .fill(onTap != nil && hovering ? Theme.Colors.hoverTint : Theme.Colors.panel)
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
                         .strokeBorder(Theme.Colors.border, lineWidth: 1)
                 )
         )
+        .contentShape(Rectangle())
+        .onTapGesture { onTap?() }
+        .onHover { hovering = $0 }
+        .help(onTap != nil ? "Click to preview" : "")
     }
 
     private var iconName: String {

@@ -269,7 +269,7 @@ struct CSVTableEditor: View {
                     Text(headers[c].isEmpty ? "—" : headers[c].uppercased())
                         .font(Theme.Typography.label)
                         .tracking(Theme.Tracking.xwide)
-                        .foregroundStyle(headers[c].isEmpty ? Theme.Colors.tertiaryText.opacity(0.5) : Theme.Colors.tertiaryText)
+                        .foregroundStyle(headers[c].isEmpty ? Theme.Colors.tertiaryText.opacity(0.5) : Theme.Colors.secondaryText)
                         .lineLimit(1)
                         .padding(.horizontal, 7)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -347,7 +347,7 @@ struct CSVTableEditor: View {
                 } label: {
                     Text(value(r, c).isEmpty ? "—" : value(r, c))
                         .font(.system(size: 12.5))
-                        .foregroundStyle(value(r, c).isEmpty ? Theme.Colors.tertiaryText.opacity(0.5) : Theme.Colors.textDim)
+                        .foregroundStyle(value(r, c).isEmpty ? Theme.Colors.tertiaryText.opacity(0.5) : Theme.Colors.text)
                         .lineLimit(1)
                         .padding(.horizontal, 7)
                         .frame(maxWidth: .infinity, alignment: .leading)

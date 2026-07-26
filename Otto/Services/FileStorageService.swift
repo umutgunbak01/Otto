@@ -296,7 +296,7 @@ enum FileStorageError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedFileType(let ext):
-            return "Unsupported file type: .\(ext). Supported types: CSV, Excel (xlsx/xls), PDF, PNG, JPG."
+            return "Unsupported file type: .\(ext). Supported types: CSV, Excel (xlsx/xls), PDF, images (png/jpg/heic…), text (txt/md/json/yaml…), video, and audio."
         case .fileNotFound:
             return "File not found in storage."
         case .importFailed(let reason):

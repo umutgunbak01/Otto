@@ -253,12 +253,20 @@ struct FilePreviewPopup: View {
         Group {
             if let text = loadedText, !text.isEmpty {
                 ScrollView {
-                    Text(text)
-                        .font(Theme.Typography.monoBody)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Theme.Spacing.lg)
+                    if isMarkdownFile {
+                        // Markdown renders formatted — same block styling as
+                        // assistant chat bubbles — instead of raw mono text.
+                        SelectableMessageText(attributed: ChatMessageRenderer.markdown(text))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Theme.Spacing.xl)
+                    } else {
+                        Text(text)
+                            .font(Theme.Typography.monoBody)
+                            .foregroundStyle(Theme.Colors.text)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(Theme.Spacing.lg)
+                    }
                 }
             } else if textLoadFinished {
                 placeholderView(icon: "doc.text", message: "Unable to load text content")
@@ -268,6 +276,10 @@ struct FilePreviewPopup: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private var isMarkdownFile: Bool {
+        ["md", "markdown"].contains(file.fileExtension.lowercased())
     }
 
     /// Disk is the source of truth (this popup edits the file); the stored
