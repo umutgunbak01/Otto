@@ -116,6 +116,16 @@ final class MenuBarController: NSObject {
 
     // MARK: - Click
 
+    @objc private func openQuickCapture() {
+        // Works even when the Settings toggle disabled the hotkey — the menu
+        // item is an explicit ask. `configure` hands over AppState without
+        // registering the (possibly disabled) global shortcut.
+        if let appState {
+            QuickCaptureController.shared.configure(appState: appState)
+        }
+        QuickCaptureController.shared.showPanel()
+    }
+
     @objc private func handleClick() {
         let isRightClick = NSApp.currentEvent?.type == .rightMouseUp
         if isRightClick {
@@ -136,6 +146,16 @@ final class MenuBarController: NSObject {
 
     private func makeRightClickMenu() -> NSMenu {
         let menu = NSMenu()
+        // Mirrors the global shortcut — discoverable entry point for the
+        // floating capture box, shown with the currently recorded chord.
+        let capture = NSMenuItem(
+            title: "Quick Capture  (\(QuickCaptureSettings.currentShortcut.display))",
+            action: #selector(openQuickCapture),
+            keyEquivalent: ""
+        )
+        capture.target = self
+        menu.addItem(capture)
+        menu.addItem(.separator())
         let check = NSMenuItem(
             title: "Check for Updates…",
             action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),

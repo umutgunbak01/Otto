@@ -28,7 +28,6 @@ struct MapView: View {
 
         return VStack(spacing: 0) {
             header(located: located, unlocated: unlocated)
-            OttoDivider()
             if let group = selected {
                 // Selected city → full-width tabbed, inline-editable table.
                 CityTableView(group: group, onBack: {
@@ -57,7 +56,7 @@ struct MapView: View {
                     }
                 }
             }
-            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll))
+            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
             .mapControls {
                 MapZoomStepper()
                 MapCompass()
@@ -67,7 +66,34 @@ struct MapView: View {
                 emptyOverlay(totalGroups: totalGroups)
             }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
+        .overlay(alignment: .bottomLeading) { mapLegend }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.bottom, Theme.Spacing.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Bottom-leading totals legend on the map panel (mockup .maplegend).
+    private var mapLegend: some View {
+        Text("\(appState.connections.count) people · \(appState.companies.count) companies · \(appState.events.count) events".uppercased())
+            .font(.system(size: 9, weight: .medium, design: .monospaced))
+            .tracking(Theme.Tracking.xxwide)
+            .foregroundStyle(Theme.Colors.tertiaryText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Theme.Colors.bgPage.opacity(0.78))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
+            .padding(12)
     }
 
     private func emptyOverlay(totalGroups: Int) -> some View {
@@ -100,70 +126,49 @@ struct MapView: View {
     // MARK: - Header
 
     private func header(located: [CityGroup], unlocated: Int) -> some View {
-        HStack(alignment: .center, spacing: Theme.Spacing.md) {
+        HStack(alignment: .center, spacing: 10) {
             Text("Map")
-                .font(Theme.Typography.title)
+                .font(Theme.Typography.display)
                 .foregroundStyle(Theme.Colors.text)
 
-            statPill(icon: "mappin", value: "\(located.count)", label: "cities")
-            statPill(icon: "point.3.connected.trianglepath.dotted", value: "\(appState.networkEntries.count)", label: "network")
-            statPill(icon: "person.2", value: "\(appState.connections.count)", label: "people")
-            statPill(icon: "building.2", value: "\(appState.companies.count)", label: "cos")
-            statPill(icon: "calendar", value: "\(appState.events.count)", label: "events")
-            statPill(icon: "person.3", value: "\(appState.communities.count)", label: "communities")
+            OttoCountChip(text: "\(appState.connections.count) people · \(located.count) cities")
 
-            Spacer()
+            statCapsule("\(appState.networkEntries.count) network")
+            statCapsule("\(appState.companies.count) cos")
+            statCapsule("\(appState.events.count) events")
+            statCapsule("\(appState.communities.count) communities")
+
+            Spacer(minLength: 8)
 
             if unlocated > 0 {
                 HStack(spacing: 5) {
                     ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
                     Text("resolving \(unlocated)…")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
 
-            Button {
+            OttoBarButton(label: "Fit", systemImage: "arrow.up.left.and.arrow.down.right") {
                 withAnimation { position = .automatic }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 10))
-                    Text("Fit").font(.system(size: 12))
-                }
-                .foregroundStyle(Theme.Colors.textDim)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.Colors.panel)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, Theme.Spacing.lg)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
-    private func statPill(icon: String, value: String, label: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 9)).foregroundStyle(Theme.Colors.tertiaryText)
-            Text(value).font(Theme.Typography.monoSmall).foregroundStyle(Theme.Colors.text)
-            Text(label).font(.system(size: 10)).foregroundStyle(Theme.Colors.textDim)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-        )
+    /// Compact mono capsule for the secondary totals.
+    private func statCapsule(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(Theme.Colors.tertiaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3.5)
+            .background(Capsule().fill(Theme.Colors.panel))
+            .overlay(Capsule().strokeBorder(Theme.Colors.border, lineWidth: 1))
+            .lineLimit(1)
+            .fixedSize()
     }
 
 }
@@ -182,11 +187,12 @@ private struct CityPin: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 2) {
+            VStack(spacing: 3) {
                 ZStack {
                     Circle()
                         .fill(Theme.Colors.cyan.opacity(isSelected ? 0.95 : (hover ? 0.85 : 0.7)))
                         .frame(width: diameter, height: diameter)
+                        .shadow(color: Theme.Colors.cyan.opacity(0.5), radius: 8)
                     Circle()
                         .stroke(Theme.Colors.bg0, lineWidth: 1.5)
                         .frame(width: diameter, height: diameter)
@@ -195,20 +201,25 @@ private struct CityPin: View {
                         .foregroundStyle(Theme.Colors.bg0)
                 }
                 if isSelected || hover {
-                    Text(group.displayName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.Colors.text)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Theme.Colors.panel)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                        )
-                        .fixedSize()
+                    HStack(spacing: 4) {
+                        Text(group.displayName)
+                            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.text)
+                        Text("\(group.totalCount)")
+                            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Theme.Colors.bgPage.opacity(0.78))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    )
+                    .fixedSize()
                 }
             }
         }

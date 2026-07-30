@@ -14,13 +14,15 @@ enum OttoTools {
         case create_community, update_community
         case complete_todo, uncomplete_todo, complete_reminder
         case delete_item
-        case search_items, grep_data, get_item
+        case semantic_search, search_items, grep_data, get_item
         case remember, update_memory
         case search_sessions, get_session
         case attach_item_preview
         case visualize
         case open_url
         case create_habit, log_habit_entry, complete_habit, list_habits, update_habit
+        case save_prompt, list_saved_prompts, update_saved_prompt
+        case schedule_task, list_scheduled_tasks, update_scheduled_task, run_scheduled_task
         case read_file
         case create_file
         case genmedia_search_models, genmedia_get_model_schema, genmedia_run, genmedia_upload_file
@@ -386,14 +388,18 @@ enum OttoTools {
                         ["close_friend", "warm_relationship", "known_personally", "intro_path_available", "light_connection", "unknown"],
                         "Relationship strength. Defaults to unknown."
                     ),
-                    "notes": stringProp("Free-form notes — how you met, what they care about, follow-ups.")
+                    "notes": stringProp("Free-form notes — how you met, what they care about, follow-ups."),
+                    "follow_up_cadence": enumProp(
+                        ["weekly", "biweekly", "monthly", "quarterly", "semiannual", "annual"],
+                        "Keep-in-touch cadence — how often the user wants to touch base with this person. Sets up the follow-up queue (due people appear in network_hub.csv with follow_up_overdue_days set, in the Home right rail, and in the daily briefing)."
+                    )
                 ],
                 required: []
             )
         ],
         [
             "name": Name.update_network_entry.rawValue,
-            "description": "Update fields on a Network Hub entry (type=network). Only include fields you want to change. The structured LinkedIn profile section (summary, experience, education) is import-managed and not editable here.",
+            "description": "Update fields on a Network Hub entry (type=network). Only include fields you want to change. The structured LinkedIn profile section (summary, experience, education) is import-managed and not editable here. Also the way to manage the keep-in-touch loop: set `follow_up_cadence` when the user wants regular contact with someone, and pass `mark_contacted` after the user reaches out (or reports having talked) so the follow-up queue clears.",
             "input_schema": objectSchema(
                 properties: [
                     "id": stringProp("UUID of the network entry."),
@@ -416,7 +422,15 @@ enum OttoTools {
                         ["close_friend", "warm_relationship", "known_personally", "intro_path_available", "light_connection", "unknown"],
                         ""
                     ),
-                    "notes": stringProp("")
+                    "notes": stringProp(""),
+                    "follow_up_cadence": enumProp(
+                        ["weekly", "biweekly", "monthly", "quarterly", "semiannual", "annual", "none"],
+                        "Keep-in-touch cadence. \"none\" turns follow-up tracking off for this person."
+                    ),
+                    "mark_contacted": [
+                        "type": "boolean",
+                        "description": "true = record a touchpoint now (sets last-contacted to today, clears any snooze, resets the follow-up clock). Use when the user says they reached out / talked / met."
+                    ]
                 ],
                 required: ["id"]
             )
@@ -581,7 +595,7 @@ enum OttoTools {
                 properties: [
                     "id": stringProp("UUID of the item."),
                     "type": enumProp(
-                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "habit", "file", "network", "company", "event", "community"] + customTypeSlugs,
+                        ["todo", "note", "idea", "reminder", "bookmark", "meeting", "habit", "file", "network", "company", "event", "community", "saved_prompt", "scheduled_task"] + customTypeSlugs,
                         "Which collection the item lives in."
                     )
                 ],
@@ -591,8 +605,38 @@ enum OttoTools {
 
         // MARK: Search / fetch
         [
+            "name": Name.semantic_search.rawValue,
+            "description": "PRIMARY search — finds items by MEANING across everything Otto stores (todos, notes, ideas, meetings + full transcripts, emails, LinkedIn connections, Network Hub people, companies, events, communities, files, X posts/followers/DMs, habits, custom tabs, saved memories). Matches conceptually related content even when the words differ — 'fundraise talks' finds 'discussed the seed round valuation'. Reach for this FIRST for content lookups, recall questions ('what did we decide about…', 'who was pushing for…'), and anything vague or paraphrased. Content may be in another language (e.g. Turkish): pass a translated variant in alt_queries and scores merge automatically. NOT for structured listing/filtering (use search_items with dates/sort), exact strings, ids, or bulk enumeration (use grep_data). Results carry id + type for get_item follow-up.",
+            "input_schema": objectSchema(
+                properties: [
+                    "query": stringProp("What you're looking for, as a natural phrase or short sentence ('feedback about the onboarding flow', 'intro to a fintech investor'). Full sentences rank better than bare keywords."),
+                    "alt_queries": [
+                        "type": "array",
+                        "description": "Up to 4 alternate phrasings merged by best score. Use for translations (add a Turkish variant when the content might be in Turkish and vice versa) and genuinely different wordings of the same intent.",
+                        "items": ["type": "string"]
+                    ],
+                    "types": [
+                        "type": "array",
+                        "description": "Optional filter to these types; omit to search everything. Same type names as search_items/get_item, plus \"memory\" for saved agent memories"
+                            + (customTypeSlugs.isEmpty ? "." : ", plus custom tabs: " + customTypeSlugs.joined(separator: ", ") + "."),
+                        "items": [
+                            "type": "string",
+                            "enum": ["todo", "note", "idea", "reminder", "bookmark", "meeting", "email", "connection", "network", "company", "event", "community", "habit", "file", "x_post", "x_follower", "x_dm", "memory"] + customTypeSlugs
+                        ]
+                    ],
+                    "limit": [
+                        "type": "integer",
+                        "description": "Max distinct items (default 12, max 30).",
+                        "minimum": 1,
+                        "maximum": 30
+                    ]
+                ],
+                required: ["query"]
+            )
+        ],
+        [
             "name": Name.search_items.rawValue,
-            "description": "Search and/or list items with optional text match, date range, and sort order. Returns id, type, title, a short snippet, and the 'date' each result was ranked by. Use get_item for full content, or `read_file` for the full text of `file` items. You can call this with NO query to simply list items by date — e.g. 'most recent emails', 'reminders due next', 'notes from last week', 'files I imported', 'X posts about the launch', 'DMs from Sam'.",
+            "description": "Keyword + structured search: text match with date range, type filter, and sort order. Best for LISTING by date/type ('most recent emails', 'reminders due next', 'notes from last week' — no query needed) and for finding items when you know words that literally appear in them. For meaning-based or paraphrased lookups prefer semantic_search. Returns id, type, title, a short snippet, and the 'date' each result was ranked by. Use get_item for full content, or `read_file` for the full text of `file` items.",
             "input_schema": objectSchema(
                 properties: [
                     "query": stringProp("Optional free-text query. Multi-word queries match items containing EVERY word (any field, case-insensitive — words don't need to be adjacent, so \"AI infra\" matches \"infrastructure for AI\"); when nothing hits all words, any-word matches are returned instead (response's match_mode says which). Results are relevance-ranked by default: title hits outweigh body hits, exact phrases score extra, recency breaks ties. Searches titles/content plus file names, tags, OCR'd / extracted text, X post text, follower bio/handle, DM body. Omit to list everything matching the other filters."),
@@ -633,7 +677,7 @@ enum OttoTools {
         ],
         [
             "name": Name.grep_data.rawValue,
-            "description": "Regex-search ONE data-workspace snapshot table (one record per line) and get back only the matching lines (CSV header included so you can map columns). Case-insensitive; tables are rebuilt fresh from live data on every call. Use for bulk / multi-entity / relational / analytical questions — one call with an alternation pattern (e.g. file=\"connections.csv\", pattern=\"molten|wing|revo\") replaces a whole chain of search_items calls. Tables: connections.csv, network_hub.csv, companies.csv, events.csv, communities.csv, todos.csv, reminders.csv, habits.csv, bookmarks.csv, files.csv, x_followers.csv, emails.jsonl, meetings.jsonl, notes.jsonl, ideas.jsonl, calendar_events.jsonl, x_posts.jsonl, x_dms.jsonl"
+            "description": "Regex-search ONE data-workspace snapshot table (one record per line) and get back only the matching lines (CSV header included so you can map columns). Case-insensitive; tables are rebuilt fresh from live data on every call. Use for bulk / multi-entity / relational / analytical questions where you know literal strings to match — one call with an alternation pattern (e.g. file=\"connections.csv\", pattern=\"molten|wing|revo\") replaces a whole chain of search_items calls. For fuzzy or conceptual recall where exact wording is unknown, semantic_search is the better first move. Tables: connections.csv, network_hub.csv, companies.csv, events.csv, communities.csv, todos.csv, reminders.csv, habits.csv, bookmarks.csv, files.csv, x_followers.csv, emails.jsonl, meetings.jsonl, notes.jsonl, ideas.jsonl, calendar_events.jsonl, x_posts.jsonl, x_dms.jsonl"
                 + (customTypeSlugs.isEmpty ? "." : ", plus one per custom tab: " + customTypeSlugs.map { "custom_\($0).csv" }.joined(separator: ", ") + "."),
             "input_schema": objectSchema(
                 properties: [
@@ -920,6 +964,103 @@ enum OttoTools {
                 required: []
             )
         ],
+        // MARK: Saved prompts & recurring tasks (Automations)
+        [
+            "name": Name.save_prompt.rawValue,
+            "description": "Save a reusable prompt to the user's library (Automations tab + the composer's bookmark picker). Use when the user says 'save this prompt', 'remember this so I can run it again', or wants to reuse an instruction later without scheduling it.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Short display name, e.g. 'Weekly review'."),
+                    "prompt": stringProp("The full prompt text to save, exactly as it should be run later.")
+                ],
+                required: ["name", "prompt"]
+            )
+        ],
+        [
+            "name": Name.list_saved_prompts.rawValue,
+            "description": "List the user's saved prompts (id, name, text). Use before updating/deleting one, or when the user asks what prompts they have saved.",
+            "input_schema": objectSchema(properties: [:], required: [])
+        ],
+        [
+            "name": Name.update_saved_prompt.rawValue,
+            "description": "Update a saved prompt — rename it and/or change its text. Only include fields you want to change. Delete via delete_item(type=\"saved_prompt\").",
+            "input_schema": objectSchema(
+                properties: [
+                    "prompt_ref": stringProp("UUID of the saved prompt, OR a fuzzy name to look up (case-insensitive)."),
+                    "name": stringProp("New display name."),
+                    "prompt": stringProp("New prompt text (replaces the old text entirely).")
+                ],
+                required: ["prompt_ref"]
+            )
+        ],
+        [
+            "name": Name.schedule_task.rawValue,
+            "description": "Create a RECURRING task: a prompt Otto runs automatically on a schedule ('summarize my inbox every morning at 9'). Times are the user's local wall clock. Otto only runs while the app is open — a fire that lands while the Mac is off/asleep catches up at the first opportunity after (at most once per calendar day). Each run executes in its own background chat session titled '<name> — <date>'; the user gets a notification when it finishes. Don't use this for one-off reminders — that's `create_reminder`.",
+            "input_schema": objectSchema(
+                properties: [
+                    "name": stringProp("Short task name, e.g. 'Morning digest'. Becomes each run's chat-session title."),
+                    "prompt": stringProp("The prompt to run each time. Write it self-contained — every run starts a fresh session with no chat context."),
+                    "frequency": enumProp(
+                        ["daily", "weekdays", "weekly", "monthly"],
+                        "daily = every day. weekdays = Mon–Fri. weekly = specific day(s) — provide `weekdays`. monthly = one day each month — provide `day_of_month`."
+                    ),
+                    "weekdays": [
+                        "type": "array",
+                        "description": "Required when frequency=weekly: which day(s) it runs.",
+                        "items": ["type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
+                    ],
+                    "day_of_month": ["type": "integer", "description": "Required when frequency=monthly (1–31). Months without that day run on their last day.", "minimum": 1, "maximum": 31],
+                    "time": stringProp("Local time 'HH:mm' (24h), e.g. '09:00'. Defaults to 09:00."),
+                    "catch_up": enumProp(
+                        ["run_asap", "skip"],
+                        "When a fire was missed because the app wasn't running: run_asap (default) = run at the first opportunity, even a day late. skip = only run on the scheduled day itself; a fully missed day waits for the next occurrence."
+                    ),
+                    "notify": ["type": "boolean", "description": "Notify the user when a run finishes. Default true."],
+                    "auto_approve": ["type": "boolean", "description": "Approve every tool permission request automatically during this task's runs, so unattended runs never stall on an approval card (relevant on the Hermes backend). Default false — only set true when the user asks for it."]
+                ],
+                required: ["name", "prompt", "frequency"]
+            )
+        ],
+        [
+            "name": Name.list_scheduled_tasks.rawValue,
+            "description": "List the user's recurring tasks with id, schedule, enabled state, next due time, and last run outcome. Use before updating/running/deleting one.",
+            "input_schema": objectSchema(properties: [:], required: [])
+        ],
+        [
+            "name": Name.update_scheduled_task.rawValue,
+            "description": "Update a recurring task — rename, change its prompt or schedule, enable/disable, or change notification/catch-up behavior. Only include fields you want to change. Delete via delete_item(type=\"scheduled_task\").",
+            "input_schema": objectSchema(
+                properties: [
+                    "task": stringProp("UUID of the task, OR a fuzzy name to look up (case-insensitive)."),
+                    "name": stringProp(""),
+                    "prompt": stringProp(""),
+                    "frequency": enumProp(["daily", "weekdays", "weekly", "monthly"], "Provide `weekdays` or `day_of_month` alongside when relevant."),
+                    "weekdays": [
+                        "type": "array",
+                        "description": "Days of week, when frequency=weekly.",
+                        "items": ["type": "string", "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]]
+                    ],
+                    "day_of_month": ["type": "integer", "description": "Day of month (1–31), when frequency=monthly.", "minimum": 1, "maximum": 31],
+                    "time": stringProp("Local time 'HH:mm' (24h)."),
+                    "catch_up": enumProp(["run_asap", "skip"], ""),
+                    "notify": ["type": "boolean", "description": "Notify when a run finishes."],
+                    "auto_approve": ["type": "boolean", "description": "Approve all tool permission requests automatically during this task's runs."],
+                    "enabled": ["type": "boolean", "description": "Pause (false) or resume (true) the task."]
+                ],
+                required: ["task"]
+            )
+        ],
+        [
+            "name": Name.run_scheduled_task.rawValue,
+            "description": "Run a recurring task once, right now, without affecting its schedule. Returns immediately — the run continues in the background in its own chat session and notifies the user when done.",
+            "input_schema": objectSchema(
+                properties: [
+                    "task": stringProp("UUID of the task, OR a fuzzy name to look up (case-insensitive).")
+                ],
+                required: ["task"]
+            )
+        ],
+
         [
             "name": Name.read_file.rawValue,
             "description": "Read the contents of a file the user imported into Otto (PDF, CSV, image, plain-text formats like txt/md/json, etc.). Returns the extracted text plus a local path where the file binary is staged in the current working directory — so you can ALSO use the built-in `Read` tool with that path if you need to see the file directly (especially useful for images, which `Read` handles natively, or for raw PDFs). Always call `search_items` (type=`file`) first to find the file id you want.",

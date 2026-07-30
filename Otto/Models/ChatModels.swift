@@ -127,19 +127,40 @@ struct ChatSession: Identifiable, Codable, Hashable {
     var turns: [ChatTurn]
     let createdAt: Date
     var updatedAt: Date
+    /// True when the title was set programmatically (a scheduled-task run
+    /// like "Morning digest — Jul 29") — `refreshTitle()` must not replace
+    /// it with the first-user-message derivation on checkpoint upserts.
+    var titlePinned: Bool
 
     init(
         id: UUID = UUID(),
         title: String? = nil,
         turns: [ChatTurn] = [],
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        titlePinned: Bool = false
     ) {
         self.id = id
         self.turns = turns
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.title = title ?? Self.derivedTitle(from: turns)
+        self.titlePinned = titlePinned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, turns, createdAt, updatedAt, titlePinned
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        turns = try c.decode([ChatTurn].self, forKey: .turns)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        // Sessions saved before the pin flag existed decode as unpinned.
+        titlePinned = (try? c.decode(Bool.self, forKey: .titlePinned)) ?? false
     }
 
     /// Derive a short title from the first user message in the session. Falls
@@ -160,7 +181,9 @@ struct ChatSession: Identifiable, Codable, Hashable {
 
     /// Re-derive the title from the current turns. Called when a turn list
     /// changes so the sidebar reflects the first prompt the user wrote.
+    /// Pinned titles (scheduled-task runs) are left alone.
     mutating func refreshTitle() {
+        guard !titlePinned else { return }
         title = Self.derivedTitle(from: turns)
     }
 }

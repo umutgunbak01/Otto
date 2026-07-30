@@ -49,7 +49,26 @@ final class OttoNotificationDelegate: NSObject, UNUserNotificationCenterDelegate
             }
             return
         }
+        if let raw = info["chatSessionId"] as? String, let id = UUID(uuidString: raw) {
+            Task { @MainActor in
+                self.openChatSession(id: id)
+                completionHandler()
+            }
+            return
+        }
         completionHandler()
+    }
+
+    /// Scheduled-task completion → open the run's chat session. MainView
+    /// watches `pendingOpenChatSessionId` and flips to Home.
+    @MainActor
+    private func openChatSession(id: UUID) {
+        guard let state = appState else { return }
+        guard state.chatSession(id) != nil else { return }
+        state.pendingOpenChatSessionId = id
+        #if os(macOS)
+        WindowActivator.bringToFront()
+        #endif
     }
 
     @MainActor

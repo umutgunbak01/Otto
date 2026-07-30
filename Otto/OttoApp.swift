@@ -16,6 +16,7 @@ struct OttoApp: App {
     @AppStorage(MenuBarSettings.enabledKey) private var menuBarEnabled: Bool = MenuBarSettings.defaultEnabled
     @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
     @AppStorage(ScreenCapturePrivacySettings.enabledKey) private var screenCapturePrivacyEnabled: Bool = ScreenCapturePrivacySettings.defaultEnabled
+    @AppStorage(QuickCaptureSettings.enabledKey) private var quickCaptureEnabled: Bool = QuickCaptureSettings.defaultEnabled
 
     #if os(macOS)
     /// Sparkle auto-update controller. Polls the appcast at SUFeedURL
@@ -43,6 +44,7 @@ struct OttoApp: App {
                     appState.meetingTranscription.configure(appState: appState)
                     syncMeetingDetection()
                     syncMenuBar()
+                    syncQuickCapture()
                     #endif
                 }
             #if os(macOS)
@@ -70,6 +72,7 @@ struct OttoApp: App {
                     if !enabled { appState.wakeWord.stop() }
                 }
                 .onChange(of: menuBarEnabled) { _, _ in syncMenuBar() }
+                .onChange(of: quickCaptureEnabled) { _, _ in syncQuickCapture() }
                 .onChange(of: meetingDetectionEnabled) { _, _ in syncMeetingDetection() }
                 .onChange(of: screenCapturePrivacyEnabled) { _, _ in
                     ScreenCapturePrivacyController.shared.syncSetting()
@@ -77,7 +80,7 @@ struct OttoApp: App {
             #endif
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 900, height: 700)
+        .defaultSize(width: 1380, height: 860)
         #if os(macOS)
         .commands {
             CommandGroup(after: .appInfo) {
@@ -107,6 +110,14 @@ struct OttoApp: App {
 
     private func syncMeetingDetection() {
         appState.meetingTranscription.setEnabled(meetingDetectionEnabled)
+    }
+
+    private func syncQuickCapture() {
+        if quickCaptureEnabled {
+            QuickCaptureController.shared.install(appState: appState)
+        } else {
+            QuickCaptureController.shared.uninstall()
+        }
     }
     #endif
 

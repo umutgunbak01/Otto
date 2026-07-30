@@ -118,7 +118,7 @@ struct EventEditorSheet: View {
     private var header: some View {
         HStack {
             Text(isEditing ? "EDIT EVENT" : "NEW EVENT")
-                .hudLabel(tracking: Theme.Tracking.xxwide, color: Theme.Colors.cyan)
+                .hudLabel(tracking: Theme.Tracking.xxwide)
             Spacer()
             Button { dismiss() } label: {
                 Image(systemName: "xmark").foregroundStyle(Theme.Colors.textDim)

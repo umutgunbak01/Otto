@@ -73,40 +73,28 @@ struct IdeaDetailView: View {
         HStack(spacing: 10) {
             // Sidebar toggle button
             if let onToggleSidebar = onToggleSidebar {
-                Button {
+                OttoGlyphButton(
+                    systemImage: "sidebar.left",
+                    help: isSidebarCollapsed ? "Show sidebar" : "Hide sidebar",
+                    isActive: isSidebarCollapsed
+                ) {
                     onToggleSidebar()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isSidebarCollapsed ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(isSidebarCollapsed ? "Show sidebar" : "Hide sidebar")
-            }
-
-            // Breadcrumb
-            HStack(spacing: 6) {
-                Image(systemName: "lightbulb")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                Text("Ideas")
-                    .font(Theme.Typography.monoCaption)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-
-                if !title.isEmpty {
-                    Text("/")
-                        .font(Theme.Typography.monoCaption)
-                        .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
-                    Text(title)
-                        .font(Theme.Typography.monoCaption)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .lineLimit(1)
                 }
             }
+
+            // Breadcrumb (edcrumb — mono overline)
+            Text("IDEAS / \(primaryCategory.rawValue.uppercased())")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .tracking(Theme.Tracking.xxwide)
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .lineLimit(1)
 
             Spacer()
+
+            Text(timeAgo(currentIdea.updatedAt))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Theme.Colors.tertiaryText)
+                .help("Last edited")
 
             // More menu
             Menu {
@@ -142,7 +130,7 @@ struct IdeaDetailView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
@@ -159,7 +147,7 @@ struct IdeaDetailView: View {
     private var titleArea: some View {
         VStack(alignment: .leading, spacing: 0) {
             TextField("Untitled", text: $title, axis: .vertical)
-                .font(Theme.Typography.largeTitle)
+                .font(Font.system(size: 31, weight: .regular, design: .serif))
                 .kerning(-0.4)
                 .textFieldStyle(.plain)
                 .foregroundStyle(Theme.Colors.text)
@@ -246,7 +234,8 @@ struct IdeaDetailView: View {
                     .font(.system(size: icon == "circle.fill" ? 6 : 12))
                     .foregroundStyle(iconColor)
                 Text(label)
-                    .font(.system(size: 13))
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .tracking(0.5)
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
             .frame(width: 120, alignment: .leading)
@@ -261,8 +250,8 @@ struct IdeaDetailView: View {
     // MARK: - Content Editor
 
     private var contentEditor: some View {
-        NoteBlockEditor(content: $content)
-            .frame(minHeight: 400)
+        MarkdownBlockEditor(content: $content)
+            .frame(minHeight: 400, alignment: .topLeading)
     }
 
     // MARK: - Helpers

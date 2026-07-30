@@ -108,6 +108,11 @@ final class ChatRunController {
     /// Streamed-but-unfinalized assistant text (deltas since the last
     /// end-of-message `.text` event).
     @ObservationIgnored private var streamBuffer: String = ""
+    /// Completion hook for programmatic (scheduled-task) runs. Fired exactly
+    /// once per run with `nil` on success or an error/stop description —
+    /// covers normal completion, errors, Stop, and session deletion, so a
+    /// waiting scheduler can never deadlock on a run that ended sideways.
+    @ObservationIgnored private var finishHandler: (@MainActor (String?) -> Void)?
 
     /// Bind to a conversation. For an existing session pass its persisted
     /// turns; a fresh chat starts empty.
@@ -123,21 +128,48 @@ final class ChatRunController {
     /// Start a turn in this controller's conversation. The user's turn is
     /// persisted immediately, before the agent run begins, so the chat is
     /// never absent from history while it works.
+    ///
+    /// `background: true` is the scheduled-task path: the run must not yank
+    /// the user's chat focus to this session, and must not fire IntentRouter
+    /// side effects (opening URLs, capturing the screen) while unattended.
+    /// `onFinish` reports the run's end exactly once — `nil` on success,
+    /// otherwise an error/stop description.
+    ///
+    /// `contextNote` is appended to the model-bound text only — the chat
+    /// bubble and persisted turn keep the user's raw words, exactly like
+    /// IntentRouter's annotations. Quick capture uses it to point the agent
+    /// at a staged screenshot.
     @MainActor
-    func send(text: String, attachments: [ChatAttachment], appState: AppState) {
-        guard !isRunning else { return }
+    func send(
+        text: String,
+        attachments: [ChatAttachment],
+        appState: AppState,
+        contextNote: String? = nil,
+        background: Bool = false,
+        onFinish: (@MainActor (String?) -> Void)? = nil
+    ) {
+        guard !isRunning else {
+            onFinish?("A run is already in progress in this session.")
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachments.isEmpty else {
+            onFinish?("Empty prompt.")
+            return
+        }
 
         // If the user only attached files without typing, send a default
         // prompt so the model has something to respond to.
         let baseText = trimmed.isEmpty ? "(see attached files)" : trimmed
 
         error = nil
+        finishHandler = onFinish
         turns.append(ChatTurn(role: "user", blocks: [.text(baseText)], attachments: attachments))
         entries.append(ChatUIEntry(kind: .userText(text: trimmed, attachments: attachments)))
         isRunning = true
-        appState.activeChatSessionId = sessionId
+        if !background {
+            appState.activeChatSessionId = sessionId
+        }
 
         // Persist right away — the in-flight chat appears in the sidebar and
         // survives a crash even though the assistant hasn't replied yet.
@@ -145,7 +177,7 @@ final class ChatRunController {
         Task { await persist(turns: eagerTurns, appState: appState) }
 
         let state = appState
-        let detectedIntent = IntentRouter.detect(userInput: trimmed)
+        let detectedIntent = background ? nil : IntentRouter.detect(userInput: trimmed)
         let capturedTurns = turns
 
         runTask = Task {
@@ -153,18 +185,23 @@ final class ChatRunController {
             // capture). Runs before the agent so the URL is open / screenshot
             // is saved by the time the model reads its context note.
             var turnsForClaude = capturedTurns
+            var annotations: [String] = []
             if let intent = detectedIntent {
                 await IntentRouter.apply(intent, appState: state)
-                if var lastTurn = turnsForClaude.popLast() {
-                    let annotated = baseText + "\n" + IntentRouter.contextNote(for: intent)
-                    lastTurn = ChatTurn(
-                        role: lastTurn.role,
-                        blocks: [.text(annotated)],
-                        attachments: lastTurn.attachments,
-                        timestamp: lastTurn.timestamp
-                    )
-                    turnsForClaude.append(lastTurn)
-                }
+                annotations.append(IntentRouter.contextNote(for: intent))
+            }
+            if let contextNote {
+                annotations.append(contextNote)
+            }
+            if !annotations.isEmpty, var lastTurn = turnsForClaude.popLast() {
+                let annotated = baseText + "\n" + annotations.joined(separator: "\n")
+                lastTurn = ChatTurn(
+                    role: lastTurn.role,
+                    blocks: [.text(annotated)],
+                    attachments: lastTurn.attachments,
+                    timestamp: lastTurn.timestamp
+                )
+                turnsForClaude.append(lastTurn)
             }
 
             let executor = await MainActor.run { OttoToolExecutor(appState: state) }
@@ -203,17 +240,28 @@ final class ChatRunController {
                 await self.persist(turns: updated, appState: state)
                 let flattened = await MainActor.run { self.flattenForHistory(updated, appState: state) }
                 await state.addToAskHistory(messages: flattened)
+                await MainActor.run { self.fireFinish(nil) }
             } catch {
                 // A user-initiated Stop surfaces as a cancellation / killed
-                // subprocess — that's expected; stop() already cleaned up.
+                // subprocess — that's expected; stop() already cleaned up
+                // (and fired the finish handler).
                 if Task.isCancelled { return }
                 await MainActor.run {
                     self.error = error.localizedDescription
                     self.finishRunKeepingPartialOutput(appState: state)
                     Sounds.play(.error)
+                    self.fireFinish(error.localizedDescription)
                 }
             }
         }
+    }
+
+    /// Invoke and clear the run's completion hook — exactly once per run.
+    @MainActor
+    private func fireFinish(_ error: String?) {
+        guard let handler = finishHandler else { return }
+        finishHandler = nil
+        handler(error)
     }
 
     // MARK: - Externally-driven runs (voice mode)
@@ -288,6 +336,7 @@ final class ChatRunController {
         runTask = nil
         Task { [sessionId] in await appState.claude.cancelRun(sessionKey: sessionId) }
         finishRunKeepingPartialOutput(appState: appState)
+        fireFinish("Stopped by user.")
     }
 
     /// Forget the conversation — its session was deleted or history was
@@ -301,6 +350,7 @@ final class ChatRunController {
         if wasRunning {
             Task { [sessionId] in await AgentService.shared.cancelRun(sessionKey: sessionId) }
         }
+        fireFinish("Session was deleted.")
         isRunning = false
         turns = []
         entries = []
@@ -625,7 +675,8 @@ final class ChatRunController {
             title: existing?.title,
             turns: turns,
             createdAt: existing?.createdAt ?? Date(),
-            updatedAt: Date()
+            updatedAt: Date(),
+            titlePinned: existing?.titlePinned ?? false
         )
         await appState.upsertChatSession(session)
     }

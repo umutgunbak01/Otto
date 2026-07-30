@@ -9,21 +9,13 @@ struct ReminderRowView: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            // Bell icon with status color
-            ZStack {
-                Circle()
-                    .fill(statusColor.opacity(0.12))
-                    .frame(width: 32, height: 32)
-
-                Image(systemName: statusIcon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(statusColor)
-            }
+            // Status square — amber pending, red past due, green done.
+            OttoSquare(systemImage: statusIcon, color: statusColor)
 
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(reminder.title)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .strikethrough(reminder.isCompleted, color: Theme.Colors.secondaryText)
                     .foregroundStyle(reminder.isCompleted ? Theme.Colors.secondaryText : Theme.Colors.text)
                     .lineLimit(2)
@@ -35,14 +27,14 @@ struct ReminderRowView: View {
                         Image(systemName: "clock")
                             .font(.system(size: 10))
                         Text(formatTime(reminder.reminderDate))
-                            .font(Theme.Typography.monoCaption)
+                            .font(.system(size: 10, design: .monospaced))
                     }
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                     // Relative time (only for non-completed)
                     if !reminder.isCompleted {
                         Text(relativeTime(reminder.reminderDate))
-                            .font(Theme.Typography.monoCaption)
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(reminder.isPastDue ? Theme.Colors.red : Theme.Colors.textDim)
                     }
                 }
@@ -83,19 +75,15 @@ struct ReminderRowView: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint when selected.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
                     isSelected
-                        ? Theme.Colors.accent.opacity(0.35)
-                        : (isHovered ? Theme.Colors.borderStrong : Theme.Colors.border),
-                    lineWidth: 1
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
                 )
         )
-        .padding(.vertical, 3)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
@@ -115,11 +103,11 @@ struct ReminderRowView: View {
 
     private var statusColor: Color {
         if reminder.isCompleted {
-            return Theme.Colors.personal
+            return Theme.Colors.green
         } else if reminder.isPastDue {
-            return Theme.Colors.priorityUrgent
+            return Theme.Colors.red
         } else {
-            return Theme.Colors.priorityHigh
+            return Theme.Colors.amber
         }
     }
 

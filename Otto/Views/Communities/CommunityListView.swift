@@ -29,8 +29,7 @@ struct CommunityListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            OttoDivider()
+            viewbar
             if appState.communities.isEmpty {
                 emptyState
             } else if filtered.isEmpty {
@@ -42,9 +41,12 @@ struct CommunityListView: View {
                             CommunityRow(community: community) {
                                 editing = EditingTarget(id: community.id, community: community)
                             }
-                            OttoDivider()
                         }
                     }
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.bottom, Theme.Spacing.xxl)
+                    .frame(maxWidth: 828)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -53,137 +55,156 @@ struct CommunityListView: View {
         }
     }
 
-    private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("Communities")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+    // MARK: - Viewbar
 
-                OttoCountBadge(count: filtered.count)
+    private var viewbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Communities")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                Spacer()
+            OttoCountChip(text: "\(filtered.count)")
 
-                Button { editing = EditingTarget(id: UUID(), community: nil) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 11))
-                        Text("New").font(.system(size: 12, weight: .medium))
-                    }
+            OttoPillRail(
+                options: [(value: false, label: "All"), (value: true, label: "Builder Perk")],
+                selection: $perkOnly
+            )
+
+            Spacer(minLength: 8)
+
+            // Type filter
+            Menu {
+                Button { filterType = nil } label: { Text("All Types") }
+                Divider()
+                ForEach(CommunityType.allCases) { t in
+                    Button { filterType = t } label: { Label(t.label, systemImage: t.icon) }
                 }
-                .buttonStyle(AccentButtonStyle())
+            } label: {
+                OttoBarButtonLabel(label: filterType?.label ?? "Type", showsCaret: true)
             }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
 
-            HStack(spacing: Theme.Spacing.sm) {
-                TableSearchField(text: $searchText, placeholder: "Search communities…")
-                Button { perkOnly.toggle() } label: {
-                    TableFilterChip(icon: "gift", text: "Builder Perk", isActive: perkOnly)
+            // Sort
+            Menu {
+                ForEach(SortOption.allCases, id: \.self) { o in
+                    Button { sortOption = o } label: { Text(o.rawValue) }
                 }
-                .buttonStyle(.plain)
-                Menu {
-                    Button { filterType = nil } label: { Text("All Types") }
-                    Divider()
-                    ForEach(CommunityType.allCases) { t in
-                        Button { filterType = t } label: { Label(t.label, systemImage: t.icon) }
-                    }
-                } label: { TableFilterChip(icon: "square.grid.2x2", text: filterType?.label ?? "Type", isActive: filterType != nil) }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
-                Menu {
-                    ForEach(SortOption.allCases, id: \.self) { o in Button { sortOption = o } label: { Text(o.rawValue) } }
-                } label: { TableFilterChip(icon: "arrow.up.arrow.down", text: sortOption.rawValue, isActive: false) }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
-                Spacer()
+            } label: {
+                OttoBarButtonLabel(label: "Sort: \(sortOption.rawValue)", showsCaret: true)
+            }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
+
+            OttoSearchMini(placeholder: "Search communities…", text: $searchText)
+
+            OttoNewButton(label: "New") {
+                editing = EditingTarget(id: UUID(), community: nil)
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
+    // MARK: - Empty states
+
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "person.3")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No communities yet").font(.system(size: 15)).foregroundStyle(Theme.Colors.tertiaryText)
-            Button { editing = EditingTarget(id: UUID(), community: nil) } label: {
-                Text("Add a community").font(.system(size: 13)).foregroundStyle(Theme.Colors.accent)
+        OttoEmptyState(
+            systemImage: "bubble.left.and.bubble.right",
+            title: "No communities yet",
+            message: "Track the communities, societies and collectives worth engaging — and which offer builder perks."
+        ) {
+            OttoSuggestionChip(systemImage: "plus", label: "Add a community") {
+                editing = EditingTarget(id: UUID(), community: nil)
             }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var noResultsState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No results").font(.system(size: 15)).foregroundStyle(Theme.Colors.tertiaryText)
-            Button { searchText = ""; filterType = nil; perkOnly = false } label: {
-                Text("Clear filters").font(.system(size: 13)).foregroundStyle(Theme.Colors.accent)
+        OttoEmptyState(
+            systemImage: "magnifyingglass",
+            title: "No matches",
+            message: "Nothing fits the current search and filters."
+        ) {
+            OttoSuggestionChip(systemImage: "arrow.counterclockwise", label: "Clear filters") {
+                searchText = ""; filterType = nil; perkOnly = false
             }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
+
+// MARK: - Community Row
 
 private struct CommunityRow: View {
     let community: Community
     let onOpen: () -> Void
     @State private var isHovered = false
-    private var neon: Color { community.type.color }
+
+    /// Stable per-community square tint — violet/teal/green rotation by
+    /// name hash, so a given community keeps its color across launches.
+    private static let palette: [Color] = [
+        Theme.Colors.violet, Theme.Colors.cyan, Theme.Colors.green,
+    ]
+
+    private var squareColor: Color {
+        var hash: UInt64 = 1469598103934665603
+        for byte in community.name.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return Self.palette[Int(hash % UInt64(Self.palette.count))]
+    }
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: Theme.Spacing.md) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(neon.opacity(isHovered ? 0.22 : 0.12))
-                        .frame(width: 32, height: 32)
-                    Image(systemName: community.type.icon).font(.system(size: 13)).foregroundStyle(neon)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+            HStack(spacing: 11) {
+                OttoSquare(systemImage: "bubble.left.and.bubble.right", color: squareColor)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 7) {
                         Text(community.name.isEmpty ? "Untitled" : community.name)
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(isHovered ? neon : Theme.Colors.text)
+                            .foregroundStyle(Theme.Colors.text)
                             .lineLimit(1)
                         if community.builderSupportPerk {
                             Text("PERK")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(1)
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .tracking(1)
                                 .foregroundStyle(Theme.Colors.amber)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .strokeBorder(Theme.Colors.amber, lineWidth: 1)
-                                )
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Theme.Colors.tintAmber))
+                                .overlay(Capsule().strokeBorder(Theme.Colors.amber.opacity(0.2), lineWidth: 1))
                         }
                     }
+
                     HStack(spacing: 6) {
-                        Text(community.type.label).foregroundStyle(Theme.Colors.tertiaryText)
+                        Text(community.type.label)
                         if !community.location.isEmpty {
-                            Image(systemName: "mappin.circle").font(.system(size: 9)).foregroundStyle(Theme.Colors.tertiaryText)
-                            Text(community.location).foregroundStyle(Theme.Colors.tertiaryText).lineLimit(1)
+                            Image(systemName: "mappin")
+                                .font(.system(size: 11))
+                            Text(community.location)
+                                .lineLimit(1)
                         }
                     }
-                    .font(.system(size: 11))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                 }
+
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.vertical, 9)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg)
-                .fill(neon.opacity(isHovered ? 0.08 : 0))
-                .padding(.horizontal, Theme.Spacing.md)
+            // Quiet list row — no border, wash on hover.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(isHovered ? Theme.Colors.panel : Color.clear)
         )
         .onHover { hovering in withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering } }
     }

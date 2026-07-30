@@ -59,12 +59,45 @@ enum MeetingNotesLanguageSettings {
     }
 }
 
+enum AutomationSettings {
+    /// Master pause for the recurring-task scheduler (Automations tab header
+    /// toggle). While paused, no tasks fire; due dates keep accruing so a
+    /// catch-up run happens when unpaused.
+    static let pausedKey = "automations_paused"
+    static let defaultPaused: Bool = false
+}
+
 enum MenuBarSettings {
     static let enabledKey = "menubar_enabled"
     /// Default ON — gives users the time + next-event surface they
     /// used to get from the floating HUD, in the standard macOS
     /// menu-bar location alongside other app icons.
     static let defaultEnabled: Bool = true
+}
+
+enum QuickCaptureSettings {
+    static let enabledKey = "quick_capture_enabled"
+    /// Default ON — the global shortcut is the feature; it registers via
+    /// Carbon (no permissions involved) and Settings surfaces a warning if
+    /// another app already owns the chord.
+    static let defaultEnabled: Bool = true
+
+    /// JSON-encoded `QuickCaptureShortcut` (keyCode + modifiers + display).
+    static let shortcutKey = "quick_capture_shortcut"
+
+    #if os(macOS)
+    static var currentShortcut: QuickCaptureShortcut {
+        guard let data = UserDefaults.standard.data(forKey: shortcutKey),
+              let decoded = try? JSONDecoder().decode(QuickCaptureShortcut.self, from: data)
+        else { return .default }
+        return decoded
+    }
+
+    static func save(_ shortcut: QuickCaptureShortcut) {
+        guard let data = try? JSONEncoder().encode(shortcut) else { return }
+        UserDefaults.standard.set(data, forKey: shortcutKey)
+    }
+    #endif
 }
 
 enum ScreenCapturePrivacySettings {

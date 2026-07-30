@@ -92,6 +92,24 @@ actor NotificationService {
         return notificationId
     }
 
+    /// Immediate notification announcing a finished (or failed) scheduled-task
+    /// run. Tapping it routes through `OttoNotificationDelegate` to open the
+    /// chat session the run produced.
+    @discardableResult
+    func notifyTaskComplete(taskName: String, chatSessionId: UUID, body: String) async throws -> String {
+        if await quietAt(Date()) { return "" }
+        let content = UNMutableNotificationContent()
+        content.title = taskName
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["chatSessionId": chatSessionId.uuidString]
+
+        let notificationId = UUID().uuidString
+        let request = UNNotificationRequest(identifier: notificationId, content: content, trigger: nil)
+        try await UNUserNotificationCenter.current().add(request)
+        return notificationId
+    }
+
     /// Immediate notification announcing a finished meeting analysis. Tapping
     /// it routes through `OttoNotificationDelegate` to open the Meeting.
     @discardableResult

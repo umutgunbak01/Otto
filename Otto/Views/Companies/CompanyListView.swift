@@ -58,15 +58,14 @@ struct CompanyListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            OttoDivider()
+            viewbar
             if appState.companies.isEmpty {
                 emptyState
             } else if filtered.isEmpty {
                 noResultsState
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 6) {
+                    LazyVStack(spacing: 0) {
                         ForEach(filtered) { company in
                             CompanyRow(company: company) {
                                 editing = EditingTarget(id: company.id, company: company)
@@ -74,7 +73,9 @@ struct CompanyListView: View {
                         }
                     }
                     .padding(.horizontal, Theme.Spacing.xl)
-                    .padding(.vertical, Theme.Spacing.lg)
+                    .padding(.bottom, Theme.Spacing.xxl)
+                    .frame(maxWidth: 828)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -84,183 +85,107 @@ struct CompanyListView: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Viewbar
 
-    private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Companies")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+    private var viewbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Companies")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filtered.count)
+            OttoCountChip(text: "\(filtered.count)")
 
-                if totalCommitment > 0 {
-                    Text("Σ \(Company.formatMoney(totalCommitment))")
-                        .font(Theme.Typography.monoSmall)
-                        .foregroundStyle(Theme.Colors.green)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2.5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Theme.Colors.tintGreen)
-                        )
-                }
-
-                Spacer()
-
-                Button {
-                    editing = EditingTarget(id: UUID(), company: nil)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("New")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                }
-                .buttonStyle(AccentButtonStyle())
+            if totalCommitment > 0 {
+                Text("Σ \(Company.formatMoney(totalCommitment)) committed")
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .tracking(0.3)
+                    .foregroundStyle(Theme.Colors.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3.5)
+                    .background(Capsule().fill(Theme.Colors.tintGreen))
+                    .overlay(Capsule().strokeBorder(Theme.Colors.green.opacity(0.2), lineWidth: 1))
+                    .lineLimit(1)
+                    .fixedSize()
             }
 
-            HStack(spacing: Theme.Spacing.sm) {
-                // Search
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.Colors.bgInput)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-                .frame(maxWidth: 260)
+            OttoPillRail(
+                options: CustomerFilter.allCases.map { (value: $0, label: $0.rawValue) },
+                selection: $customerFilter
+            )
 
-                // Customer filter
-                HStack(spacing: 3) {
-                    ForEach(CustomerFilter.allCases, id: \.self) { option in
-                        Button { customerFilter = option } label: {
-                            Text(option.rawValue)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(customerFilter == option ? Theme.Colors.accentText : Theme.Colors.textDim)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(customerFilter == option ? Theme.Colors.selectTint : Color.clear)
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+            Spacer(minLength: 8)
 
-                // Type filter
-                Menu {
-                    Button { filterType = nil } label: {
-                        HStack { Text("All Types"); if filterType == nil { Image(systemName: "checkmark") } }
-                    }
-                    Divider()
-                    ForEach(CompanyType.allCases) { type in
-                        Button { filterType = type } label: {
-                            HStack {
-                                Image(systemName: type.icon)
-                                Text(type.label)
-                                if filterType == type { Image(systemName: "checkmark") }
-                            }
+            // Type filter
+            Menu {
+                Button { filterType = nil } label: {
+                    HStack { Text("All Types"); if filterType == nil { Image(systemName: "checkmark") } }
+                }
+                Divider()
+                ForEach(CompanyType.allCases) { type in
+                    Button { filterType = type } label: {
+                        HStack {
+                            Image(systemName: type.icon)
+                            Text(type.label)
+                            if filterType == type { Image(systemName: "checkmark") }
                         }
                     }
-                } label: {
-                    filterChipLabel(icon: "square.grid.2x2", text: filterType?.label ?? "Type", isActive: filterType != nil)
                 }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
+            } label: {
+                OttoBarButtonLabel(label: filterType?.label ?? "Type", showsCaret: true)
+            }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
 
-                // Sort
-                Menu {
-                    ForEach(SortOption.allCases, id: \.self) { option in
-                        Button { sortOption = option } label: {
-                            HStack { Text(option.rawValue); if sortOption == option { Image(systemName: "checkmark") } }
-                        }
+            // Sort
+            Menu {
+                ForEach(SortOption.allCases, id: \.self) { option in
+                    Button { sortOption = option } label: {
+                        HStack { Text(option.rawValue); if sortOption == option { Image(systemName: "checkmark") } }
                     }
-                } label: {
-                    filterChipLabel(icon: "arrow.up.arrow.down", text: sortOption.rawValue, isActive: false)
                 }
-                #if os(macOS)
-                .menuStyle(.borderlessButton)
-                #endif
+            } label: {
+                OttoBarButtonLabel(label: "Sort: \(sortOption.rawValue)", showsCaret: true)
+            }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
 
-                Spacer()
+            OttoSearchMini(placeholder: "Search", text: $searchText)
+
+            OttoNewButton(label: "New") {
+                editing = EditingTarget(id: UUID(), company: nil)
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
-    }
-
-    private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 12, weight: .medium))
-        }
-        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
-        )
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Empty states
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "building.2")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No companies yet")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-            Button { editing = EditingTarget(id: UUID(), company: nil) } label: {
-                Text("Add a company")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.Colors.accent)
+        OttoEmptyState(
+            systemImage: "building.2",
+            title: "No companies yet",
+            message: "Track customers, prospects and partners — commitments, cities, and the people you know at each."
+        ) {
+            OttoSuggestionChip(systemImage: "plus", label: "Add a company") {
+                editing = EditingTarget(id: UUID(), company: nil)
             }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var noResultsState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-            Text("No results")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-            Button {
+        OttoEmptyState(
+            systemImage: "magnifyingglass",
+            title: "No matches",
+            message: "Nothing fits the current search and filters."
+        ) {
+            OttoSuggestionChip(systemImage: "arrow.counterclockwise", label: "Clear filters") {
                 searchText = ""; filterType = nil; customerFilter = .all
-            } label: {
-                Text("Clear filters").font(.system(size: 13)).foregroundStyle(Theme.Colors.accent)
             }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -271,81 +196,90 @@ private struct CompanyRow: View {
     let onOpen: () -> Void
     @State private var isHovered = false
 
-    private var neon: Color { company.type == .unknown ? ContentType.company.color : company.type.color }
+    /// Stable per-company square tint — the name hashes into the redesign's
+    /// five accents so a given company keeps its color across launches.
+    private static let palette: [Color] = [
+        Theme.Colors.green, Theme.Colors.violet, Theme.Colors.amber,
+        Theme.Colors.cyan, Theme.Colors.blue,
+    ]
+
+    private var squareColor: Color {
+        var hash: UInt64 = 1469598103934665603
+        for byte in company.name.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return Self.palette[Int(hash % UInt64(Self.palette.count))]
+    }
 
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 11) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(neon.opacity(0.12))
-                        .frame(width: 30, height: 30)
-                    Image(systemName: company.type.icon)
-                        .font(.system(size: 13))
-                        .foregroundStyle(neon)
-                }
+                OttoSquare(systemImage: "building.2", color: squareColor)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(company.name.isEmpty ? "Untitled" : company.name)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.Colors.text)
                         .lineLimit(1)
+
                     HStack(spacing: 6) {
                         Text(company.type.label)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.Colors.textDim)
                         if !company.location.isEmpty {
-                            Image(systemName: "mappin.circle")
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.Colors.textDim)
+                            Image(systemName: "mappin")
+                                .font(.system(size: 11))
                             Text(company.location)
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.Colors.textDim)
                                 .lineLimit(1)
                         }
                         if !company.linkedNetworkEntryIds.isEmpty {
                             Text("· \(company.linkedNetworkEntryIds.count) linked")
-                                .font(Theme.Typography.monoCaption)
-                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .font(.system(size: 10.5, weight: .regular, design: .monospaced))
                                 .help("\(company.linkedNetworkEntryIds.count) linked Network Hub people")
                         }
                     }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: 12)
 
-                Text(company.isCustomer ? "Customer" : "Prospect")
-                    .font(Theme.Typography.monoSmall)
-                    .foregroundStyle(company.isCustomer ? Theme.Colors.green : Theme.Colors.amber)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2.5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(company.isCustomer ? Theme.Colors.tintGreen : Theme.Colors.tintAmber)
-                    )
+                statusChip
 
                 if let commitment = company.formattedCommitment {
                     Text(commitment)
-                        .font(Theme.Typography.monoCaption)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(Theme.Colors.green)
                 }
             }
             .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, 9)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+            // Quiet list row — no border, wash on hover.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(isHovered ? Theme.Colors.panel : Color.clear)
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
         }
+    }
+
+    private var statusChip: some View {
+        Text(company.isCustomer ? "Customer" : "Prospect")
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .tracking(0.3)
+            .foregroundStyle(company.isCustomer ? Theme.Colors.green : Theme.Colors.amber)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(company.isCustomer ? Theme.Colors.tintGreen : Theme.Colors.tintAmber))
+            .overlay(
+                Capsule().strokeBorder(
+                    (company.isCustomer ? Theme.Colors.green : Theme.Colors.amber).opacity(0.2),
+                    lineWidth: 1
+                )
+            )
     }
 }
 

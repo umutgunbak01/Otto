@@ -84,7 +84,7 @@ struct OttoVerticalDivider: View {
 // MARK: - OttoCountBadge
 //
 // The mono count chip used in list-view headers (mockup .count-chip) and
-// semantic-tinted variants (mockup .chip.green/.amber/…).
+// semantic-tinted variants (mockup .chip2.c-green/.c-amber/…).
 
 struct OttoCountBadge: View {
     let count: Int
@@ -94,7 +94,7 @@ struct OttoCountBadge: View {
 
     private var color: Color {
         switch tone {
-        case .neutral: return Theme.Colors.textDim
+        case .neutral: return Theme.Colors.tertiaryText
         case .cyan:    return Theme.Colors.accentText
         case .amber:   return Theme.Colors.amber
         case .red:     return Theme.Colors.red
@@ -104,8 +104,8 @@ struct OttoCountBadge: View {
 
     private var bg: Color {
         switch tone {
-        case .neutral: return Color.clear
-        case .cyan:    return Theme.Colors.selectTint
+        case .neutral: return Theme.Colors.panel
+        case .cyan:    return Theme.Colors.tintTeal
         case .amber:   return Theme.Colors.tintAmber
         case .red:     return Theme.Colors.tintRed
         case .green:   return Theme.Colors.tintGreen
@@ -114,20 +114,17 @@ struct OttoCountBadge: View {
 
     var body: some View {
         Text(formatted)
-            .font(Theme.Typography.monoSmall)
+            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+            .tracking(0.4)
             .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .foregroundStyle(tone == .neutral ? Theme.Colors.textDim : color)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                    .fill(bg)
-            )
+            .padding(.vertical, 3)
+            .foregroundStyle(color)
+            .background(Capsule().fill(bg))
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                    .strokeBorder(
-                        tone == .neutral ? Theme.Colors.border : color.opacity(0.0),
-                        lineWidth: 1
-                    )
+                Capsule().strokeBorder(
+                    tone == .neutral ? Theme.Colors.border : color.opacity(0.2),
+                    lineWidth: 1
+                )
             )
     }
 
@@ -138,8 +135,8 @@ struct OttoCountBadge: View {
 
 // MARK: - OttoListHeader
 //
-// The mockup's viewbar formula: sans title + mono count chip + trailing
-// controls, closed with a hairline. Replaces the old glowing mono header.
+// The mockup's viewbar formula: serif display title + mono count chip +
+// trailing controls. No closing hairline — content scrolls directly below.
 
 struct OttoListHeader<Trailing: View>: View {
     let title: String
@@ -148,23 +145,19 @@ struct OttoListHeader<Trailing: View>: View {
     @ViewBuilder var trailing: () -> Trailing
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
-                Text(title)
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
-                if let count = count {
-                    OttoCountBadge(count: count, tone: tone)
-                }
-                Spacer()
-                trailing()
+        HStack(alignment: .center, spacing: 10) {
+            Text(title)
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
+            if let count = count {
+                OttoCountBadge(count: count, tone: tone)
             }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.lg)
-            .padding(.bottom, Theme.Spacing.md)
-
-            OttoDivider()
+            Spacer()
+            trailing()
         }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 }
 

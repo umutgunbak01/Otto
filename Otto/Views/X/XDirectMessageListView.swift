@@ -60,7 +60,6 @@ struct XDirectMessageListView: View {
     private var listPanel: some View {
         VStack(spacing: 0) {
             header
-            OttoDivider()
 
             if conversations.isEmpty {
                 emptyState
@@ -76,60 +75,41 @@ struct XDirectMessageListView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("X DMs")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("DMs")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: conversations.count)
+            OttoCountChip(text: conversationCountText)
 
-                Spacer()
-
-                if appState.isLoadingX {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                }
+            if appState.isLoadingX {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 16, height: 16)
             }
+
+            Spacer(minLength: 8)
 
             // Search field
             if !appState.xDirectMessages.isEmpty {
-                HStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-
-                    TextField("Search messages...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Typography.body)
-
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(Theme.Colors.borderSubtle.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                OttoSearchMini(placeholder: "Search messages…", text: $searchText, width: 200)
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var conversationCountText: String {
+        let count = conversations.count
+        return count == 1 ? "1 conversation" : "\(count) conversations"
     }
 
     // MARK: - Conversation List
 
     private var conversationList: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            LazyVStack(spacing: 2) {
                 ForEach(conversations) { message in
                     conversationRow(message)
                         .contentShape(Rectangle())
@@ -138,71 +118,65 @@ struct XDirectMessageListView: View {
                         }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
     // MARK: - Conversation Row
 
     private func conversationRow(_ message: XDirectMessage) -> some View {
-        HStack(spacing: Theme.Spacing.md) {
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
             // Sender avatar
-            ZStack {
-                Circle()
-                    .fill(ContentType.xDm.color.opacity(0.12))
-                    .frame(width: 32, height: 32)
-
-                Text(String(message.senderDisplayName.prefix(1)).uppercased())
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(ContentType.xDm.color)
-            }
+            XAvatar(
+                seed: message.senderUsername,
+                initials: String(message.senderDisplayName.prefix(1)).uppercased(),
+                size: 30
+            )
+            .padding(.top, 1)
 
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                // Sender info and timestamp
-                HStack {
+                // Sender info and timestamp (mockup .xhead)
+                HStack(spacing: 7) {
                     Text(message.senderDisplayName)
-                        .font(Theme.Typography.headline)
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Theme.Colors.text)
                         .lineLimit(1)
 
                     Text("@\(message.senderUsername)")
-                        .font(Theme.Typography.caption)
+                        .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
 
                     Spacer()
 
                     Text(message.formattedDate)
-                        .font(Theme.Typography.caption)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
                 // Latest message preview
                 Text(message.text)
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineSpacing(3)
                     .lineLimit(1)
 
-                // Message count badge for conversation
+                // Message count for the conversation
                 let messageCount = appState.xDirectMessages.filter { $0.conversationId == message.conversationId }.count
                 if messageCount > 1 {
                     Text("\(messageCount) messages")
-                        .font(Theme.Typography.small)
-                        .foregroundStyle(ContentType.xDm.color)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(ContentType.xDm.color.opacity(0.1))
-                        .clipShape(Capsule())
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
         }
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.sm)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Color.clear)
-        )
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 10)
+        .xRowCard()
     }
 
     // MARK: - Conversation Thread View
@@ -251,6 +225,8 @@ struct XDirectMessageListView: View {
                     }
                 }
                 .padding(Theme.Spacing.xl)
+                .frame(maxWidth: 828)
+                .frame(maxWidth: .infinity)
             }
         }
         #if os(iOS)
@@ -260,37 +236,34 @@ struct XDirectMessageListView: View {
 
     private func threadMessageRow(_ message: XDirectMessage) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            // Sender and timestamp
+            // Sender and timestamp (mockup .xhead)
             HStack(spacing: Theme.Spacing.sm) {
-                ZStack {
-                    Circle()
-                        .fill(ContentType.xDm.color.opacity(0.12))
-                        .frame(width: 24, height: 24)
-
-                    Text(String(message.senderDisplayName.prefix(1)).uppercased())
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(ContentType.xDm.color)
-                }
+                XAvatar(
+                    seed: message.senderUsername,
+                    initials: String(message.senderDisplayName.prefix(1)).uppercased(),
+                    size: 24
+                )
 
                 Text(message.senderDisplayName)
-                    .font(Theme.Typography.headline)
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Theme.Colors.text)
 
                 Text("@\(message.senderUsername)")
-                    .font(Theme.Typography.caption)
+                    .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Spacer()
 
                 Text(message.formattedDate)
-                    .font(Theme.Typography.caption)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
 
             // Message text
             Text(message.text)
-                .font(Theme.Typography.body)
+                .font(.system(size: 13))
                 .foregroundStyle(Theme.Colors.text)
+                .lineSpacing(3)
                 .textSelection(.enabled)
                 .padding(.leading, 32)
         }
@@ -300,21 +273,11 @@ struct XDirectMessageListView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "message")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text(searchText.isEmpty ? "No X DMs yet" : "No matching conversations")
-                    .font(Theme.Typography.title)
-                Text("Connect X in Integrations to import your direct messages.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "message",
+            title: searchText.isEmpty ? "No DMs yet" : "No matching conversations",
+            message: "Connect X in Integrations to import your direct messages."
+        )
     }
 }
 

@@ -221,6 +221,18 @@ struct NetworkEntry: Identifiable, Codable, Equatable {
     var notes: String
     /// Structured LinkedIn data, when imported from a PDF export.
     var profile: LinkedInProfile?
+    /// Most recent touchpoint (email/meeting/calendar/DM), maintained by
+    /// ContactActivityIndexer at sync boundaries; "Mark contacted" writes it
+    /// directly. Ratchets forward only.
+    var lastContactedAt: Date?
+    /// Keep-in-touch cadence. nil = no follow-up tracking for this person.
+    var followUpCadence: FollowUpCadence?
+    /// Mutes the follow-up queue until this date (nil = not snoozed).
+    var followUpSnoozedUntil: Date?
+    /// Agent-written relationship summary (person 360 card) + when it was
+    /// generated, for staleness checks against newer touchpoints.
+    var aiSummary: String?
+    var aiSummaryGeneratedAt: Date?
     let createdAt: Date
     var updatedAt: Date
 
@@ -277,6 +289,11 @@ struct NetworkEntry: Identifiable, Codable, Equatable {
         closeness: NetworkCloseness = .unknown,
         notes: String = "",
         profile: LinkedInProfile? = nil,
+        lastContactedAt: Date? = nil,
+        followUpCadence: FollowUpCadence? = nil,
+        followUpSnoozedUntil: Date? = nil,
+        aiSummary: String? = nil,
+        aiSummaryGeneratedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -293,8 +310,75 @@ struct NetworkEntry: Identifiable, Codable, Equatable {
         self.closeness = closeness
         self.notes = notes
         self.profile = profile
+        self.lastContactedAt = lastContactedAt
+        self.followUpCadence = followUpCadence
+        self.followUpSnoozedUntil = followUpSnoozedUntil
+        self.aiSummary = aiSummary
+        self.aiSummaryGeneratedAt = aiSummaryGeneratedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+}
+
+// MARK: - Keep in touch
+
+/// How often the user wants to touch base with a person. `days` drives the
+/// due computation; labels render in pickers, chips, and the agent schema.
+enum FollowUpCadence: String, Codable, CaseIterable, Identifiable {
+    case weekly
+    case biweekly
+    case monthly
+    case quarterly
+    case semiannual
+    case annual
+
+    var id: String { rawValue }
+
+    var days: Int {
+        switch self {
+        case .weekly: return 7
+        case .biweekly: return 14
+        case .monthly: return 30
+        case .quarterly: return 91
+        case .semiannual: return 182
+        case .annual: return 365
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .weekly: return "Weekly"
+        case .biweekly: return "Every 2 weeks"
+        case .monthly: return "Monthly"
+        case .quarterly: return "Quarterly"
+        case .semiannual: return "Every 6 months"
+        case .annual: return "Yearly"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .weekly: return "1w"
+        case .biweekly: return "2w"
+        case .monthly: return "1mo"
+        case .quarterly: return "3mo"
+        case .semiannual: return "6mo"
+        case .annual: return "1y"
+        }
+    }
+}
+
+extension NetworkEntry {
+    /// Days overdue for a follow-up (0 = due today). nil when no cadence is
+    /// set, the person isn't due yet, or the queue is snoozed. A person with
+    /// no recorded contact counts from `createdAt`.
+    func followUpOverdueDays(now: Date = Date()) -> Int? {
+        guard let cadence = followUpCadence else { return nil }
+        if let snoozed = followUpSnoozedUntil, snoozed > now { return nil }
+        let anchor = lastContactedAt ?? createdAt
+        guard let due = Calendar.current.date(byAdding: .day, value: cadence.days, to: anchor) else { return nil }
+        guard due <= now else { return nil }
+        return Calendar.current.dateComponents([.day], from: due, to: now).day ?? 0
     }
 }
 
@@ -305,6 +389,8 @@ extension NetworkEntry {
         case id, type, company, industry, name, individualType, title
         case location, email
         case linkedin, closeness, notes, profile, createdAt, updatedAt
+        case lastContactedAt, followUpCadence, followUpSnoozedUntil
+        case aiSummary, aiSummaryGeneratedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -324,6 +410,11 @@ extension NetworkEntry {
         closeness = (try? container.decode(NetworkCloseness.self, forKey: .closeness)) ?? .unknown
         notes = (try? container.decode(String.self, forKey: .notes)) ?? ""
         profile = try? container.decode(LinkedInProfile.self, forKey: .profile)
+        lastContactedAt = try? container.decode(Date.self, forKey: .lastContactedAt)
+        followUpCadence = try? container.decode(FollowUpCadence.self, forKey: .followUpCadence)
+        followUpSnoozedUntil = try? container.decode(Date.self, forKey: .followUpSnoozedUntil)
+        aiSummary = try? container.decode(String.self, forKey: .aiSummary)
+        aiSummaryGeneratedAt = try? container.decode(Date.self, forKey: .aiSummaryGeneratedAt)
         createdAt = (try? container.decode(Date.self, forKey: .createdAt)) ?? Date()
         updatedAt = (try? container.decode(Date.self, forKey: .updatedAt)) ?? Date()
     }
@@ -343,6 +434,11 @@ extension NetworkEntry {
         try container.encode(closeness, forKey: .closeness)
         try container.encode(notes, forKey: .notes)
         try container.encodeIfPresent(profile, forKey: .profile)
+        try container.encodeIfPresent(lastContactedAt, forKey: .lastContactedAt)
+        try container.encodeIfPresent(followUpCadence, forKey: .followUpCadence)
+        try container.encodeIfPresent(followUpSnoozedUntil, forKey: .followUpSnoozedUntil)
+        try container.encodeIfPresent(aiSummary, forKey: .aiSummary)
+        try container.encodeIfPresent(aiSummaryGeneratedAt, forKey: .aiSummaryGeneratedAt)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }

@@ -65,17 +65,13 @@ struct XFollowerDetailView: View {
         HStack(spacing: 10) {
             // Sidebar toggle button
             if let onToggleSidebar = onToggleSidebar {
-                Button {
+                OttoGlyphButton(
+                    systemImage: "sidebar.left",
+                    help: isSidebarCollapsed ? "Show sidebar" : "Hide sidebar",
+                    isActive: isSidebarCollapsed
+                ) {
                     onToggleSidebar()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isSidebarCollapsed ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .help(isSidebarCollapsed ? "Show sidebar" : "Hide sidebar")
             }
 
             // Breadcrumb
@@ -83,7 +79,7 @@ struct XFollowerDetailView: View {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.textDim)
-                Text("X Followers")
+                Text("Followers")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
@@ -99,20 +95,11 @@ struct XFollowerDetailView: View {
             Spacer()
 
             // Jump to the live profile on x.com
-            Button {
+            OttoBarButton(label: "Open in X", systemImage: "arrow.up.right") {
                 if let url = follower.profileURL {
                     openURL(url)
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 10, weight: .semibold))
-                    Text("Open in X")
-                        .font(.system(size: 12))
-                }
-                .foregroundStyle(Theme.Colors.textDim)
             }
-            .buttonStyle(GhostButtonStyle())
             .help("Open @\(follower.username) on x.com")
         }
         .padding(.horizontal, 20)
@@ -133,27 +120,20 @@ struct XFollowerDetailView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 Text(follower.displayLabel)
-                    .font(Theme.Typography.largeTitle)
+                    .font(Theme.Typography.display)
+                    .foregroundStyle(Theme.Colors.text)
                     .textSelection(.enabled)
 
                 if follower.hasMeaningfulName {
                     Text("@\(follower.username)")
                         .font(Theme.Typography.monoBody)
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
                         .textSelection(.enabled)
                 }
 
                 HStack(spacing: Theme.Spacing.sm) {
                     if follower.isMutual {
-                        AngularChip(fill: Theme.Colors.selectTint) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.left.arrow.right")
-                                    .font(.system(size: 9))
-                                Text("Mutual")
-                                    .font(Theme.Typography.monoSmall)
-                            }
-                            .foregroundStyle(Theme.Colors.accentText)
-                        }
+                        XMutualChip(systemImage: "arrow.left.arrow.right")
                     } else {
                         AngularChip {
                             Text("Follows you")
@@ -163,7 +143,7 @@ struct XFollowerDetailView: View {
                     }
 
                     Text("Synced \(follower.syncUpdatedAt.formatted(.relative(presentation: .named)))")
-                        .font(Theme.Typography.caption)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
                 .padding(.top, 2)
@@ -272,11 +252,11 @@ struct XFollowerDetailView: View {
                 .padding(Theme.Spacing.md)
                 .background(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(ContentType.connection.color.opacity(0.06))
+                        .fill(Theme.Colors.panel)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(ContentType.connection.color.opacity(0.15), lineWidth: 1)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
                 )
             } else if !appState.connections.isEmpty {
                 // Show link button
@@ -289,12 +269,16 @@ struct XFollowerDetailView: View {
                         Text("Link to Connection")
                             .font(Theme.Typography.body)
                     }
-                    .foregroundStyle(ContentType.connection.color)
+                    .foregroundStyle(Theme.Colors.accentText)
                     .padding(.horizontal, Theme.Spacing.md)
                     .padding(.vertical, Theme.Spacing.sm)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .fill(ContentType.connection.color.opacity(0.1))
+                            .fill(Theme.Colors.panel)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
@@ -380,20 +364,8 @@ private struct ConnectionPickerView: View {
             .padding(Theme.Spacing.lg)
 
             // Search
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-
-                TextField("Search connections...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Typography.body)
-            }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, Theme.Spacing.sm)
-            .background(Theme.Colors.borderSubtle.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
-            .padding(.horizontal, Theme.Spacing.lg)
+            OttoSearchMini(placeholder: "Search connections…", text: $searchText, width: nil)
+                .padding(.horizontal, Theme.Spacing.lg)
 
             OttoDivider()
                 .padding(.top, Theme.Spacing.sm)

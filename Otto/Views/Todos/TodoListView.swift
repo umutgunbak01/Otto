@@ -237,45 +237,34 @@ struct TodoListView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("To-dos")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("To-dos")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: activeTodos.count)
+            OttoCountChip(text: "\(activeTodos.count) active")
 
-                Spacer()
+            TodoFilterPicker(selection: $filter)
+                .padding(.leading, 4)
 
-                // Sync calendar button
-                if appState.isCalendarConnected {
-                    Button {
+            Spacer()
+
+            // Sync calendar button
+            if appState.isCalendarConnected {
+                if appState.isLoadingCalendar {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 28, height: 28)
+                } else {
+                    OttoGlyphButton(systemImage: "arrow.triangle.2.circlepath", help: "Sync Calendar") {
                         Task { await appState.syncCalendarEvents() }
-                    } label: {
-                        if appState.isLoadingCalendar {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .frame(width: 16, height: 16)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
                     }
-                    .buttonStyle(.plain)
-                    #if os(macOS)
-                    .help("Sync Calendar")
-                    #endif
-                    .disabled(appState.isLoadingCalendar)
                 }
-
-                // Filter picker
-                TodoFilterPicker(selection: $filter)
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.top, Theme.Spacing.lg)
-            .padding(.bottom, Theme.Spacing.md)
         }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 10)
     }
 
     // MARK: - Day Grouped List (Todoist-style)
@@ -320,8 +309,10 @@ struct TodoListView: View {
                     }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.sm)
-            .padding(.bottom, Theme.Spacing.xl)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -344,7 +335,10 @@ struct TodoListView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, Theme.Spacing.sm)
+                    .padding(.horizontal, Theme.Spacing.xl)
+                    .padding(.bottom, Theme.Spacing.xxl)
+                    .frame(maxWidth: 828)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }

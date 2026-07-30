@@ -110,7 +110,7 @@ struct CreativeView: View {
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .frame(height: 44)
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.panelWash)
     }
 
     private var workflowMenu: some View {

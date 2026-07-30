@@ -31,7 +31,6 @@ struct CityTableView: View {
         VStack(spacing: 0) {
             cityHeader
             tabBar
-            OttoDivider()
             Group {
                 switch tab {
                 case .all:         CityAllTable(group: group)
@@ -43,75 +42,58 @@ struct CityTableView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.md)
+            .padding(.bottom, Theme.Spacing.xl)
         }
-        .background(Theme.Colors.bg0)
     }
 
     // MARK: - Header
 
     private var cityHeader: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            Button(action: onBack) {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
-                    Text("Map").font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(Theme.Colors.textDim)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.Colors.panel)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-            }
-            .buttonStyle(.plain)
+        HStack(spacing: 10) {
+            OttoGlyphButton(systemImage: "chevron.left", help: "Back to map") { onBack() }
 
-            Image(systemName: "mappin.circle.fill").font(.system(size: 15)).foregroundStyle(Theme.Colors.cyan)
             Text(group.displayName)
-                .font(Theme.Typography.title)
+                .font(Theme.Typography.display)
                 .foregroundStyle(Theme.Colors.text)
-            Text("\(group.totalCount)")
-                .font(Theme.Typography.monoSmall)
-                .foregroundStyle(Theme.Colors.textDim)
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(Theme.Colors.panel)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
+
+            OttoCountChip(text: "\(group.totalCount)")
+
             Spacer()
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.lg)
-        .padding(.bottom, Theme.Spacing.sm)
+        .padding(.top, 18)
+        .padding(.bottom, 8)
     }
 
     private var tabBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(CityTab.allCases) { t in
                 let active = tab == t
                 Button { tab = t } label: {
                     HStack(spacing: 5) {
                         Text(t.rawValue)
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(active ? Theme.Colors.text : Theme.Colors.tertiaryText)
                         Text("\(count(t))")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(active ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                     }
-                    .foregroundStyle(active ? Theme.Colors.accentText : Theme.Colors.textDim)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 11)
+                    .frame(height: 24)
                     .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                            .fill(active ? Theme.Colors.selectTint : Color.clear)
+                        Capsule().fill(active ? Theme.Colors.panel2 : Color.clear)
                     )
+                    .overlay(
+                        Capsule().strokeBorder(active ? Theme.Colors.border : Color.clear, lineWidth: 1)
+                    )
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }

@@ -133,7 +133,7 @@ struct ConnectionListView: View {
         VStack(spacing: 0) {
             header
 
-            OttoDivider()
+            statChipsRow
 
             if filteredConnections.isEmpty && appState.connections.isEmpty {
                 emptyState
@@ -179,12 +179,22 @@ struct ConnectionListView: View {
                 LazyVStack(spacing: 0) {
                     ForEach(filteredConnections) { connection in
                         connectionRow(connection)
-                        OttoDivider()
+                        OttoDivider(color: Color.white.opacity(0.038))
                     }
                 }
             }
             .frame(width: totalTableWidth, alignment: .leading)
         }
+        // Inset "sheet" container (mockup .sheetwrap): faint wash, rounded
+        // hairline frame, floated off the pane edges.
+        .background(Color.white.opacity(0.008))
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.bottom, Theme.Spacing.xl)
     }
 
     private var columnHeaderRow: some View {
@@ -207,8 +217,8 @@ struct ConnectionListView: View {
                     .buttonStyle(.plain)
                 }
                 Text("Name")
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.xwide)
+                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .tracking(1.6)
                     .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.tertiaryText)
                 Spacer()
@@ -221,8 +231,8 @@ struct ConnectionListView: View {
             // and the ScrollView's content extent in sync.
             ForEach(layout.visible, id: \.self) { column in
                 Text(ColumnLayout.label(for: column, definitions: appState.connectionCustomFields))
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.xwide)
+                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .tracking(1.6)
                     .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.tertiaryText)
                     .padding(.horizontal, 8)
@@ -252,7 +262,7 @@ struct ConnectionListView: View {
                     #endif
             }
         }
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.bgRaised)
         // Catch-all so a drop on the pinned Name column or a gap still
         // finalizes the reorder (persist + clear the drag state).
         .onDrop(
@@ -294,15 +304,7 @@ struct ConnectionListView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        let avatar = ConnectionAvatarPalette.colors(for: connection)
-                        ZStack {
-                            Circle()
-                                .fill(avatar.bg)
-                                .frame(width: 26, height: 26)
-                            Text(connection.initials)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(avatar.fg)
-                        }
+                        OttoAvatar(name: connection.fullName, size: 24)
                         Text(connection.fullName)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(Theme.Colors.text)
@@ -336,7 +338,7 @@ struct ConnectionListView: View {
                 )
             }
         }
-        .background(hoveredRowId == connection.id ? Theme.Colors.hoverTint : Color.clear)
+        .background(hoveredRowId == connection.id ? Color.white.opacity(0.018) : Color.clear)
         #if os(macOS)
         .onHover { hovering in
             if hovering {
@@ -397,14 +399,15 @@ struct ConnectionListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
-                Text("LinkedIn Connections")
-                    .font(Theme.Typography.title)
+            // Title row (mockup .viewbar): serif display title + mono count chip.
+            HStack(alignment: .center, spacing: 10) {
+                Text("LinkedIn")
+                    .font(Theme.Typography.display)
                     .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filteredConnections.count)
+                OttoCountChip(text: "\(filteredConnections.count) connections")
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 if appState.isLoadingConnections {
                     ProgressView()
@@ -420,80 +423,29 @@ struct ConnectionListView: View {
                             isSelectionMode = false
                         }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "trash").font(.system(size: 11))
-                            Text("Delete (\(selectedConnectionIds.count))").font(.system(size: 12, weight: .medium))
+                        HStack(spacing: 5) {
+                            Image(systemName: "trash").font(.system(size: 10, weight: .bold))
+                            Text("Delete (\(selectedConnectionIds.count))").font(.system(size: 11.5, weight: .semibold))
                         }
                         .foregroundStyle(Theme.Colors.bg0)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Theme.Colors.red)
-                        .clipShape(RoundedRectangle(cornerRadius: 7))
+                        .padding(.horizontal, 12)
+                        .frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.Colors.red))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
 
-                Button {
+                OttoBarButton(label: isSelectionMode ? "Cancel" : "Select") {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         isSelectionMode.toggle()
                         if !isSelectionMode { selectedConnectionIds.removeAll() }
                     }
-                } label: {
-                    Text(isSelectionMode ? "Cancel" : "Select")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7)
-                                .fill(Theme.Colors.panel)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7)
-                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                        )
                 }
-                .buttonStyle(.plain)
-
-                Button {
-                    isImporting = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.and.arrow.down").font(.system(size: 11))
-                        Text("Import CSV").font(.system(size: 12, weight: .medium))
-                    }
-                }
-                .buttonStyle(AccentButtonStyle())
             }
 
+            // Controls row: bordered menu buttons + mini search + primary CTA.
             HStack(spacing: Theme.Spacing.sm) {
-                // Search
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                    if !searchText.isEmpty {
-                        Button { searchText = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Theme.Colors.bgInput)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-                .frame(maxWidth: 280)
-
                 Menu {
                     ForEach(SortOption.allCases, id: \.self) { option in
                         Button {
@@ -508,10 +460,11 @@ struct ConnectionListView: View {
                         }
                     }
                 } label: {
-                    filterChipLabel(icon: "arrow.up.arrow.down", text: sortOption.rawValue, isActive: false)
+                    OttoBarButtonLabel(label: "Sort: \(sortOption.rawValue)", showsCaret: true)
                 }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 Menu {
@@ -536,14 +489,11 @@ struct ConnectionListView: View {
                         }
                     }
                 } label: {
-                    filterChipLabel(
-                        icon: "heart.circle",
-                        text: filterCloseness?.label ?? "Closeness",
-                        isActive: filterCloseness != nil
-                    )
+                    OttoBarButtonLabel(label: filterCloseness?.label ?? "Closeness", showsCaret: true)
                 }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 Menu {
@@ -568,14 +518,11 @@ struct ConnectionListView: View {
                         }
                     }
                 } label: {
-                    filterChipLabel(
-                        icon: "square.grid.2x2",
-                        text: filterCategory?.label ?? "Category",
-                        isActive: filterCategory != nil
-                    )
+                    OttoBarButtonLabel(label: filterCategory?.label ?? "Category", showsCaret: true)
                 }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 if !allTags.isEmpty {
@@ -600,30 +547,30 @@ struct ConnectionListView: View {
                             }
                         }
                     } label: {
-                        filterChipLabel(
-                            icon: "tag",
-                            text: filterTag ?? "Tags",
-                            isActive: filterTag != nil
-                        )
+                        OttoBarButtonLabel(label: filterTag ?? "Tags", showsCaret: true)
                     }
                     #if os(macOS)
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     #endif
                 }
 
                 // Columns popover trigger — entry point for visibility, reorder, and custom-field creation.
-                Button {
+                OttoBarButton(label: "Columns", showsCaret: true) {
                     showColumnsMenu.toggle()
-                } label: {
-                    filterChipLabel(icon: "rectangle.split.3x1", text: "Columns", isActive: false)
                 }
-                .buttonStyle(.plain)
                 .popover(isPresented: $showColumnsMenu) {
                     ConnectionColumnsMenu(layout: $layout, isPresented: $showColumnsMenu)
                         .environment(appState)
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
+
+                OttoSearchMini(placeholder: "Search", text: $searchText)
+
+                OttoNewButton(label: "Import CSV", systemImage: "square.and.arrow.down") {
+                    isImporting = true
+                }
             }
 
             if let error = appState.connectionImportError {
@@ -641,26 +588,62 @@ struct ConnectionListView: View {
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
-    private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 12, weight: .medium))
+    // MARK: - Closeness stat chips
+
+    /// Distribution of the whole book (not the filtered slice) — four mono
+    /// capsules under the viewbar. Chips with a zero count are skipped.
+    private var closenessCounts: (close: Int, friendly: Int, light: Int, unknown: Int) {
+        var close = 0, friendly = 0, light = 0, unknown = 0
+        for connection in appState.connections {
+            switch connection.closeness {
+            case .close:        close += 1
+            case .friendly:     friendly += 1
+            case .acquaintance: light += 1
+            case .unknown:      unknown += 1
+            }
         }
-        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
-        )
+        return (close, friendly, light, unknown)
+    }
+
+    @ViewBuilder
+    private var statChipsRow: some View {
+        let counts = closenessCounts
+        if counts.close + counts.friendly + counts.light + counts.unknown > 0 {
+            HStack(spacing: 6) {
+                if counts.close > 0 {
+                    statChip("\(counts.close) close friends", color: Theme.Colors.green, tint: Theme.Colors.tintGreen)
+                }
+                if counts.friendly > 0 {
+                    statChip("\(counts.friendly) connections", color: Theme.Colors.accentText, tint: Theme.Colors.tintTeal)
+                }
+                if counts.light > 0 {
+                    statChip("\(counts.light) light", color: Theme.Colors.amber, tint: Theme.Colors.tintAmber)
+                }
+                if counts.unknown > 0 {
+                    statChip("\(counts.unknown) unknown", color: Theme.Colors.tertiaryText, tint: Theme.Colors.panel)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func statChip(_ text: String, color: Color, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+            .tracking(0.4)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3.5)
+            .background(Capsule().fill(tint))
+            .overlay(Capsule().strokeBorder(color.opacity(0.2), lineWidth: 1))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     // MARK: - Empty states

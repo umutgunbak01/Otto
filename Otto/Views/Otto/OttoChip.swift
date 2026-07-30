@@ -54,23 +54,23 @@ struct OttoChip: View {
     var body: some View {
         Button(action: action) {
             Text(text)
-                .font(Theme.Typography.caption)
+                .font(.system(size: 12))
                 .foregroundStyle(hover ? Theme.Colors.text : Theme.Colors.textDim)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 7)
                 .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(Theme.Colors.panel)
+                    Capsule().fill(hover ? Theme.Colors.panel2 : Theme.Colors.panel)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(
-                            hover ? Theme.Colors.borderStrong : Theme.Colors.border,
-                            lineWidth: 1
-                        )
+                    Capsule().strokeBorder(
+                        hover ? Theme.Colors.borderStrong : Theme.Colors.border,
+                        lineWidth: 1
+                    )
                 )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .animation(.easeInOut(duration: 0.18), value: hover)
     }
 }

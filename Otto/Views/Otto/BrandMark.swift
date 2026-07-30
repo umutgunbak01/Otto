@@ -1,33 +1,45 @@
 import SwiftUI
 
-/// The Otto mark from the mockup — a solid accent ring, a slowly spinning
-/// dashed inner ring, and a center dot. 14s rotation, so 12fps is plenty.
+/// The Otto mark from the mockup — a dotted teal-gradient ring with a
+/// center dot, rotating imperceptibly slowly. 12fps is plenty.
 struct BrandMark: View {
     var size: CGFloat = 20
 
+    private var tealGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.710, green: 0.961, blue: 0.902), // #b5f5e6
+                Color(red: 0.369, green: 0.918, blue: 0.831), // #5eead4
+                Color(red: 0.169, green: 0.749, blue: 0.643), // #2bbfa4
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
     var body: some View {
         ZStack {
-            // Static outer ring.
-            Circle()
-                .strokeBorder(Theme.Colors.accent.opacity(0.85), lineWidth: 1.5)
-
-            // Animated dashed inner ring.
+            // Dotted ring (mockup: dasharray 1.1 4.45, round caps).
             TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
-                let angle = (t.truncatingRemainder(dividingBy: 14) / 14) * 360
+                let angle = (t.truncatingRemainder(dividingBy: 40) / 40) * 360
                 Circle()
-                    .strokeBorder(
-                        Theme.Colors.accent.opacity(0.5),
-                        style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                    .stroke(
+                        tealGradient,
+                        style: StrokeStyle(
+                            lineWidth: max(1.4, size * 0.095),
+                            lineCap: .round,
+                            dash: [size * 0.005, size * 0.031].map { max($0, 0.1) }
+                        )
                     )
-                    .padding(size * 0.175)
+                    .padding(size * 0.14)
                     .rotationEffect(.degrees(angle))
             }
 
             // Center dot.
             Circle()
-                .fill(Theme.Colors.accent)
-                .frame(width: 3, height: 3)
+                .fill(tealGradient)
+                .frame(width: max(2.5, size * 0.11), height: max(2.5, size * 0.11))
         }
         .frame(width: size, height: size)
     }

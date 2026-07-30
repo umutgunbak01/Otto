@@ -14,6 +14,9 @@ struct Email: Identifiable, Codable {
     var labels: [String]
     var snippet: String
     let importedAt: Date
+    /// Email-triage state: set when the user dismisses this thread's
+    /// "needs reply" flag (nil = not dismissed). Local-only, never synced.
+    var needsReplyDismissedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -61,11 +64,13 @@ struct Email: Identifiable, Codable {
         labels = try container.decodeIfPresent([String].self, forKey: .labels) ?? []
         snippet = try container.decodeIfPresent(String.self, forKey: .snippet) ?? ""
         importedAt = try container.decodeIfPresent(Date.self, forKey: .importedAt) ?? Date()
+        needsReplyDismissedAt = try container.decodeIfPresent(Date.self, forKey: .needsReplyDismissedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, gmailId, threadId, subject, sender, senderName
         case recipients, body, receivedDate, isRead, labels, snippet, importedAt
+        case needsReplyDismissedAt
     }
 
     /// Display name for the sender (name if available, otherwise email)

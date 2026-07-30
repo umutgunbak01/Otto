@@ -824,6 +824,13 @@ actor HermesAgentService {
         return activeTurns.count == 1 ? activeTurns.keys.first : nil
     }
 
+    /// Reverse-map an ACP session id back to the Otto conversation key that
+    /// owns it (for session-scoped policies like scheduled-task auto-approve).
+    private func ottoSessionKey(forACPSession sessionId: String) -> UUID? {
+        guard let sid = resolveTurnSession(sessionId) else { return nil }
+        return acpSessions.first(where: { $0.value == sid })?.key
+    }
+
     private func handleSessionUpdate(sessionId rawSessionId: String, _ update: ACPParser.SessionUpdate) {
         guard let sid = resolveTurnSession(rawSessionId) else { return }
         switch update {
@@ -937,6 +944,17 @@ actor HermesAgentService {
         options: [ACPParser.PermissionOption]
     ) {
         let toolName = toolCallTitles[toolCallId] ?? "tool"
+
+        // Scheduled-task runs with per-task auto-approve on: allow everything
+        // without a card — an unattended run has nobody to click it.
+        if let ottoKey = ottoSessionKey(forACPSession: sessionId),
+           ToolApprovalPolicy.shared.isAutoApproving(session: ottoKey),
+           let opt = options.first(where: { $0.kind == "allow_once" || $0.kind == "allow_always" }) {
+            let response = ACPParser.permissionResponse(id: id, selectedOptionId: opt.optionId)
+            writeFrame(response)
+            return
+        }
+
         let policy = ToolApprovalPolicy.shared.decision(for: toolName)
 
         // Auto-resolve if the user has already decided on this tool.

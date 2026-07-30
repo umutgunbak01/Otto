@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct NoteListView: View {
     @Environment(AppState.self) private var appState
@@ -10,9 +11,13 @@ struct NoteListView: View {
     @State private var selectedNoteIds: Set<UUID> = []
     @State private var showDeleteConfirmation: Bool = false
     @State private var lastClickedNoteId: UUID?
+    @State private var showTrash: Bool = false
+    @State private var hoveredNoteId: UUID?
+
+    private var activeNotes: [Note] { appState.activeNotes }
 
     var filteredNotes: [Note] {
-        var notes = appState.notes
+        var notes = activeNotes
 
         if let category = selectedCategory {
             notes = notes.filter { $0.primaryCategory == category }
@@ -20,21 +25,41 @@ struct NoteListView: View {
 
         if !searchText.isEmpty {
             notes = notes.filter {
-                $0.title.localizedCaseInsensitiveContains(searchText) ||
-                $0.content.localizedCaseInsensitiveContains(searchText)
+                $0.title.localizedCaseInsensitiveContains(searchText)
+                    || NoteDocument.plainText($0.content).localizedCaseInsensitiveContains(searchText)
             }
         }
 
         return notes.sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    private var hasSelection: Bool {
-        selectedNoteId != nil && appState.notes.contains(where: { $0.id == selectedNoteId })
+    /// Pinned first, then date buckets — Notion-ish sidebar grouping.
+    private var groupedNotes: [(title: String, notes: [Note])] {
+        let notes = filteredNotes
+        var groups: [(String, [Note])] = []
+
+        let pinned = notes.filter(\.isPinned)
+        if !pinned.isEmpty { groups.append(("Pinned", pinned)) }
+
+        let rest = notes.filter { !$0.isPinned }
+        let calendar = Calendar.current
+        let now = Date()
+        var today: [Note] = [], yesterday: [Note] = [], week: [Note] = [], older: [Note] = []
+        for note in rest {
+            if calendar.isDateInToday(note.updatedAt) { today.append(note) }
+            else if calendar.isDateInYesterday(note.updatedAt) { yesterday.append(note) }
+            else if note.updatedAt > now.addingTimeInterval(-7 * 86400) { week.append(note) }
+            else { older.append(note) }
+        }
+        if !today.isEmpty { groups.append(("Today", today)) }
+        if !yesterday.isEmpty { groups.append(("Yesterday", yesterday)) }
+        if !week.isEmpty { groups.append(("Previous 7 Days", week)) }
+        if !older.isEmpty { groups.append(("Older", older)) }
+        return groups
     }
 
     var body: some View {
         HStack(spacing: 0) {
-            // Notion-style sidebar with note list (collapsible)
             if !isSidebarCollapsed {
                 noteSidebar
                     .frame(width: 260)
@@ -45,7 +70,6 @@ struct NoteListView: View {
                     .frame(width: 1)
             }
 
-            // Full-page editor (Notion-style)
             if let noteId = selectedNoteId,
                let note = appState.notes.first(where: { $0.id == noteId }) {
                 NoteDetailView(
@@ -60,52 +84,61 @@ struct NoteListView: View {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             selectedNoteId = nil
                         }
+                    },
+                    onOpenNote: { id in
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedNoteId = id
+                        }
                     }
                 )
                 .frame(maxWidth: .infinity)
                 .transition(.opacity)
                 .id(noteId)
             } else {
-                // Empty state when no note selected
                 emptyEditor
                     .frame(maxWidth: .infinity)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isSidebarCollapsed)
         .animation(.easeInOut(duration: 0.15), value: selectedNoteId)
-        .onChange(of: appState.locateItemId) { oldValue, newValue in
-            if let itemId = newValue,
-               appState.notes.contains(where: { $0.id == itemId }) {
-                selectedNoteId = itemId
-                appState.locateItemId = nil
+        .onChange(of: appState.locateItemId) { _, newValue in
+            if let itemId = newValue {
+                openLocatedNote(itemId)
             }
         }
         .onAppear {
-            if let itemId = appState.locateItemId,
-               appState.notes.contains(where: { $0.id == itemId }) {
-                selectedNoteId = itemId
-                appState.locateItemId = nil
+            if let itemId = appState.locateItemId {
+                openLocatedNote(itemId)
             }
-            // Auto-select first note if none selected
             if selectedNoteId == nil, let first = filteredNotes.first {
                 selectedNoteId = first.id
             }
         }
-        .alert("Delete \(selectedNoteIds.count) note\(selectedNoteIds.count == 1 ? "" : "s")?", isPresented: $showDeleteConfirmation) {
+        .alert("Move \(selectedNoteIds.count) note\(selectedNoteIds.count == 1 ? "" : "s") to Trash?",
+               isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 deleteSelectedNotes()
             }
         } message: {
-            Text("This action can be undone.")
+            Text("Notes in the Trash can be restored for 30 days.")
         }
     }
 
-    // MARK: - Batch Delete
+    private func openLocatedNote(_ itemId: UUID) {
+        guard let located = appState.notes.first(where: { $0.id == itemId }) else { return }
+        // A deep link into a trashed note restores it.
+        if located.deletedAt != nil {
+            Task { await appState.restoreNotes([itemId]) }
+        }
+        selectedNoteId = itemId
+        appState.locateItemId = nil
+    }
+
+    // MARK: - Batch delete
 
     private func deleteSelectedNotes() {
         let idsToDelete = selectedNoteIds
-        // Clear selected note if it's being deleted
         if let currentId = selectedNoteId, idsToDelete.contains(currentId) {
             selectedNoteId = filteredNotes.first(where: { !idsToDelete.contains($0.id) })?.id
         }
@@ -118,134 +151,72 @@ struct NoteListView: View {
         }
     }
 
-    // MARK: - Create New Note
+    // MARK: - Create new note
 
     private func createNewNote() {
-        let newNote = Note(title: "", content: "", primaryCategory: .personal)
+        let newNote = Note(title: "", content: "", primaryCategory: selectedCategory ?? .personal)
         Task {
             await appState.addNote(newNote)
             withAnimation(.easeInOut(duration: 0.15)) {
+                showTrash = false
                 selectedNoteId = newNote.id
             }
         }
     }
 
-    // MARK: - Note Sidebar
+    // MARK: - Sidebar
 
     private var noteSidebar: some View {
         VStack(spacing: 0) {
-            // Header
             VStack(spacing: 10) {
-                HStack {
-                    Text("Notes")
-                        .font(Theme.Typography.headline)
+                HStack(spacing: 8) {
+                    Text(showTrash ? "Trash" : "Notes")
+                        .font(.system(size: 16, weight: .regular, design: .serif))
                         .foregroundStyle(Theme.Colors.text)
+
+                    OttoCountChip(text: countLabel)
 
                     Spacer()
 
-                    Text("\(filteredNotes.count)")
-                        .font(Theme.Typography.monoSmall)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                        )
-
-                    // Select mode toggle
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.15)) {
-                            isSelectMode.toggle()
-                            if !isSelectMode {
-                                selectedNoteIds.removeAll()
+                    if !showTrash {
+                        OttoGlyphButton(
+                            systemImage: isSelectMode ? "xmark.circle.fill" : "checkmark.circle",
+                            help: isSelectMode ? "Cancel selection" : "Select notes",
+                            isActive: isSelectMode,
+                            size: 24
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                isSelectMode.toggle()
+                                if !isSelectMode {
+                                    selectedNoteIds.removeAll()
+                                }
                             }
                         }
-                    } label: {
-                        Image(systemName: isSelectMode ? "xmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 13))
-                            .foregroundStyle(isSelectMode ? Theme.Colors.accent : Theme.Colors.secondaryText)
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(isSelectMode ? "Cancel selection" : "Select notes")
 
-                    // Create new note button
-                    if !isSelectMode {
-                        Button {
-                            createNewNote()
-                        } label: {
-                            Image(systemName: "square.and.pencil")
-                                .font(.system(size: 13))
-                                .foregroundStyle(Theme.Colors.secondaryText)
-                                .frame(width: 24, height: 24)
-                                .contentShape(Rectangle())
+                        if !isSelectMode {
+                            OttoGlyphButton(systemImage: "square.and.pencil", help: "New note (⌘N)", size: 24) {
+                                createNewNote()
+                            }
+                            .keyboardShortcut("n", modifiers: .command)
                         }
-                        .buttonStyle(.plain)
-                        .help("New note")
                     }
                 }
 
-                // Selection actions bar
-                if isSelectMode {
-                    HStack(spacing: 8) {
-                        Button {
-                            if selectedNoteIds.count == filteredNotes.count {
-                                selectedNoteIds.removeAll()
-                            } else {
-                                selectedNoteIds = Set(filteredNotes.map(\.id))
-                            }
-                        } label: {
-                            Text(selectedNoteIds.count == filteredNotes.count ? "Deselect All" : "Select All")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Theme.Colors.accentText)
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        if !selectedNoteIds.isEmpty {
-                            Text("\(selectedNoteIds.count) selected")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Theme.Colors.secondaryText)
-
-                            Button {
-                                showDeleteConfirmation = true
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.Colors.red)
-                                    .frame(width: 24, height: 24)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .help("Delete selected notes")
-                        }
-                    }
-                    .padding(.vertical, 2)
+                if isSelectMode && !showTrash {
+                    selectionBar
                 }
 
-                // Search
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                if !showTrash {
+                    // Search
+                    OttoSearchMini(placeholder: "Search", text: $searchText, width: nil)
 
-                // Category filter
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 4) {
-                        sidebarCategoryChip(nil, label: "All")
-                        ForEach(PrimaryCategory.allCases) { category in
-                            sidebarCategoryChip(category, label: category.rawValue)
+                    // Category filter
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            sidebarCategoryChip(nil, label: "All")
+                            ForEach(PrimaryCategory.allCases) { category in
+                                sidebarCategoryChip(category, label: category.rawValue)
+                            }
                         }
                     }
                 }
@@ -256,13 +227,149 @@ struct NoteListView: View {
 
             OttoDivider()
 
-            // Note list
+            if showTrash {
+                trashList
+            } else {
+                notesList
+            }
+
+            OttoDivider()
+
+            trashFooter
+        }
+        .background(Theme.Colors.panelWash)
+    }
+
+    private var countLabel: String {
+        if showTrash { return "\(appState.trashedNotes.count)" }
+        let filtered = filteredNotes.count
+        let total = activeNotes.count
+        return filtered == total ? "\(total)" : "\(filtered)/\(total)"
+    }
+
+    private var selectionBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                if selectedNoteIds.count == filteredNotes.count {
+                    selectedNoteIds.removeAll()
+                } else {
+                    selectedNoteIds = Set(filteredNotes.map(\.id))
+                }
+            } label: {
+                Text(selectedNoteIds.count == filteredNotes.count ? "Deselect All" : "Select All")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Colors.accentText)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            if !selectedNoteIds.isEmpty {
+                Text("\(selectedNoteIds.count) selected")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+
+                Button {
+                    showDeleteConfirmation = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.red)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Move selected notes to Trash")
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Notes list
+
+    private var notesList: some View {
+        Group {
             if filteredNotes.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 10) {
                     Image(systemName: "doc.text")
                         .font(.system(size: 24, weight: .thin))
                         .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("No notes")
+                    Text(searchText.isEmpty ? "No notes" : "No results")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    if searchText.isEmpty {
+                        Button {
+                            createNewNote()
+                        } label: {
+                            Text("New note")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Theme.Colors.accentText)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 1, pinnedViews: []) {
+                        ForEach(groupedNotes, id: \.title) { group in
+                            HStack {
+                                Text(group.title.uppercased())
+                                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                    .tracking(Theme.Tracking.xxwide)
+                                    .foregroundStyle(Theme.Colors.tertiaryText)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.top, 14)
+                            .padding(.bottom, 5)
+
+                            ForEach(group.notes) { note in
+                                sidebarNoteRow(note)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                }
+                .focusable()
+                .focusEffectDisabled()
+                .onKeyPress(phases: .down) { press in
+                    handleListKey(press)
+                }
+            }
+        }
+    }
+
+    private func handleListKey(_ press: KeyPress) -> KeyPress.Result {
+        let flat = groupedNotes.flatMap(\.notes)
+        guard !flat.isEmpty else { return .ignored }
+        switch press.key {
+        case .upArrow, .downArrow:
+            let delta = press.key == .downArrow ? 1 : -1
+            if let current = selectedNoteId, let idx = flat.firstIndex(where: { $0.id == current }) {
+                let next = min(max(0, idx + delta), flat.count - 1)
+                selectedNoteId = flat[next].id
+            } else {
+                selectedNoteId = flat.first?.id
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
+    // MARK: - Trash list
+
+    private var trashList: some View {
+        Group {
+            let trashed = appState.trashedNotes
+            if trashed.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 24, weight: .thin))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Text("Trash is empty")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
@@ -270,8 +377,8 @@ struct NoteListView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
-                        ForEach(filteredNotes) { note in
-                            sidebarNoteRow(note)
+                        ForEach(trashed) { note in
+                            trashRow(note)
                         }
                     }
                     .padding(.horizontal, 6)
@@ -279,10 +386,124 @@ struct NoteListView: View {
                 }
             }
         }
-        .background(Theme.Colors.bg1)
     }
 
-    // MARK: - Sidebar Note Row (compact, Notion-style)
+    private func trashRow(_ note: Note) -> some View {
+        HStack(spacing: 8) {
+            Group {
+                if let icon = note.icon {
+                    Text(icon).font(.system(size: 14))
+                } else {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+            .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineLimit(1)
+                if let deletedAt = note.deletedAt {
+                    Text("Deleted \(relativeAge(deletedAt))")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                Task {
+                    await appState.restoreNotes([note.id])
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showTrash = false
+                        selectedNoteId = note.id
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Restore")
+
+            Button {
+                Task { await appState.permanentlyDeleteNote(note) }
+            } label: {
+                Image(systemName: "xmark.bin")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.Colors.red)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Delete forever")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
+    private func relativeAge(_ date: Date) -> String {
+        let interval = Date().timeIntervalSince(date)
+        if interval < 3600 { return "\(max(1, Int(interval / 60)))m ago" }
+        if interval < 86400 { return "\(Int(interval / 3600))h ago" }
+        return "\(Int(interval / 86400))d ago"
+    }
+
+    private var trashFooter: some View {
+        HStack {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    showTrash.toggle()
+                    if showTrash {
+                        isSelectMode = false
+                        selectedNoteIds.removeAll()
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: showTrash ? "chevron.left" : "trash")
+                        .font(.system(size: 10, weight: .medium))
+                    Text(showTrash ? "Back to notes" : "Trash")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .tracking(0.5)
+                    if !showTrash && !appState.trashedNotes.isEmpty {
+                        Text("\(appState.trashedNotes.count)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                }
+                .foregroundStyle(Theme.Colors.textDim)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            if showTrash && !appState.trashedNotes.isEmpty {
+                Button {
+                    Task { await appState.emptyNoteTrash() }
+                } label: {
+                    Text("Empty Trash")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundStyle(Theme.Colors.red)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Sidebar note row
 
     private func sidebarNoteRow(_ note: Note) -> some View {
         let isActive = selectedNoteId == note.id
@@ -290,26 +511,49 @@ struct NoteListView: View {
 
         return HStack(spacing: 8) {
             if isSelectMode {
-                // Selection checkbox
                 Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 14))
                     .foregroundStyle(isChecked ? Theme.Colors.accent : Theme.Colors.tertiaryText)
             } else {
-                // Page icon
-                Image(systemName: "doc.text")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                Group {
+                    if let icon = note.icon {
+                        Text(icon).font(.system(size: 14))
+                    } else {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                }
+                .frame(width: 18)
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(isActive && !isSelectMode ? Theme.Colors.accentText : Theme.Colors.text)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(
+                            (isActive && !isSelectMode) || (isChecked && isSelectMode)
+                                ? Theme.Colors.text
+                                : Theme.Colors.textDim
+                        )
+                        .lineLimit(1)
+
+                    if note.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    if note.notionPageId != nil {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .help("Synced from Notion")
+                    }
+                }
 
                 if !note.content.isEmpty {
-                    Text(strippedNotePreview(note.content))
-                        .font(.system(size: 11.5))
+                    Text(NoteDocument.preview(note.content))
+                        .font(.system(size: 11))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
                 }
@@ -320,47 +564,81 @@ struct NoteListView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(isChecked && isSelectMode ? Theme.Colors.selectTint :
-                      isActive && !isSelectMode ? Theme.Colors.selectTint : Color.clear)
+            RoundedRectangle(cornerRadius: 10)
+                .fill(
+                    (isChecked && isSelectMode) || (isActive && !isSelectMode)
+                        ? Theme.Colors.selectTint
+                        : (hoveredNoteId == note.id ? Theme.Colors.panel : Color.clear)
+                )
         )
         .contentShape(Rectangle())
-        #if os(macOS)
+        .onHover { hovering in
+            if hovering {
+                hoveredNoteId = note.id
+            } else if hoveredNoteId == note.id {
+                hoveredNoteId = nil
+            }
+        }
         .onTapGesture {
             handleNoteClick(note, shift: NSEvent.modifierFlags.contains(.shift),
                             command: NSEvent.modifierFlags.contains(.command))
         }
-        #else
-        .onTapGesture {
-            handleNoteClick(note, shift: false, command: false)
-        }
-        #endif
         .contextMenu {
             Button {
                 handleNoteClick(note, shift: false, command: false)
             } label: {
                 Label("Open", systemImage: "arrow.up.right.square")
             }
+
+            Button {
+                Task { await appState.setNotePinned(note.id, pinned: !note.isPinned) }
+            } label: {
+                Label(note.isPinned ? "Unpin" : "Pin", systemImage: note.isPinned ? "pin.slash" : "pin")
+            }
+
+            Button {
+                Task {
+                    let copy = await appState.duplicateNote(note)
+                    selectedNoteId = copy.id
+                }
+            } label: {
+                Label("Duplicate", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                let linkTitle = note.title.isEmpty ? "Untitled" : note.title
+                let link = "[\(linkTitle)](otto://note/\(note.id.uuidString))"
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(link, forType: .string)
+            } label: {
+                Label("Copy Link", systemImage: "link")
+            }
+
+            Menu("Convert to…") {
+                Button("To-Do") { Task { await appState.convertNote(note, to: .todo) } }
+                Button("Idea") { Task { await appState.convertNote(note, to: .idea) } }
+                Button("Reminder (keeps note)") { Task { await appState.convertNote(note, to: .reminder) } }
+            }
+
             Divider()
+
             Button(role: .destructive) {
                 if selectedNoteId == note.id { selectedNoteId = nil }
                 selectedNoteIds.remove(note.id)
                 Task { await appState.deleteNote(note) }
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Move to Trash", systemImage: "trash")
             }
         }
     }
 
-    // MARK: - Click Handling
+    // MARK: - Click handling
 
     private func handleNoteClick(_ note: Note, shift: Bool, command: Bool) {
-        // Shift+Click: range selection
         if shift {
             withAnimation(.easeInOut(duration: 0.1)) {
                 if !isSelectMode {
                     isSelectMode = true
-                    // If we had an active note, use it as the anchor
                     if let anchorId = lastClickedNoteId ?? selectedNoteId {
                         selectedNoteIds = rangeOfNoteIds(from: anchorId, to: note.id)
                     } else {
@@ -379,7 +657,6 @@ struct NoteListView: View {
             return
         }
 
-        // Cmd+Click: toggle individual selection
         if command {
             withAnimation(.easeInOut(duration: 0.1)) {
                 if !isSelectMode {
@@ -400,7 +677,6 @@ struct NoteListView: View {
             return
         }
 
-        // Normal click
         if isSelectMode {
             withAnimation(.easeInOut(duration: 0.1)) {
                 if selectedNoteIds.contains(note.id) {
@@ -419,7 +695,7 @@ struct NoteListView: View {
     }
 
     private func rangeOfNoteIds(from startId: UUID, to endId: UUID) -> Set<UUID> {
-        let notes = filteredNotes
+        let notes = groupedNotes.flatMap(\.notes)
         guard let startIndex = notes.firstIndex(where: { $0.id == startId }),
               let endIndex = notes.firstIndex(where: { $0.id == endId }) else {
             return [startId, endId]
@@ -428,7 +704,7 @@ struct NoteListView: View {
         return Set(notes[range].map(\.id))
     }
 
-    // MARK: - Sidebar Category Chip
+    // MARK: - Category chip
 
     private func sidebarCategoryChip(_ category: PrimaryCategory?, label: String) -> some View {
         let isSelected = selectedCategory == category
@@ -439,38 +715,34 @@ struct NoteListView: View {
             }
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(isSelected ? Theme.Colors.selectTint : Color.clear)
-                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.textDim)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                .padding(.horizontal, 11)
+                .frame(height: 24)
+                .background(
+                    Capsule().fill(isSelected ? Theme.Colors.panel2 : Color.clear)
+                )
+                .overlay(
+                    Capsule().strokeBorder(isSelected ? Theme.Colors.border : Color.clear, lineWidth: 1)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - Empty Editor
+    // MARK: - Empty editor
 
     private var emptyEditor: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "doc.text")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-
-            Text("Select a note")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            Text("Choose a note from the sidebar to start editing")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "doc.text",
+            title: "Select a note",
+            message: "Or create a new one — ⌘N."
+        )
     }
 }
 
 #Preview {
     NoteListView()
         .environment(AppState())
-        .frame(width: 900, height: 600)
+        .frame(width: 1000, height: 640)
 }

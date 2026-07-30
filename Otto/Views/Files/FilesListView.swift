@@ -31,19 +31,48 @@ struct FilesListView: View {
         return files.sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Display-only date buckets over the sorted list (mockup group labels).
+    private struct FileGroup: Identifiable {
+        let id: String
+        let title: String
+        let files: [FileItem]
+    }
+
+    private var fileGroups: [FileGroup] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today) ?? today
+        let weekStart = cal.dateInterval(of: .weekOfYear, for: Date())?.start ?? today
+
+        var buckets: [(id: String, title: String, files: [FileItem])] = [
+            ("today", "Today", []),
+            ("yesterday", "Yesterday", []),
+            ("week", "Earlier this week", []),
+            ("earlier", "Earlier", []),
+        ]
+
+        for file in filteredFiles {
+            let day = cal.startOfDay(for: file.updatedAt)
+            if day == today {
+                buckets[0].files.append(file)
+            } else if day == yesterday {
+                buckets[1].files.append(file)
+            } else if day >= weekStart {
+                buckets[2].files.append(file)
+            } else {
+                buckets[3].files.append(file)
+            }
+        }
+
+        return buckets
+            .filter { !$0.files.isEmpty }
+            .map { FileGroup(id: $0.id, title: $0.title, files: $0.files) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            header
+            viewbar
 
-            OttoDivider()
-
-            // Filters
-            filterBar
-
-            OttoDivider()
-
-            // File list
             if filteredFiles.isEmpty {
                 emptyState
             } else {
@@ -103,117 +132,78 @@ struct FilesListView: View {
         appState.locateItemId = nil
     }
 
-    // MARK: - Header
+    // MARK: - Viewbar
 
-    private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Files")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+    private var viewbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Files")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                Text("\(appState.files.count) file\(appState.files.count == 1 ? "" : "s")")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
+            OttoCountChip(text: countText)
 
-            Spacer()
+            typeFilterMenu
+                .padding(.leading, 4)
 
-            // Import button
-            Button {
+            Spacer(minLength: 8)
+
+            OttoSearchMini(placeholder: "Search files…", text: $searchText)
+
+            OttoNewButton(label: "Import") {
                 isImporting = true
-            } label: {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Import")
-                        .font(Theme.Typography.body)
-                }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(Theme.Colors.accent)
-                .foregroundStyle(Theme.Colors.bg0)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
-    // MARK: - Filter Bar
+    private var countText: String {
+        let count = appState.files.count
+        let total = appState.files.reduce(Int64(0)) { $0 + $1.fileSize }
+        guard count > 0, total > 0 else {
+            return "\(count) file\(count == 1 ? "" : "s")"
+        }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return "\(count) · \(formatter.string(fromByteCount: total))"
+    }
 
-    private var filterBar: some View {
-        HStack(spacing: Theme.Spacing.md) {
-            // Search
-            HStack(spacing: Theme.Spacing.sm) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .font(.system(size: 12))
-
-                TextField("Search files...", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(Theme.Typography.body)
-
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                }
+    /// Seven file types + "all" is too many for a pill rail, so the type
+    /// filter stays a Menu — restyled with the shared bar-button chrome.
+    private var typeFilterMenu: some View {
+        Menu {
+            Button("All Files") {
+                selectedFileType = nil
             }
-            .padding(.horizontal, Theme.Spacing.sm)
-            .padding(.vertical, Theme.Spacing.xs)
-            .background(Theme.Colors.secondaryBackground)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
 
-            Spacer()
+            Divider()
 
-            // File type filter
-            Menu {
-                Button("All Files") {
-                    selectedFileType = nil
-                }
-
-                Divider()
-
-                ForEach(FileType.allCases, id: \.self) { type in
-                    Button {
-                        selectedFileType = type
-                    } label: {
-                        HStack {
-                            Image(systemName: type.iconName)
-                            Text(type.displayName)
-                            if selectedFileType == type {
-                                Spacer()
-                                Image(systemName: "checkmark")
-                            }
+            ForEach(FileType.allCases, id: \.self) { type in
+                Button {
+                    selectedFileType = type
+                } label: {
+                    HStack {
+                        Image(systemName: type.iconName)
+                        Text(type.displayName)
+                        if selectedFileType == type {
+                            Spacer()
+                            Image(systemName: "checkmark")
                         }
                     }
                 }
-            } label: {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: selectedFileType?.iconName ?? "doc")
-                        .font(.system(size: 12))
-                    Text(selectedFileType?.displayName ?? "All Types")
-                        .font(Theme.Typography.caption)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10))
-                }
-                .padding(.horizontal, Theme.Spacing.sm)
-                .padding(.vertical, Theme.Spacing.xs)
-                .background(Theme.Colors.secondaryBackground)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
             }
-            .buttonStyle(.plain)
+        } label: {
+            OttoBarButtonLabel(
+                label: selectedFileType?.displayName ?? "Type",
+                showsCaret: true
+            )
         }
-        .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, Theme.Spacing.sm)
+        .buttonStyle(.plain)
+        #if os(macOS)
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        #endif
     }
 
     // MARK: - File List
@@ -221,94 +211,72 @@ struct FilesListView: View {
     private var fileList: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(filteredFiles) { file in
-                    FileRowView(
-                        file: file,
-                        isSelected: previewingFile?.id == file.id,
-                        onDelete: {
-                            // Drop the preview pointer first, since the hover
-                            // button kicks off `deleteFile` immediately after.
-                            if previewingFile?.id == file.id { previewingFile = nil }
-                        }
-                    )
-                    .onTapGesture {
-                        previewingFile = file
-                    }
-                    .contextMenu {
-                        Button {
-                            previewingFile = file
-                        } label: {
-                            Label("Preview", systemImage: "eye")
-                        }
+                ForEach(fileGroups) { group in
+                    OttoGroupLabel(text: group.title, count: group.files.count)
 
-                        Button {
-                            openFile(file)
-                        } label: {
-                            Label("Open in Finder", systemImage: "folder")
-                        }
-
-                        Button(role: .destructive) {
-                            if previewingFile?.id == file.id { previewingFile = nil }
-                            Task {
-                                await appState.deleteFile(file)
+                    ForEach(group.files) { file in
+                        FileRowView(
+                            file: file,
+                            isSelected: previewingFile?.id == file.id,
+                            onDelete: {
+                                // Drop the preview pointer first, since the hover
+                                // button kicks off `deleteFile` immediately after.
+                                if previewingFile?.id == file.id { previewingFile = nil }
                             }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
+                        )
+                        .onTapGesture {
+                            previewingFile = file
                         }
-                    }
+                        .contextMenu {
+                            Button {
+                                previewingFile = file
+                            } label: {
+                                Label("Preview", systemImage: "eye")
+                            }
 
-                    if file.id != filteredFiles.last?.id {
-                        OttoDivider()
-                            .padding(.leading, Theme.Spacing.xl + 36 + Theme.Spacing.md)
+                            Button {
+                                openFile(file)
+                            } label: {
+                                Label("Open in Finder", systemImage: "folder")
+                            }
+
+                            Button(role: .destructive) {
+                                if previewingFile?.id == file.id { previewingFile = nil }
+                                Task {
+                                    await appState.deleteFile(file)
+                                }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.xl) {
-            Spacer()
-
-            Image(systemName: "doc.badge.plus")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.sm) {
-                Text(searchText.isEmpty && selectedFileType == nil ? "No Files Yet" : "No Files Found")
-                    .font(Theme.Typography.title)
-
-                Text(searchText.isEmpty && selectedFileType == nil
-                    ? "Import CSV, Excel, PDF, or image files to store them in your Otto."
-                    : "Try adjusting your search or filter criteria.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 300)
-            }
-
-            if searchText.isEmpty && selectedFileType == nil {
-                Button {
+        let unfiltered = searchText.isEmpty && selectedFileType == nil
+        return OttoEmptyState(
+            systemImage: "folder",
+            title: unfiltered ? "No Files Yet" : "No Files Found",
+            message: unfiltered
+                ? "Import CSV, Excel, PDF, or image files to store them in your Otto."
+                : "Try adjusting your search or filter criteria.",
+            tip: "Everything you import becomes agent-readable"
+        ) {
+            if unfiltered {
+                OttoNewButton(label: "Import Files") {
                     isImporting = true
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "plus")
-                        Text("Import Files")
-                    }
-                    .padding(.horizontal, Theme.Spacing.lg)
-                    .padding(.vertical, Theme.Spacing.md)
-                    .background(Theme.Colors.accent)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
                 }
-                .buttonStyle(.plain)
             }
-
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Actions

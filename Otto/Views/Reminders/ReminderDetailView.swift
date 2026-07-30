@@ -129,6 +129,8 @@ struct ReminderDetailView: View {
                 .padding(Theme.Spacing.xl)
             }
         }
+        // Detail panes sit on a faint wash above the shared backdrop.
+        .background(Theme.Colors.panelWash)
         .onAppear { loadReminder() }
         .onChange(of: reminder.id) { loadReminder() }
         .onChange(of: title) { saveChanges() }

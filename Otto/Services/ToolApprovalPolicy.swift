@@ -21,7 +21,31 @@ final class ToolApprovalPolicy: @unchecked Sendable {
 
     private let lock = NSLock()
 
+    /// Conversation keys whose in-flight run auto-approves EVERY tool
+    /// permission request — scheduled-task runs whose per-task
+    /// "auto-approve" toggle is on. In-memory only: the scheduler registers
+    /// the run's session key for the duration of the run, so an unattended
+    /// run can never stall on an approval card. If the user later reopens
+    /// that chat session and keeps talking, approvals behave normally again
+    /// (the registration ended with the run).
+    private var autoApproveSessions: Set<UUID> = []
+
     private init() {}
+
+    func beginAutoApprovingSession(_ key: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        autoApproveSessions.insert(key)
+    }
+
+    func endAutoApprovingSession(_ key: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        autoApproveSessions.remove(key)
+    }
+
+    func isAutoApproving(session key: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return autoApproveSessions.contains(key)
+    }
 
     func decision(for toolName: String) -> ApprovalDecision {
         lock.lock(); defer { lock.unlock() }

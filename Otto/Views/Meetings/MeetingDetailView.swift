@@ -92,7 +92,8 @@ struct MeetingDetailView: View {
 
             VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                 Text(meeting.title)
-                    .font(Theme.Typography.largeTitle)
+                    .font(Theme.Typography.displayLg)
+                    .foregroundStyle(Theme.Colors.text)
 
                 HStack(spacing: Theme.Spacing.lg) {
                     HStack(spacing: Theme.Spacing.xs) {
@@ -196,7 +197,7 @@ struct MeetingDetailView: View {
                 } label: {
                     Text(tab.rawValue)
                         .font(Theme.Typography.caption)
-                        .foregroundStyle(selectedMobileTab == tab ? Theme.Colors.bg0 : Theme.Colors.secondaryText)
+                        .foregroundStyle(selectedMobileTab == tab ? Theme.Colors.onAccent : Theme.Colors.secondaryText)
                         .padding(.horizontal, Theme.Spacing.md)
                         .padding(.vertical, Theme.Spacing.sm)
                         .background(
@@ -261,7 +262,7 @@ struct MeetingDetailView: View {
             MarkdownContent(meeting.overview)
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.Colors.borderSubtle.opacity(0.5))
+                .background(Theme.Colors.panel)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
         }
     }
@@ -277,7 +278,7 @@ struct MeetingDetailView: View {
             MarkdownContent(meeting.content)
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.Colors.borderSubtle.opacity(0.5))
+                .background(Theme.Colors.panel)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
         }
     }
@@ -319,7 +320,7 @@ struct MeetingDetailView: View {
             MarkdownContent(meeting.actionItems)
                 .padding(Theme.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.Colors.priorityMedium.opacity(0.05))
+                .background(Theme.Colors.tintAmber)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
         }
     }

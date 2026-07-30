@@ -70,7 +70,6 @@ struct MeetingListView: View {
     private var listPanel: some View {
         VStack(spacing: 0) {
             header
-            OttoDivider()
 
             if filteredMeetings.isEmpty && MeetingAnalysisService.shared.pendingTitle == nil {
                 emptyState
@@ -86,162 +85,130 @@ struct MeetingListView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Meetings")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("Meetings")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filteredMeetings.count)
+            OttoCountChip(text: "\(filteredMeetings.count)")
 
-                Spacer()
-            }
+            Spacer(minLength: 8)
 
-            // Search field
-            VStack(spacing: Theme.Spacing.sm) {
-                HStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
+            // Search scope pills — only affect filtering while a query is
+            // typed, so they can stay visible at all times.
+            OttoPillRail(
+                options: SearchScope.allCases.map { (value: $0, label: $0.rawValue) },
+                selection: $searchScope
+            )
 
-                    TextField("Search meetings...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(Theme.Typography.callout)
-
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.Colors.bgInput)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-
-                // Search scope picker (visible when searching)
-                if !searchText.isEmpty {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Text("Search in:")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-
-                        ForEach(SearchScope.allCases, id: \.self) { scope in
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    searchScope = scope
-                                }
-                            } label: {
-                                Text(scope.rawValue)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(searchScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim)
-                                    .padding(.horizontal, Theme.Spacing.md)
-                                    .padding(.vertical, Theme.Spacing.xs)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(searchScope == scope ? Theme.Colors.selectTint : Color.clear)
-                                    )
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        Spacer()
-                    }
-                }
-            }
+            OttoSearchMini(placeholder: "Search meetings…", text: $searchText, width: 200)
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Meeting List
 
+    /// Display-only date grouping over `filteredMeetings` — the filtered
+    /// array (and its sort order) is the source of truth; this just buckets
+    /// it for OttoGroupLabel headers.
+    private var groupedMeetings: [(label: String, meetings: [Meeting])] {
+        let calendar = Calendar.current
+        let now = Date()
+        let lastWeekDate = calendar.date(byAdding: .weekOfYear, value: -1, to: now)
+
+        var thisWeek: [Meeting] = []
+        var lastWeek: [Meeting] = []
+        var earlier: [Meeting] = []
+
+        for meeting in filteredMeetings {
+            if calendar.isDate(meeting.meetingDate, equalTo: now, toGranularity: .weekOfYear) {
+                thisWeek.append(meeting)
+            } else if let lastWeekDate,
+                      calendar.isDate(meeting.meetingDate, equalTo: lastWeekDate, toGranularity: .weekOfYear) {
+                lastWeek.append(meeting)
+            } else {
+                earlier.append(meeting)
+            }
+        }
+
+        var groups: [(label: String, meetings: [Meeting])] = []
+        if !thisWeek.isEmpty { groups.append(("This week", thisWeek)) }
+        if !lastWeek.isEmpty { groups.append(("Last week", lastWeek)) }
+        if !earlier.isEmpty { groups.append(("Earlier", earlier)) }
+        return groups
+    }
+
     private var meetingList: some View {
         ScrollView {
-            LazyVStack(spacing: 6) {
+            LazyVStack(spacing: 0) {
                 // A just-finished recording being analyzed in the background —
                 // becomes a real Meeting row when the note lands.
                 if searchText.isEmpty, let pendingTitle = MeetingAnalysisService.shared.pendingTitle {
                     generatingRow(title: pendingTitle)
+                        .padding(.top, 4)
                 }
-                ForEach(filteredMeetings) { meeting in
-                    MeetingRowView(meeting: meeting)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            navigationPath.append(meeting.id)
-                        }
+                ForEach(groupedMeetings, id: \.label) { group in
+                    OttoGroupLabel(text: group.label, count: group.meetings.count)
+
+                    ForEach(group.meetings) { meeting in
+                        MeetingRowView(meeting: meeting)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                navigationPath.append(meeting.id)
+                            }
+                    }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
     private func generatingRow(title: String) -> some View {
-        HStack(alignment: .center, spacing: 11) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Theme.Colors.selectTint)
-                    .frame(width: 30, height: 30)
+        HStack(alignment: .center, spacing: Theme.Spacing.md) {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(Theme.Colors.tintTeal)
+                )
 
-                ProgressView()
-                    .controlSize(.small)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
                 Text("Generating meeting note…")
-                    .font(Theme.Typography.callout)
+                    .font(Theme.Typography.displaySm)
+                    .italic()
                     .foregroundStyle(Theme.Colors.textDim)
             }
 
             Spacer()
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.bg2)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(Theme.Colors.borderSubtle, lineWidth: 1)
-                )
+            RoundedRectangle(cornerRadius: 11)
+                .fill(Theme.Colors.panel)
         )
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "video")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text(searchText.isEmpty ? "No meetings yet" : "No matching meetings")
-                    .font(Theme.Typography.title)
-                Text("Import meetings from Fireflies.ai via Integrations")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "video",
+            title: searchText.isEmpty ? "No meetings yet" : "No matching meetings",
+            message: "Import meetings from Fireflies.ai via Integrations, or let Otto transcribe calls it detects.",
+            tip: "Otto offers to transcribe when a meeting app uses the mic"
+        )
     }
 }
 

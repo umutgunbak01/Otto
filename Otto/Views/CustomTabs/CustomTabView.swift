@@ -48,7 +48,6 @@ struct CustomTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            OttoDivider()
             content
         }
         .sheet(isPresented: $showingTabEditor) {
@@ -88,14 +87,14 @@ struct CustomTabView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 10) {
                 Image(systemName: tab.icon)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.Colors.accentText)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tab.name)
-                        .font(Theme.Typography.title)
+                        .font(Theme.Typography.display)
                         .foregroundStyle(Theme.Colors.text)
                     if let subtitle = tab.subtitle {
                         Text(subtitle)
@@ -106,72 +105,23 @@ struct CustomTabView: View {
                 }
 
                 if showsRecordControls {
-                    OttoCountBadge(count: allTabRecords.count)
+                    OttoCountChip(text: recordCountText)
                 }
 
-                Spacer()
+                Spacer(minLength: 8)
 
-                Button {
+                OttoBarButton(label: "Edit tab", systemImage: "slider.horizontal.3") {
                     showingTabEditor = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "slider.horizontal.3").font(.system(size: 11))
-                        Text("Edit tab").font(.system(size: 12))
-                    }
-                    .foregroundStyle(Theme.Colors.textDim)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(Theme.Colors.panel)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                    )
                 }
-                .buttonStyle(.plain)
 
                 if showsRecordControls, activeCollection?.fields.isEmpty == false {
-                    Button {
-                        addRecord()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus").font(.system(size: 11))
-                            Text("New record").font(.system(size: 12, weight: .medium))
-                        }
-                    }
-                    .buttonStyle(AccentButtonStyle())
+                    OttoNewButton(label: "New record") { addRecord() }
                 }
             }
 
             if tab.layout != .dashboard {
                 HStack(spacing: Theme.Spacing.sm) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-                        TextField("Search", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12))
-                        if !searchText.isEmpty {
-                            Button { searchText = "" } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Theme.Colors.tertiaryText)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Theme.Colors.bgInput)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                    )
-                    .frame(maxWidth: 280)
+                    OttoSearchMini(placeholder: "Search", text: $searchText, width: 220)
 
                     if tab.collections.count > 1 {
                         collectionChips
@@ -181,7 +131,14 @@ struct CustomTabView: View {
                 }
             }
         }
-        .padding(Theme.Spacing.lg)
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var recordCountText: String {
+        let n = allTabRecords.count
+        return n == 1 ? "1 record" : "\(n) records"
     }
 
     /// One chip per collection — the record layouts show one at a time.
@@ -193,22 +150,23 @@ struct CustomTabView: View {
                 Button {
                     activeCollectionId = collection.id
                 } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Text(collection.name)
-                            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(isActive ? Theme.Colors.text : Theme.Colors.tertiaryText)
                         Text("\(count)")
-                            .font(.system(size: 9.5, design: .monospaced))
+                            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                     }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 11)
+                    .frame(height: 24)
                     .background(
-                        Capsule().fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
+                        Capsule().fill(isActive ? Theme.Colors.panel2 : Color.clear)
                     )
                     .overlay(
-                        Capsule().strokeBorder(isActive ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+                        Capsule().strokeBorder(isActive ? Theme.Colors.border : Color.clear, lineWidth: 1)
                     )
-                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }

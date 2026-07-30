@@ -7,6 +7,10 @@ struct EmailListView: View {
     @State private var selectedEmailIds: Set<UUID> = []
     @State private var isSelectionMode: Bool = false
     @State private var navigationPath = NavigationPath()
+    @State private var showNeedsReplyOnly: Bool = false
+    @AppStorage(EmailTriageSettings.enabledKey) private var triageEnabled: Bool = EmailTriageSettings.defaultEnabled
+
+    private var replyDrafts: ReplyDraftService { .shared }
 
     enum SearchScope: String, CaseIterable {
         case subjectAndSender = "Subject & Sender"
@@ -20,8 +24,20 @@ struct EmailListView: View {
         }
     }
 
+    /// The needs-reply queue (triage enabled only) — recomputed per render;
+    /// a single pass over emails, cheap next to the list body itself.
+    private var needsReplyQueue: [Email] {
+        guard triageEnabled else { return [] }
+        return EmailTriageService.needsReply(emails: appState.emails, blockedSenders: appState.blockedSenders)
+    }
+
     var filteredEmails: [Email] {
-        let sorted = appState.emails.sorted { $0.receivedDate > $1.receivedDate }
+        let sorted: [Email]
+        if triageEnabled && showNeedsReplyOnly {
+            sorted = needsReplyQueue
+        } else {
+            sorted = appState.emails.sorted { $0.receivedDate > $1.receivedDate }
+        }
 
         if searchText.isEmpty {
             return sorted
@@ -66,6 +82,13 @@ struct EmailListView: View {
                 appState.locateItemId = nil
             }
         }
+        .sheet(item: Binding(
+            get: { replyDrafts.draftingFor },
+            set: { if $0 == nil { replyDrafts.dismiss() } }
+        )) { email in
+            ReplyDraftSheet(email: email, onClose: { replyDrafts.dismiss() })
+                .environment(appState)
+        }
     }
 
     // MARK: - List Panel
@@ -74,8 +97,6 @@ struct EmailListView: View {
         VStack(spacing: 0) {
             // Header
             header
-
-            OttoDivider()
 
             // Content - show emails if we have any (from Gmail)
             if filteredEmails.isEmpty && !appState.isGmailConnected {
@@ -93,256 +114,260 @@ struct EmailListView: View {
 
     // MARK: - Header
 
+    /// Toolbar toggle for the needs-reply queue, styled after OttoBarButton
+    /// with an active (selected) state the shared primitive doesn't have.
+    private var needsReplyChip: some View {
+        let count = needsReplyQueue.count
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) { showNeedsReplyOnly.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrowshape.turn.up.left.circle")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(showNeedsReplyOnly ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                Text(count > 0 ? "Needs reply · \(count)" : "Needs reply")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(showNeedsReplyOnly ? Theme.Colors.accentText : Theme.Colors.textDim)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .fill(showNeedsReplyOnly ? Theme.Colors.selectTint : Theme.Colors.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .strokeBorder(showNeedsReplyOnly ? Color.clear : Theme.Colors.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Emails")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("Emails")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filteredEmails.count)
+            OttoCountChip(text: countChipText)
 
-                Spacer()
+            Spacer(minLength: 8)
 
-                if !appState.emails.isEmpty {
-                    // Selection mode controls
-                    HStack(spacing: Theme.Spacing.sm) {
-                        // Delete Selected button (only visible when items selected)
-                        if isSelectionMode && !selectedEmailIds.isEmpty {
-                            Button {
-                                Task {
-                                    await appState.deleteEmails(Array(selectedEmailIds))
-                                    selectedEmailIds.removeAll()
-                                    isSelectionMode = false
-                                }
-                            } label: {
-                                HStack(spacing: Theme.Spacing.xs) {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 12))
-                                    Text("Delete (\(selectedEmailIds.count))")
-                                        .font(Theme.Typography.caption)
-                                }
-                                .foregroundStyle(Theme.Colors.bg0)
-                                .padding(.horizontal, Theme.Spacing.md)
-                                .padding(.vertical, Theme.Spacing.xs)
-                                .background(Theme.Colors.priorityUrgent)
-                                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-                            }
-                            .buttonStyle(.plain)
+            if !appState.emails.isEmpty {
+                // Selection mode controls
+                if isSelectionMode && !selectedEmailIds.isEmpty {
+                    deleteSelectedButton
+                }
+
+                // Select All / Deselect All button
+                if isSelectionMode {
+                    OttoBarButton(label: selectedEmailIds.count == filteredEmails.count ? "Deselect All" : "Select All") {
+                        if selectedEmailIds.count == filteredEmails.count {
+                            selectedEmailIds.removeAll()
+                        } else {
+                            selectedEmailIds = Set(filteredEmails.map { $0.id })
                         }
-
-                        // Select All / Deselect All button
-                        if isSelectionMode {
-                            Button {
-                                if selectedEmailIds.count == filteredEmails.count {
-                                    selectedEmailIds.removeAll()
-                                } else {
-                                    selectedEmailIds = Set(filteredEmails.map { $0.id })
-                                }
-                            } label: {
-                                Text(selectedEmailIds.count == filteredEmails.count ? "Deselect All" : "Select All")
-                                    .font(Theme.Typography.caption)
-                                    .foregroundStyle(Theme.Colors.accent)
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        // Toggle selection mode button
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isSelectionMode.toggle()
-                                if !isSelectionMode {
-                                    selectedEmailIds.removeAll()
-                                }
-                            }
-                        } label: {
-                            Text(isSelectionMode ? "Cancel" : "Select")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(isSelectionMode ? Theme.Colors.secondaryText : Theme.Colors.accent)
-                        }
-                        .buttonStyle(.plain)
                     }
                 }
 
-                if appState.isGmailConnected {
-                    // Loading indicator
-                    if appState.isLoadingGmail {
-                        ProgressView()
-                            .scaleEffect(0.7)
+                // Toggle selection mode button
+                OttoBarButton(label: isSelectionMode ? "Cancel" : "Select") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        isSelectionMode.toggle()
+                        if !isSelectionMode {
+                            selectedEmailIds.removeAll()
+                        }
                     }
                 }
+
+                // Needs-reply queue toggle (email triage, opt-in setting)
+                if triageEnabled {
+                    needsReplyChip
+                }
+
+                // Search scope pills — only affect filtering while a query
+                // is typed, so they can stay visible at all times.
+                OttoPillRail(
+                    options: SearchScope.allCases.map { (value: $0, label: $0.rawValue) },
+                    selection: $searchScope
+                )
+
+                OttoSearchMini(placeholder: "Search emails…", text: $searchText, width: 200)
             }
 
-            // Search field (show when we have emails, regardless of Gmail connection)
-            if !appState.emails.isEmpty {
-                VStack(spacing: Theme.Spacing.sm) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-
-                        TextField("Search emails...", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .font(Theme.Typography.callout)
-
-                        if !searchText.isEmpty {
-                            Button {
-                                searchText = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.Colors.tertiaryText)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, Theme.Spacing.md)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(Theme.Colors.bgInput)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                    )
-
-                    // Search scope picker (visible when searching)
-                    if !searchText.isEmpty {
-                        HStack(spacing: Theme.Spacing.sm) {
-                            Text("Search in:")
-                                .font(Theme.Typography.caption)
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-
-                            ForEach(SearchScope.allCases, id: \.self) { scope in
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.15)) {
-                                        searchScope = scope
-                                    }
-                                } label: {
-                                    Text(scope.rawValue)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundStyle(searchScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim)
-                                        .padding(.horizontal, Theme.Spacing.md)
-                                        .padding(.vertical, Theme.Spacing.xs)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(searchScope == scope ? Theme.Colors.selectTint : Color.clear)
-                                        )
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            Spacer()
-                        }
-                    }
+            if appState.isGmailConnected {
+                // Loading indicator
+                if appState.isLoadingGmail {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 28, height: 28)
                 }
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var countChipText: String {
+        let unread = filteredEmails.filter { !$0.isRead }.count
+        return "\(filteredEmails.count) · \(unread) unread"
+    }
+
+    /// Red-tinted capsule delete button (mockup's danger chip button).
+    private var deleteSelectedButton: some View {
+        Button {
+            Task {
+                await appState.deleteEmails(Array(selectedEmailIds))
+                selectedEmailIds.removeAll()
+                isSelectionMode = false
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "trash")
+                    .font(.system(size: 10.5, weight: .medium))
+                Text("Delete (\(selectedEmailIds.count))")
+                    .font(.system(size: 11.5))
+            }
+            .foregroundStyle(Theme.Colors.red)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Capsule().fill(Theme.Colors.tintRed))
+            .overlay(Capsule().strokeBorder(Theme.Colors.red.opacity(0.2), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Email List
 
+    /// Display-only date grouping over `filteredEmails` — the filtered array
+    /// (and its sort order) is the source of truth; this just buckets it for
+    /// OttoGroupLabel headers.
+    private var groupedEmails: [(label: String, emails: [Email])] {
+        let calendar = Calendar.current
+        let now = Date()
+
+        var today: [Email] = []
+        var yesterday: [Email] = []
+        var thisWeek: [Email] = []
+        var earlier: [Email] = []
+
+        for email in filteredEmails {
+            if calendar.isDateInToday(email.receivedDate) {
+                today.append(email)
+            } else if calendar.isDateInYesterday(email.receivedDate) {
+                yesterday.append(email)
+            } else if calendar.isDate(email.receivedDate, equalTo: now, toGranularity: .weekOfYear) {
+                thisWeek.append(email)
+            } else {
+                earlier.append(email)
+            }
+        }
+
+        var groups: [(label: String, emails: [Email])] = []
+        if !today.isEmpty { groups.append(("Today", today)) }
+        if !yesterday.isEmpty { groups.append(("Yesterday", yesterday)) }
+        if !thisWeek.isEmpty { groups.append(("This week", thisWeek)) }
+        if !earlier.isEmpty { groups.append(("Earlier", earlier)) }
+        return groups
+    }
+
     private var emailList: some View {
         ScrollView {
-            LazyVStack(spacing: 6) {
-                ForEach(filteredEmails) { email in
-                    HStack(spacing: Theme.Spacing.sm) {
-                        // Checkbox in selection mode
-                        if isSelectionMode {
-                            Button {
+            LazyVStack(spacing: 0) {
+                ForEach(groupedEmails, id: \.label) { group in
+                    OttoGroupLabel(text: group.label, count: group.emails.count)
+
+                    ForEach(group.emails) { email in
+                        HStack(spacing: Theme.Spacing.sm) {
+                            // Checkbox in selection mode
+                            if isSelectionMode {
+                                selectionCheckbox(for: email)
+                            }
+
+                            EmailRowView(email: email)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isSelectionMode {
                                 if selectedEmailIds.contains(email.id) {
                                     selectedEmailIds.remove(email.id)
                                 } else {
                                     selectedEmailIds.insert(email.id)
                                 }
-                            } label: {
-                                Image(systemName: selectedEmailIds.contains(email.id) ? "checkmark.circle.fill" : "circle")
-                                    .font(.system(size: 20))
-                                    .foregroundStyle(selectedEmailIds.contains(email.id) ? Theme.Colors.accent : Theme.Colors.tertiaryText)
-                            }
-                            .buttonStyle(.plain)
-                            .transition(.scale.combined(with: .opacity))
-                        }
-
-                        EmailRowView(email: email)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if isSelectionMode {
-                            if selectedEmailIds.contains(email.id) {
-                                selectedEmailIds.remove(email.id)
                             } else {
-                                selectedEmailIds.insert(email.id)
+                                navigationPath.append(email.id)
                             }
-                        } else {
-                            navigationPath.append(email.id)
                         }
                     }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
         .animation(.easeInOut(duration: 0.2), value: isSelectionMode)
+    }
+
+    /// Rounded-square selection check (mirrors TodoRowView's checkbox).
+    private func selectionCheckbox(for email: Email) -> some View {
+        let isChecked = selectedEmailIds.contains(email.id)
+        return Button {
+            if isChecked {
+                selectedEmailIds.remove(email.id)
+            } else {
+                selectedEmailIds.insert(email.id)
+            }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5.5)
+                    .strokeBorder(
+                        isChecked ? Theme.Colors.cyan.opacity(0.45) : Color.white.opacity(0.22),
+                        lineWidth: 1.5
+                    )
+                    .background(
+                        RoundedRectangle(cornerRadius: 5.5)
+                            .fill(isChecked ? Theme.Colors.tintTeal : Color.clear)
+                    )
+                    .frame(width: 16, height: 16)
+
+                if isChecked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Theme.Colors.cyan)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .transition(.scale.combined(with: .opacity))
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "envelope")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text(searchText.isEmpty ? "No emails yet" : "No matching emails")
-                    .font(Theme.Typography.title)
-                Text("Sync your emails via Integrations")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "envelope",
+            title: searchText.isEmpty ? "No emails yet" : "No matching emails",
+            message: "Sync your emails via Integrations"
+        )
     }
 
     // MARK: - Not Connected State
 
     private var notConnectedState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "envelope.badge.shield.half.filled")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text("Gmail Not Connected")
-                    .font(Theme.Typography.title)
-                Text("Connect your Gmail account in Integrations to sync emails")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button {
+        OttoEmptyState(
+            systemImage: "envelope.badge.shield.half.filled",
+            title: "Connect Gmail",
+            message: "Connect your Gmail account in Integrations to sync emails"
+        ) {
+            OttoNewButton(label: "Connect Gmail", systemImage: "link") {
                 Task { await appState.connectGmail() }
-            } label: {
-                HStack {
-                    Image(systemName: "link")
-                    Text("Connect Gmail")
-                }
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, Theme.Spacing.lg)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(Theme.Colors.accent)
-                .foregroundStyle(Theme.Colors.onAccent)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
             }
-            .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

@@ -30,7 +30,7 @@ struct HabitListView: View {
         }
     }
 
-    // Required-today subset, used for the score header.
+    // Required-today subset, used for the score cards.
     private var requiredToday: [Habit] {
         activeHabits.filter { $0.isRequired(on: Date()) }
     }
@@ -50,13 +50,58 @@ struct HabitListView: View {
         return sum / activeHabits.count
     }
 
+    /// Longest current streak among active habits + the habit holding it.
+    private var bestStreak: (days: Int, holder: String?) {
+        var best: (days: Int, title: String)?
+        for habit in activeHabits {
+            let s = habit.currentStreak()
+            if best == nil || s > best!.days {
+                best = (s, habit.title)
+            }
+        }
+        guard let top = best, top.days > 0 else { return (best?.days ?? 0, nil) }
+        return (top.days, shortTitle(top.title))
+    }
+
+    /// Met-required-days / required-days this calendar month, across active
+    /// habits (same isRequired/isMet math the streaks use — display only).
+    private var monthRate: Int {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        guard let monthStart = cal.dateInterval(of: .month, for: today)?.start else { return 0 }
+        var met = 0
+        var required = 0
+        for habit in activeHabits {
+            let created = cal.startOfDay(for: habit.createdAt)
+            var day = monthStart
+            while day <= today {
+                if day >= created, habit.isRequired(on: day) {
+                    required += 1
+                    if habit.isMet(on: day) { met += 1 }
+                }
+                guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
+        guard required > 0 else { return 0 }
+        return Int((Double(met) / Double(required) * 100).rounded())
+    }
+
+    private var monthName: String {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM"
+        return f.string(from: Date())
+    }
+
+    private func shortTitle(_ title: String) -> String {
+        let first = title.split(separator: " ").first.map(String.init) ?? title
+        return first.count > 12 ? String(first.prefix(12)) + "…" : first
+    }
+
     var body: some View {
         ZStack {
-            Theme.Colors.bg0.ignoresSafeArea()
-
             VStack(alignment: .leading, spacing: 0) {
-                header
-                OttoDivider()
+                viewbar
                 if visibleHabits.isEmpty {
                     emptyState
                 } else {
@@ -83,130 +128,178 @@ struct HabitListView: View {
         }
     }
 
-    // MARK: - Header (today score + filters)
+    // MARK: - Viewbar
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Habits")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
-                Spacer()
-                Button {
-                    showCreator = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("New Habit")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                }
-                .buttonStyle(AccentButtonStyle())
-            }
+    private var viewbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Habits")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-            scoreCard
+            OttoCountChip(text: "\(activeHabits.count) active")
 
-            HStack(spacing: Theme.Spacing.sm) {
-                ForEach(HabitFilter.allCases) { f in
-                    filterPill(f)
-                }
-                Spacer()
+            OttoPillRail(
+                options: [
+                    (HabitFilter.today, "Today"),
+                    (HabitFilter.all, "All"),
+                    (HabitFilter.archived, "Archived"),
+                ],
+                selection: $filter
+            )
+            .padding(.leading, 4)
+
+            Spacer(minLength: 8)
+
+            OttoNewButton(label: "New habit") {
+                showCreator = true
             }
         }
-        .padding(Theme.Spacing.lg)
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
-    private var scoreCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.sm) {
-                scoreCell(label: "Today", value: "\(metToday)/\(requiredToday.count)", color: Theme.Colors.text)
-                scoreCell(label: "Avg streak", value: "\(avgStreak)", color: Theme.Colors.amber)
-                scoreCell(label: "Active", value: "\(activeHabits.count)", color: Theme.Colors.text)
-            }
+    // MARK: - Score cards
 
-            ProgressBar(progress: todayScore, color: Theme.Colors.accent)
-                .frame(height: 3)
+    private var scoreCards: some View {
+        HStack(spacing: 12) {
+            scoreCard(label: "Today", value: "\(metToday) / \(requiredToday.count)", unit: "due") {
+                ProgressBar(progress: todayScore, color: Theme.Colors.accent)
+                    .frame(height: 3)
+                    .padding(.top, 3)
+            }
+            scoreCard(label: "Avg streak", value: "\(avgStreak)", unit: "days")
+            scoreCard(
+                label: "Best streak",
+                value: "\(bestStreak.days)",
+                unit: bestStreak.holder.map { "days · \($0)" } ?? "days"
+            )
+            scoreCard(label: monthName, value: "\(monthRate)", unit: "%")
         }
     }
 
-    private func scoreCell(label: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                .tracking(Theme.Tracking.xwide)
-                .textCase(.uppercase)
+    private func scoreCard(label: String, value: String, unit: String?) -> some View {
+        scoreCard(label: label, value: value, unit: unit) { EmptyView() }
+    }
+
+    private func scoreCard<Footer: View>(
+        label: String,
+        value: String,
+        unit: String?,
+        @ViewBuilder footer: () -> Footer
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(label.uppercased())
+                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .tracking(Theme.Tracking.xxwide)
                 .foregroundStyle(Theme.Colors.tertiaryText)
-            Text(value)
-                .font(.system(size: 18, weight: .semibold, design: .monospaced))
-                .foregroundStyle(color)
+
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(value)
+                    .font(.system(size: 21, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.Colors.text)
+                if let unit {
+                    Text(unit)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .lineLimit(1)
+                }
+            }
+
+            footer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.md)
+        .padding(.vertical, 13)
+        .padding(.horizontal, 15)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
+            RoundedRectangle(cornerRadius: 12)
                 .fill(Theme.Colors.panel)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
+            RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(Theme.Colors.border, lineWidth: 1)
         )
     }
 
-    private func filterPill(_ f: HabitFilter) -> some View {
-        let isActive = filter == f
-        return Button {
-            filter = f
-        } label: {
-            Text(f.rawValue)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, 5)
-                .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isActive ? Theme.Colors.selectTint : Color.clear)
-                )
+    // MARK: - Week header
+
+    /// Right-aligned M–S letters sitting above the rows' week-dot columns
+    /// (shares layout constants with HabitRowView so they line up).
+    private var weekHeader: some View {
+        let letters = ["M", "T", "W", "T", "F", "S", "S"]
+        let todayIndex = (Calendar.current.component(.weekday, from: Date()) + 5) % 7
+        return HStack(spacing: HabitRowView.dotSpacing) {
+            ForEach(0..<7, id: \.self) { i in
+                Text(letters[i])
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(i == todayIndex ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                    .frame(width: HabitRowView.dotSize)
+            }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.trailing, HabitRowView.weekTrailingInset)
     }
 
     // MARK: - List
 
     private var habitList: some View {
         ScrollView {
-            LazyVStack(spacing: Theme.Spacing.sm) {
-                ForEach(visibleHabits) { habit in
-                    HabitRowView(habit: habit) {
-                        selectedHabitId = habit.id
+            VStack(alignment: .leading, spacing: 0) {
+                scoreCards
+                    .padding(.bottom, 18)
+
+                weekHeader
+                    .padding(.bottom, 6)
+
+                LazyVStack(spacing: 2) {
+                    ForEach(visibleHabits) { habit in
+                        HabitRowView(habit: habit, isSelected: selectedHabitId == habit.id) {
+                            selectedHabitId = habit.id
+                        }
                     }
                 }
             }
-            .padding(Theme.Spacing.lg)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
+    // MARK: - Empty state
+
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            Spacer()
-            Image(systemName: "flame")
-                .font(.system(size: 36))
-                .foregroundStyle(Theme.Colors.textDim)
-            Text(filter == .archived ? "No archived habits." : "No habits yet.")
-                .font(Theme.Typography.body)
-                .foregroundStyle(Theme.Colors.textDim)
+        OttoEmptyState(
+            systemImage: "repeat",
+            title: emptyTitle,
+            message: emptyMessage,
+            tip: "Habits can auto-log from meetings and chat"
+        ) {
             if filter != .archived {
-                Button {
+                OttoNewButton(label: "Create your first habit") {
                     showCreator = true
-                } label: {
-                    Text("Create your first habit")
-                        .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(AccentButtonStyle())
             }
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyTitle: String {
+        switch filter {
+        case .today: return activeHabits.isEmpty ? "No habits yet" : "Nothing due today"
+        case .all: return "No habits yet"
+        case .archived: return "No archived habits"
+        }
+    }
+
+    private var emptyMessage: String {
+        switch filter {
+        case .today where !activeHabits.isEmpty:
+            return "None of your habits are scheduled for today."
+        case .archived:
+            return "Habits you archive will show up here."
+        default:
+            return "Create a habit to start tracking streaks and daily progress."
+        }
     }
 }
 

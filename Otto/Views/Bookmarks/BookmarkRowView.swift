@@ -20,18 +20,19 @@ struct BookmarkRowView: View {
 
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                // Title
+                // Title — read state is signalled by the row-level dim, so
+                // the title keeps full-strength text plus the strikethrough.
                 Text(bookmark.title)
-                    .font(.system(size: 13.5, weight: bookmark.isRead ? .regular : .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .strikethrough(bookmark.isRead, color: Theme.Colors.textDim)
-                    .foregroundStyle(bookmark.isRead ? Theme.Colors.textDim : Theme.Colors.text)
+                    .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
                 // Description from OG or user-entered
                 if let desc = displayDescription, !desc.isEmpty {
                     Text(desc)
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(Theme.Colors.textDim)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(2)
                 }
 
@@ -61,22 +62,18 @@ struct BookmarkRowView: View {
                         }
 
                         Text(bookmark.siteName ?? urlHost ?? "")
-                            .font(Theme.Typography.monoSmall)
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
 
-                    // Media type badge — fixedSize so a tight row truncates
+                    // Media type chip — fixedSize so a tight row truncates
                     // the domain text instead of letter-wrapping the chips.
-                    Text(bookmark.mediaType.rawValue)
-                        .font(Theme.Typography.monoSmall)
-                        .foregroundStyle(mediaTypeColor)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(mediaTypeTint)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    metaChip(bookmark.mediaType.rawValue.lowercased(), color: mediaTypeColor)
+
+                    if bookmark.isRead {
+                        metaChip("read", color: Theme.Colors.green)
+                    }
 
                     // Category
                     Text(bookmark.primaryCategory.rawValue)
@@ -92,7 +89,7 @@ struct BookmarkRowView: View {
             // Relative date (hidden while hover actions are shown)
             if !isHovered {
                 Text(relativeDate(bookmark.createdAt))
-                    .font(Theme.Typography.monoCaption)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
 
@@ -138,17 +135,19 @@ struct BookmarkRowView: View {
                 }
             }
         }
+        // Read rows dim wholesale (mockup .lrow.dim); the wash below stays
+        // full strength so selection is still readable.
+        .opacity(bookmark.isRead ? 0.55 : 1)
         .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.sm)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(
-                    isSelected || isHovered ? Theme.Colors.borderStrong : Theme.Colors.border,
-                    lineWidth: 1
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint when selected.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
+                    isSelected
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
                 )
         )
         #if os(macOS)
@@ -171,15 +170,17 @@ struct BookmarkRowView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 72, height: 52)
-                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                            .clipShape(RoundedRectangle(cornerRadius: 9))
                             .overlay(
-                                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                                // Inset hairline, not a border — keeps the
+                                // thumbnail edge crisp on the quiet row.
+                                RoundedRectangle(cornerRadius: 9)
+                                    .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
                             )
                     case .failure:
                         fallbackIcon
                     default:
-                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        RoundedRectangle(cornerRadius: 9)
                             .fill(Theme.Colors.hoverTint)
                             .frame(width: 72, height: 52)
                             .overlay(
@@ -196,18 +197,20 @@ struct BookmarkRowView: View {
 
     private var fallbackIcon: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
+            RoundedRectangle(cornerRadius: 9)
                 .fill(Theme.Colors.hoverTint)
                 .frame(width: 72, height: 52)
                 .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
                 )
 
             VStack(spacing: 2) {
+                // Tinted per media type — the no-image case is where the
+                // mockup's colored icon square shows through.
                 Image(systemName: bookmark.mediaType.iconName)
                     .font(.system(size: 16))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .foregroundStyle(mediaTypeColor)
 
                 if let host = urlHost {
                     Text(host.prefix(12))
@@ -238,19 +241,25 @@ struct BookmarkRowView: View {
         return host.replacingOccurrences(of: "www.", with: "")
     }
 
-    private var mediaTypeColor: Color {
-        switch bookmark.mediaType {
-        case .readLater: return Theme.Colors.accentText
-        case .listenLater: return Theme.Colors.violet
-        case .watchLater: return Theme.Colors.amber
-        }
+    /// Small colored status capsule (mockup .chip2) — mono label on a 10%
+    /// wash with a 20% stroke of the same color.
+    private func metaChip(_ label: String, color: Color) -> some View {
+        Text(label)
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.10)))
+            .overlay(Capsule().strokeBorder(color.opacity(0.2), lineWidth: 1))
     }
 
-    private var mediaTypeTint: Color {
+    private var mediaTypeColor: Color {
         switch bookmark.mediaType {
-        case .readLater: return Theme.Colors.selectTint
-        case .listenLater: return Theme.Colors.tintViolet
-        case .watchLater: return Theme.Colors.tintAmber
+        case .readLater: return Theme.Colors.textDim
+        case .listenLater: return Theme.Colors.violet
+        case .watchLater: return Theme.Colors.red
         }
     }
 

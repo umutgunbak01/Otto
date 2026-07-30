@@ -512,7 +512,10 @@ struct ConnectionDetailView: View {
                 let touchpoints = ContactActivityIndexer.recentTouchpoints(
                     for: connection,
                     emails: appState.emails,
-                    calendarEvents: appState.calendarEvents
+                    calendarEvents: appState.calendarEvents,
+                    meetings: appState.meetings,
+                    xDMs: appState.xDirectMessages,
+                    xFollowers: appState.xFollowers
                 )
                 if touchpoints.isEmpty {
                     Text("No recent emails or meetings matched.")
@@ -523,7 +526,7 @@ struct ConnectionDetailView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(touchpoints) { touchpoint in
                             HStack(spacing: 6) {
-                                Image(systemName: touchpoint.kind == .email ? "envelope" : (touchpoint.kind == .meeting ? "calendar" : "message"))
+                                Image(systemName: touchpoint.kind.iconName)
                                     .font(.system(size: 10))
                                     .foregroundStyle(Theme.Colors.tertiaryText)
                                 Text(ConnectionDateFormat.short(touchpoint.date))

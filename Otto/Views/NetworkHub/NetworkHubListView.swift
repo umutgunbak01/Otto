@@ -29,6 +29,7 @@ struct NetworkHubListView: View {
     @State private var filterType: NetworkType? = nil
     @State private var filterIndividualType: IndividualType? = nil
     @State private var filterCloseness: NetworkCloseness? = nil
+    @State private var showFollowUpsOnly: Bool = false
     @State private var editingEntryId: UUID?
     @State private var isCreatingNew: Bool = false
 
@@ -47,6 +48,14 @@ struct NetworkHubListView: View {
         if let type = filterType { result = result.filter { $0.type == type } }
         if let it = filterIndividualType { result = result.filter { $0.individualType == it } }
         if let c = filterCloseness { result = result.filter { $0.closeness == c } }
+
+        if showFollowUpsOnly {
+            // The follow-up queue: due people only, most overdue first.
+            return result
+                .compactMap { entry in entry.followUpOverdueDays().map { (entry, $0) } }
+                .sorted { $0.1 > $1.1 }
+                .map(\.0)
+        }
 
         switch sortOption {
         case .alphabetical:
@@ -82,7 +91,6 @@ struct NetworkHubListView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            OttoDivider()
 
             if appState.networkEntries.isEmpty {
                 emptyState
@@ -99,6 +107,20 @@ struct NetworkHubListView: View {
             )
             .environment(appState)
         }
+        .onChange(of: appState.locateItemId) { _, target in openLocatedEntry(target) }
+        .onAppear { openLocatedEntry(appState.locateItemId) }
+    }
+
+    /// `appState.locate(type: .networkHub, id:)` handler — opens the person's
+    /// editor sheet, mirroring the other list views' locate contract.
+    private func openLocatedEntry(_ target: UUID?) {
+        guard let target, appState.networkEntries.contains(where: { $0.id == target }) else { return }
+        editingEntryId = target
+        appState.locateItemId = nil
+    }
+
+    private var dueFollowUpCount: Int {
+        appState.networkEntries.reduce(0) { $0 + ($1.followUpOverdueDays() != nil ? 1 : 0) }
     }
 
     // MARK: - Table
@@ -116,6 +138,16 @@ struct NetworkHubListView: View {
             }
             .frame(width: NHCol.total, alignment: .leading)
         }
+        // Inset "sheet" container (mockup .sheetwrap): faint wash, rounded
+        // hairline frame, floated off the pane edges.
+        .background(Color.white.opacity(0.008))
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .overlay(
+            RoundedRectangle(cornerRadius: 13)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.bottom, Theme.Spacing.xl)
     }
 
     private var tableHeader: some View {
@@ -131,7 +163,7 @@ struct NetworkHubListView: View {
             headerCell("EMAIL", NHCol.email)
             headerCell("CLOSENESS", NHCol.closeness)
         }
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.bgRaised)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Theme.Colors.border).frame(height: 1)
         }
@@ -139,8 +171,8 @@ struct NetworkHubListView: View {
 
     private func headerCell(_ t: String, _ w: CGFloat) -> some View {
         Text(t)
-            .font(Theme.Typography.label)
-            .tracking(Theme.Tracking.xwide)
+            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+            .tracking(1.6)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 7)
             .frame(width: w, height: 28, alignment: .leading)
@@ -153,64 +185,31 @@ struct NetworkHubListView: View {
 
     private var header: some View {
         VStack(spacing: Theme.Spacing.md) {
+            // Title row (mockup .viewbar): serif display title + mono count chip.
             HStack(alignment: .center, spacing: 10) {
                 Text("Network hub")
-                    .font(Theme.Typography.title)
+                    .font(Theme.Typography.display)
                     .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filtered.count)
+                OttoCountChip(text: "\(filtered.count) curated")
 
-                Spacer()
-
-                Button {
-                    isCreatingNew = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus").font(.system(size: 10, weight: .medium))
-                        Text("Add").font(.system(size: 12, weight: .medium))
-                    }
-                }
-                .buttonStyle(AccentButtonStyle())
+                Spacer(minLength: 8)
             }
 
+            // Controls row: bordered menu buttons + mini search + primary CTA.
             HStack(spacing: Theme.Spacing.sm) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search name, company, title, summary, experience…", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                    if !searchText.isEmpty {
-                        Button { searchText = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(Theme.Colors.bgInput)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-                .frame(maxWidth: 320)
-
                 Menu {
                     ForEach(SortOption.allCases, id: \.self) { option in
                         Button { sortOption = option } label: {
                             HStack { Text(option.rawValue); if sortOption == option { Image(systemName: "checkmark") } }
                         }
                     }
-                } label: { filterChipLabel(icon: "arrow.up.arrow.down", text: sortOption.rawValue, isActive: false) }
+                } label: {
+                    OttoBarButtonLabel(label: "Sort: \(sortOption.rawValue)", showsCaret: true)
+                }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 Menu {
@@ -223,9 +222,12 @@ struct NetworkHubListView: View {
                             HStack { Image(systemName: t.icon); Text(t.label); if filterType == t { Image(systemName: "checkmark") } }
                         }
                     }
-                } label: { filterChipLabel(icon: "square.grid.2x2", text: filterType?.label ?? "Type", isActive: filterType != nil) }
+                } label: {
+                    OttoBarButtonLabel(label: filterType?.label ?? "Type", showsCaret: true)
+                }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 Menu {
@@ -238,9 +240,12 @@ struct NetworkHubListView: View {
                             HStack { Image(systemName: it.icon); Text(it.label); if filterIndividualType == it { Image(systemName: "checkmark") } }
                         }
                     }
-                } label: { filterChipLabel(icon: "person.crop.rectangle", text: filterIndividualType?.label ?? "Role", isActive: filterIndividualType != nil) }
+                } label: {
+                    OttoBarButtonLabel(label: filterIndividualType?.label ?? "Role", showsCaret: true)
+                }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
                 Menu {
@@ -253,35 +258,53 @@ struct NetworkHubListView: View {
                             HStack { Image(systemName: c.icon); Text(c.label); if filterCloseness == c { Image(systemName: "checkmark") } }
                         }
                     }
-                } label: { filterChipLabel(icon: "heart.circle", text: filterCloseness?.label ?? "Closeness", isActive: filterCloseness != nil) }
+                } label: {
+                    OttoBarButtonLabel(label: filterCloseness?.label ?? "Closeness", showsCaret: true)
+                }
                 #if os(macOS)
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 #endif
 
-                Spacer()
+                // Keep-in-touch queue toggle (active-state pill; the shared
+                // bar-button primitive has no selected look).
+                Button {
+                    showFollowUpsOnly.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.wave")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(showFollowUpsOnly ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                        Text(dueFollowUpCount > 0 ? "Follow-ups · \(dueFollowUpCount)" : "Follow-ups")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(showFollowUpsOnly ? Theme.Colors.accentText : Theme.Colors.textDim)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .fill(showFollowUpsOnly ? Theme.Colors.selectTint : Theme.Colors.panel)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(showFollowUpsOnly ? Color.clear : Theme.Colors.border, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                OttoSearchMini(placeholder: "Search name, company, title…", text: $searchText, width: 230)
+
+                OttoNewButton(label: "Add") {
+                    isCreatingNew = true
+                }
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
-    }
-
-    private func filterChipLabel(icon: String, text: String, isActive: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 10))
-            Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1)
-        }
-        .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4.5)
-        .background(
-            RoundedRectangle(cornerRadius: 7)
-                .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .strokeBorder(isActive ? Color.clear : Theme.Colors.border, lineWidth: 1)
-        )
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Empty states
@@ -364,7 +387,7 @@ private struct NetworkTableRow: View {
             .help(entry.profile != nil ? "Open details (LinkedIn profile attached)" : "Open details")
             .overlay(alignment: .trailing) { gridLine }
 
-            NHEditableCell(text: entry.name, width: NHCol.name, placeholder: "Name", bold: true) { v in commit { $0.name = v } }
+            NHEditableCell(text: entry.name, width: NHCol.name, placeholder: "Name", bold: true, avatarName: entry.name) { v in commit { $0.name = v } }
             NHEnumCell(width: NHCol.type, value: entry.type, options: NetworkType.allCases,
                        title: { $0.label }, icon: { $0.icon }, color: { $0.color }) { v in commit { $0.type = v } }
             NHEnumCell(width: NHCol.role, value: entry.individualType, options: IndividualType.allCases,
@@ -379,9 +402,9 @@ private struct NetworkTableRow: View {
                        color: { $0 == .unknown ? Theme.Colors.tertiaryText : $0.color }) { v in commit { $0.closeness = v } }
         }
         .frame(height: 34)
-        .background(hover ? Theme.Colors.hoverTint : Color.clear)
+        .background(hover ? Color.white.opacity(0.018) : Color.clear)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(Theme.Colors.border).frame(height: 1)
+            Rectangle().fill(Color.white.opacity(0.038)).frame(height: 1)
         }
         .onHover { hover = $0 }
     }
@@ -398,29 +421,36 @@ private struct NHEditableCell: View {
     let width: CGFloat
     var placeholder: String = "—"
     var bold: Bool = false
+    /// When set, a gradient initials avatar leads the field (NAME cell only).
+    var avatarName: String? = nil
     let onCommit: (String) -> Void
 
     @State private var draft: String = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField(placeholder, text: $draft)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12.5, weight: bold ? .medium : .regular))
-            .foregroundStyle(bold ? Theme.Colors.text : Theme.Colors.textDim)
-            .focused($focused)
-            .onAppear { draft = text }
-            .onChange(of: text) { _, nv in if !focused { draft = nv } }
-            .onChange(of: focused) { _, isFocused in
-                if !isFocused, draft != text { onCommit(draft) }
+        HStack(spacing: 7) {
+            if let avatarName {
+                OttoAvatar(name: avatarName, size: 24)
             }
-            .onSubmit { if draft != text { onCommit(draft) } }
-            .padding(.horizontal, 7)
-            .frame(width: width, height: 34, alignment: .leading)
-            .background(focused ? Theme.Colors.selectTint : Color.clear)
-            .overlay(alignment: .trailing) {
-                Rectangle().fill(Theme.Colors.border).frame(width: 1)
-            }
+            TextField(placeholder, text: $draft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, weight: bold ? .medium : .regular))
+                .foregroundStyle(bold ? Theme.Colors.text : Theme.Colors.textDim)
+                .focused($focused)
+                .onAppear { draft = text }
+                .onChange(of: text) { _, nv in if !focused { draft = nv } }
+                .onChange(of: focused) { _, isFocused in
+                    if !isFocused, draft != text { onCommit(draft) }
+                }
+                .onSubmit { if draft != text { onCommit(draft) } }
+        }
+        .padding(.horizontal, 7)
+        .frame(width: width, height: 34, alignment: .leading)
+        .background(focused ? Theme.Colors.selectTint : Color.clear)
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(Theme.Colors.border).frame(width: 1)
+        }
     }
 }
 
@@ -449,14 +479,14 @@ private struct NHEnumCell<T: Hashable>: View {
         } label: {
             HStack(spacing: 5) {
                 Text(title(value))
-                    .font(Theme.Typography.monoSmall)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(color(value))
                     .lineLimit(1)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(color(value).opacity(0.12))
+                            .fill(color(value).opacity(0.10))
                     )
                 Text("▾")
                     .font(.system(size: 8))
@@ -499,7 +529,13 @@ struct NetworkEntryEditor: View {
     @State private var linkedin: String = ""
     @State private var closeness: NetworkCloseness = .lightConnection
     @State private var notes: String = ""
+    @State private var followUpCadence: FollowUpCadence? = nil
     @State private var didLoad = false
+    /// Merged interaction history for the timeline + dossier context,
+    /// computed once per sheet open (a full index build is ~tens of ms).
+    @State private var touchpoints: [Touchpoint] = []
+
+    private var dossier: PersonDossierService { .shared }
 
     private var isEditing: Bool { entry != nil }
 
@@ -546,7 +582,17 @@ struct NetworkEntryEditor: View {
 
                     field("LinkedIn") { TextField("Profile URL", text: $linkedin).textFieldStyle(.plain) }
 
-                    picker("Closeness", selection: $closeness, options: NetworkCloseness.allCases) { $0.label }
+                    HStack(spacing: 14) {
+                        picker("Closeness", selection: $closeness, options: NetworkCloseness.allCases) { $0.label }
+                        picker("Keep in touch", selection: $followUpCadence,
+                               options: [nil] + FollowUpCadence.allCases.map { Optional($0) }) { opt in
+                            opt?.label ?? "Off"
+                        }
+                    }
+
+                    if let e = entry {
+                        keepInTouchStatusRow(for: e)
+                    }
 
                     field("Notes") {
                         TextEditor(text: $notes)
@@ -579,6 +625,11 @@ struct NetworkEntryEditor: View {
                     }
                     .padding(.top, 6)
 
+                    if let e = entry {
+                        dossierCard(for: e)
+                        activityTimeline(for: e)
+                    }
+
                     profileSection
 
                     if let e = entry {
@@ -598,8 +649,185 @@ struct NetworkEntryEditor: View {
                 individualType = e.individualType; title = e.title
                 location = e.location; email = e.email
                 linkedin = e.linkedin ?? ""; closeness = e.closeness; notes = e.notes
+                followUpCadence = e.followUpCadence
+
+                // History + dossier: compute touchpoints once, then refresh
+                // the AI summary in the background when it's gone stale.
+                let index = ContactActivityIndex.build(
+                    emails: appState.emails,
+                    calendarEvents: appState.calendarEvents,
+                    meetings: appState.meetings,
+                    xDMs: appState.xDirectMessages,
+                    xFollowers: appState.xFollowers
+                )
+                touchpoints = index.touchpoints(for: PersonIdentity(entry: e))
+                dossier.refreshIfStale(entry: e, touchpoints: touchpoints, appState: appState)
             }
         }
+    }
+
+    // MARK: - Person 360: AI summary + activity timeline
+
+    @ViewBuilder
+    private func dossierCard(for stale: NetworkEntry) -> some View {
+        let live = appState.networkEntries.first(where: { $0.id == stale.id }) ?? stale
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Relationship summary")
+                    .hudLabel()
+                Spacer()
+                if dossier.generating.contains(live.id) {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Button {
+                        dossier.generate(entry: live, touchpoints: touchpoints, appState: appState)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Regenerate summary")
+                }
+            }
+
+            if let summary = live.aiSummary, !summary.isEmpty {
+                Text(summary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                if let generated = live.aiSummaryGeneratedAt {
+                    Text("generated \(generated.formatted(date: .abbreviated, time: .omitted))")
+                        .font(Theme.Typography.monoSmall)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            } else if dossier.generating.contains(live.id) {
+                Text("Reading your history with \(live.name.isEmpty ? live.company : live.name)…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.textDim)
+            } else if let error = dossier.lastError[live.id] {
+                Text(error)
+                    .font(Theme.Typography.small)
+                    .foregroundStyle(Theme.Colors.amber)
+            } else {
+                Text("No summary yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+        }
+        .aiCardStyle()
+    }
+
+    @ViewBuilder
+    private func activityTimeline(for entry: NetworkEntry) -> some View {
+        if !touchpoints.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Recent activity")
+                    .hudLabel()
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(touchpoints.prefix(12).enumerated()), id: \.element.id) { index, touchpoint in
+                        timelineRow(touchpoint, isFirst: index == 0)
+                    }
+                    if touchpoints.count > 12 {
+                        Text("+ \(touchpoints.count - 12) earlier")
+                            .font(Theme.Typography.monoSmall)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .padding(.top, 6)
+                    }
+                }
+                .padding(10)
+                .background(Theme.Colors.hoverTint)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timelineRow(_ touchpoint: Touchpoint, isFirst: Bool) -> some View {
+        let linkable = touchpoint.sourceType != nil && touchpoint.sourceId != nil
+        VStack(alignment: .leading, spacing: 0) {
+            if !isFirst { OttoDivider().padding(.vertical, 5) }
+            HStack(spacing: 8) {
+                Image(systemName: touchpoint.kind.iconName)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .frame(width: 14)
+                Text(touchpoint.date.formatted(.dateTime.day().month(.abbreviated)))
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .frame(width: 46, alignment: .leading)
+                Text(touchpoint.title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.text)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if linkable {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard let type = touchpoint.sourceType, let id = touchpoint.sourceId else { return }
+                onClose()
+                appState.locate(type: type, id: id)
+            }
+        }
+    }
+
+    /// Last-contact line + quick actions for the keep-in-touch loop. Reads
+    /// the LIVE entry from AppState (not the editing copy) so "Mark
+    /// contacted" and snoozes reflect immediately.
+    @ViewBuilder
+    private func keepInTouchStatusRow(for stale: NetworkEntry) -> some View {
+        let live = appState.networkEntries.first(where: { $0.id == stale.id }) ?? stale
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "hand.wave")
+                .font(.system(size: 11))
+                .foregroundStyle(overdueTint(live))
+            Text(lastContactLine(live))
+                .font(Theme.Typography.monoCaption)
+                .foregroundStyle(Theme.Colors.textDim)
+            if let days = live.followUpOverdueDays() {
+                Text(days == 0 ? "due today" : "\(days)d overdue")
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(days >= 7 ? Theme.Colors.red : Theme.Colors.amber)
+            } else if let snoozed = live.followUpSnoozedUntil, snoozed > Date() {
+                Text("snoozed until \(snoozed.formatted(date: .abbreviated, time: .omitted))")
+                    .font(Theme.Typography.monoSmall)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+            }
+            Spacer()
+            Button {
+                var updated = live
+                updated.lastContactedAt = Date()
+                updated.followUpSnoozedUntil = nil
+                Task { await appState.updateNetworkEntry(updated) }
+            } label: {
+                Text("Mark contacted")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Colors.accentText)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Theme.Colors.hoverTint)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+    }
+
+    private func overdueTint(_ entry: NetworkEntry) -> Color {
+        guard let days = entry.followUpOverdueDays() else { return Theme.Colors.textDim }
+        return days >= 7 ? Theme.Colors.red : Theme.Colors.amber
+    }
+
+    private func lastContactLine(_ entry: NetworkEntry) -> String {
+        guard let last = entry.lastContactedAt else { return "No contact on record" }
+        let days = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 0
+        let when = days == 0 ? "today" : (days == 1 ? "yesterday" : "\(days)d ago")
+        return "Last contact \(when)"
     }
 
     @ViewBuilder
@@ -673,11 +901,15 @@ struct NetworkEntryEditor: View {
     private func save() {
         let trimmedLink = linkedin.trimmingCharacters(in: .whitespacesAndNewlines)
         if var e = entry {
+            // Re-read the live row so quick actions taken while the sheet was
+            // open (Mark contacted, snooze) aren't clobbered by this save.
+            if let live = appState.networkEntries.first(where: { $0.id == e.id }) { e = live }
             e.name = name; e.type = type; e.company = company; e.industry = industry
             e.individualType = individualType; e.title = title
             e.location = location; e.email = email
             e.linkedin = trimmedLink.isEmpty ? nil : trimmedLink
             e.closeness = closeness; e.notes = notes
+            e.followUpCadence = followUpCadence
             Task { await appState.updateNetworkEntry(e) }
         } else {
             let e = NetworkEntry(
@@ -685,7 +917,8 @@ struct NetworkEntryEditor: View {
                 individualType: individualType, title: title,
                 location: location, email: email,
                 linkedin: trimmedLink.isEmpty ? nil : trimmedLink,
-                closeness: closeness, notes: notes
+                closeness: closeness, notes: notes,
+                followUpCadence: followUpCadence
             )
             Task { await appState.addNetworkEntry(e) }
         }

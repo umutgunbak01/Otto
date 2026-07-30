@@ -172,6 +172,9 @@ struct SearchResultDetailPopup: View {
             // Habit detail isn't surfaced through the chat preview popup —
             // the user opens habits from the Habits tab.
             EmptyView()
+        case .automation:
+            // Automations aren't part of universal search results.
+            EmptyView()
         case .networkHub:
             // Network Hub entries aren't surfaced through the chat preview popup.
             EmptyView()

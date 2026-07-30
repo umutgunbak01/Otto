@@ -348,6 +348,7 @@ enum CustomTabSlug {
         "todo", "note", "idea", "reminder", "bookmark", "meeting", "email",
         "connection", "network", "company", "event", "community", "habit",
         "file", "x_post", "x_follower", "x_dm",
+        "saved_prompt", "scheduled_task",
         // Tool-name suffixes that would collide with existing create_*/update_* tools.
         "network_entry",
         // Other tool-name tails (delete_item, search_items, grep_data, open_url, read_file).

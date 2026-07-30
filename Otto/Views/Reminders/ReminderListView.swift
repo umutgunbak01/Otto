@@ -75,10 +75,8 @@ struct ReminderListView: View {
 
     private var listPanel: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header — no hairline underneath; content scrolls directly below.
             header
-
-            OttoDivider()
 
             // Content
             if activeReminders.isEmpty {
@@ -92,20 +90,18 @@ struct ReminderListView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Reminders")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("Reminders")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: activeReminders.count)
+            OttoCountChip(text: "\(activeReminders.count)")
 
-                Spacer()
-            }
-            .padding(.horizontal, Theme.Spacing.xl)
-            .padding(.top, Theme.Spacing.lg)
-            .padding(.bottom, Theme.Spacing.md)
+            Spacer()
         }
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Reminder List
@@ -134,20 +130,12 @@ struct ReminderListView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "bell")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text("No reminders")
-                    .font(Theme.Typography.title)
-                Text("Try: \"Remind me to call mom at 5pm\"")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "bell",
+            title: "All quiet",
+            message: "Reminders you or Otto create show up here and fire as macOS notifications.",
+            tip: "Try: \"Remind me to call mom at 19:00\""
+        )
     }
 }
 

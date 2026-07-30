@@ -7,10 +7,16 @@ struct CalendarEventRowView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
-            // Accent left indicator bar
+            // Teal fading spine (mockup .erow .bar).
             RoundedRectangle(cornerRadius: 2)
-                .fill(Theme.Colors.accent)
-                .frame(width: 3, height: 32)
+                .fill(
+                    LinearGradient(
+                        colors: [Theme.Colors.cyan, .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 2, height: 34)
 
             // Time range
             Text(event.formattedTimeRange)
@@ -59,14 +65,9 @@ struct CalendarEventRowView: View {
         .padding(.vertical, Theme.Spacing.sm)
         .padding(.horizontal, Theme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isHovered ? Theme.Colors.hoverTint : Theme.Colors.panel)
+            RoundedRectangle(cornerRadius: 11)
+                .fill(isHovered ? Theme.Colors.panel : Color.clear)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(Theme.Colors.borderStrong, lineWidth: 1)
-        )
-        .padding(.vertical, 3)
         .contentShape(Rectangle())
         .onTapGesture {
             if let htmlLink = event.htmlLink, let url = URL(string: htmlLink) {

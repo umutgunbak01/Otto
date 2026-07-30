@@ -12,37 +12,34 @@ struct FileRowView: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            // File type icon
-            fileTypeIcon
+            typeBadge
 
             // File info
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(file.name)
-                    .font(Theme.Typography.headline)
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
-                HStack(spacing: Theme.Spacing.sm) {
-                    Text(file.fileType.displayName)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
-
-                    Text("•")
-                        .font(Theme.Typography.caption)
+                HStack(spacing: 7) {
+                    Text(file.formattedSize)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
 
-                    Text(file.formattedSize)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.secondaryText)
+                    if file.extractedText != nil {
+                        Text("searchable")
+                            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                            .tracking(0.5)
+                            .foregroundStyle(Theme.Colors.green)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Theme.Colors.tintGreen))
+                    }
 
                     if !file.tags.isEmpty {
-                        Text("•")
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-
                         Text(file.tags.prefix(2).joined(separator: ", "))
-                            .font(Theme.Typography.caption)
-                            .foregroundStyle(Theme.Colors.accent)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(Theme.Colors.accentText)
                             .lineLimit(1)
                     }
                 }
@@ -50,22 +47,9 @@ struct FileRowView: View {
 
             Spacer()
 
-            // Date + "Searchable" badge
-            VStack(alignment: .trailing, spacing: Theme.Spacing.xs) {
-                Text(formattedDate)
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-
-                if file.extractedText != nil {
-                    Text("Searchable")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(Theme.Colors.personal)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Theme.Colors.personal.opacity(0.1))
-                        .clipShape(Capsule())
-                }
-            }
+            Text(formattedDate)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(Theme.Colors.tertiaryText)
 
             // Hover-revealed delete button (mirrors NoteRowView).
             if isHovered {
@@ -83,62 +67,40 @@ struct FileRowView: View {
                 .help("Delete file")
             }
         }
-        .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.vertical, Theme.Spacing.md)
+        .padding(.vertical, 11)
+        .padding(.horizontal, Theme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.accent.opacity(0.1) : Color.clear)
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint while previewing.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
+                    isSelected
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
+                )
         )
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
     }
 
-    // MARK: - File Type Icon
+    // MARK: - Type badge
 
-    private var fileTypeIcon: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(iconBackgroundColor.opacity(0.12))
-
-            VStack(spacing: 2) {
-                Image(systemName: iconSystemName)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(iconBackgroundColor)
-
-                Text(".\(file.fileExtension.uppercased())")
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .foregroundStyle(iconBackgroundColor.opacity(0.8))
-            }
-        }
-        .frame(width: 40, height: 40)
+    /// 38pt extension badge — tinted wash in the type's canonical accent
+    /// (FileType.color) with a mono extension label.
+    private var typeBadge: some View {
+        Text(file.fileExtension.uppercased())
+            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+            .tracking(0.5)
+            .foregroundStyle(file.fileType.color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .padding(.horizontal, 3)
+            .frame(width: 38, height: 38)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(file.fileType.color.opacity(0.10))
+            )
     }
-
-    private var iconSystemName: String {
-        switch file.fileType {
-        case .csv:
-            return "tablecells"
-        case .excel:
-            return "tablecells.fill"
-        case .image:
-            // Show different icon based on extension
-            switch file.fileExtension.lowercased() {
-            case "png": return "photo"
-            case "jpg", "jpeg": return "photo.fill"
-            case "heic": return "livephoto"
-            default: return "photo"
-            }
-        case .pdf:
-            return "doc.richtext.fill"
-        case .text:
-            return "doc.text"
-        case .video:
-            return "film"
-        case .audio:
-            return "waveform"
-        }
-    }
-
-    private var iconBackgroundColor: Color { file.fileType.color }
 
     // MARK: - Formatted Date
 
@@ -171,8 +133,6 @@ struct FileRowView: View {
             )
         )
 
-        Divider()
-
         FileRowView(
             file: FileItem(
                 name: "Project Documentation",
@@ -184,8 +144,6 @@ struct FileRowView: View {
             isSelected: true
         )
 
-        Divider()
-
         FileRowView(
             file: FileItem(
                 name: "Product Screenshot",
@@ -194,8 +152,6 @@ struct FileRowView: View {
                 fileSize: 850_000
             )
         )
-
-        Divider()
 
         FileRowView(
             file: FileItem(
@@ -208,6 +164,6 @@ struct FileRowView: View {
         )
     }
     .frame(width: 500)
-    .background(Theme.Colors.background)
+    .padding()
     .environment(AppState())
 }

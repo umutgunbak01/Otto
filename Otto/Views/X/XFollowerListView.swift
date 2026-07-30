@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// Teal mono "Mutual" capsule — accent text on a teal wash with a faint
+/// cyan hairline (mockup .mutual).
+struct XMutualChip: View {
+    var systemImage: String? = nil
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.system(size: 8, weight: .medium))
+            }
+            Text("Mutual")
+                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+        }
+        .foregroundStyle(Theme.Colors.accentText)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
+        .background(Capsule().fill(Theme.Colors.tintTeal))
+        .overlay(Capsule().strokeBorder(Theme.Colors.cyan.opacity(0.2), lineWidth: 1))
+    }
+}
+
 struct XFollowerListView: View {
     @Environment(AppState.self) private var appState
     @State private var searchText: String = ""
@@ -144,16 +166,17 @@ struct XFollowerListView: View {
 
     private var followerSidebar: some View {
         VStack(spacing: 0) {
-            // Header
-            VStack(spacing: Theme.Spacing.sm) {
-                HStack(alignment: .center, spacing: 8) {
-                    Text("X Followers")
-                        .font(Theme.Typography.title)
+            // Viewbar — serif title + count chip, then scope pills + sort,
+            // then search. No hairline beneath.
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                HStack(alignment: .center, spacing: 10) {
+                    Text("Followers")
+                        .font(Theme.Typography.display)
                         .foregroundStyle(Theme.Colors.text)
 
-                    Spacer()
+                    OttoCountChip(text: "\(filteredFollowers.count)")
 
-                    OttoCountBadge(count: filteredFollowers.count)
+                    Spacer(minLength: 8)
 
                     // Loading indicator
                     if appState.isLoadingX {
@@ -164,28 +187,16 @@ struct XFollowerListView: View {
                 }
 
                 // Scope pills — view everyone or only mutuals — plus sort menu
-                HStack(spacing: 4) {
-                    ForEach(FilterScope.allCases) { scope in
-                        Button {
-                            filterScopeRaw = scope.rawValue
-                        } label: {
-                            Text(scope.label)
-                                .font(.system(size: 12, weight: .medium))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(filterScope == scope ? Theme.Colors.selectTint : Color.clear)
-                                )
-                                .foregroundStyle(
-                                    filterScope == scope ? Theme.Colors.accentText : Theme.Colors.textDim
-                                )
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+                HStack(spacing: 8) {
+                    OttoPillRail(
+                        options: FilterScope.allCases.map { (value: $0, label: $0.label) },
+                        selection: Binding(
+                            get: { filterScope },
+                            set: { filterScopeRaw = $0.rawValue }
+                        )
+                    )
 
-                    Spacer()
+                    Spacer(minLength: 4)
 
                     Menu {
                         ForEach(SortOption.allCases) { option in
@@ -201,14 +212,7 @@ struct XFollowerListView: View {
                             }
                         }
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.up.arrow.down")
-                                .font(.system(size: 9))
-                            Text(sortOption.label)
-                                .font(.system(size: 11))
-                        }
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .contentShape(Rectangle())
+                        OttoBarButtonLabel(label: sortOption.label, showsCaret: true)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
@@ -217,76 +221,29 @@ struct XFollowerListView: View {
                 }
 
                 // Search field
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(Theme.Colors.tertiaryText)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .fill(Theme.Colors.bgInput)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
+                OttoSearchMini(placeholder: "Search followers…", text: $searchText, width: nil)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            OttoDivider()
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
 
             // Follower list
             if filteredFollowers.isEmpty && appState.xFollowers.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "person.2")
-                        .font(.system(size: 24, weight: .thin))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("No X followers yet")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("Connect X in Integrations to import your followers. Mutuals are highlighted.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, Theme.Spacing.lg)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                OttoEmptyState(
+                    systemImage: "person.2",
+                    title: "No followers yet",
+                    message: "Connect X in Integrations to import your followers. Mutuals are highlighted."
+                )
             } else if filteredFollowers.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 24, weight: .thin))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("No results")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Button {
+                OttoEmptyState(
+                    systemImage: "magnifyingglass",
+                    title: "No results",
+                    message: "Nothing matches the current filters."
+                ) {
+                    OttoSuggestionChip(systemImage: "xmark", label: "Clear search") {
                         searchText = ""
-                    } label: {
-                        Text("Clear search")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.Colors.accent)
                     }
-                    .buttonStyle(.plain)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
@@ -294,12 +251,12 @@ struct XFollowerListView: View {
                             sidebarFollowerRow(follower)
                         }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.bottom, Theme.Spacing.lg)
                 }
             }
         }
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.panelWash)
     }
 
     // MARK: - Sidebar Follower Row
@@ -322,10 +279,10 @@ struct XFollowerListView: View {
                 )
 
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Text(follower.displayLabel)
-                            .font(.system(size: 13.5, weight: isSelected ? .medium : .regular))
-                            .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.secondaryText)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Theme.Colors.text)
                             .lineLimit(1)
 
                         // Linked badge
@@ -339,7 +296,7 @@ struct XFollowerListView: View {
                     // Skip the handle line when it's already the title
                     if follower.hasMeaningfulName {
                         Text("@\(follower.username)")
-                            .font(.system(size: 11.5, design: .monospaced))
+                            .font(.system(size: 10.5, design: .monospaced))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
@@ -355,16 +312,12 @@ struct XFollowerListView: View {
                 Spacer()
 
                 // Mutual chip + follower count
-                VStack(alignment: .trailing, spacing: 3) {
+                VStack(alignment: .trailing, spacing: 4) {
                     if follower.isMutual {
-                        AngularChip(fill: Theme.Colors.selectTint) {
-                            Text("Mutual")
-                                .font(Theme.Typography.monoSmall)
-                                .foregroundStyle(Theme.Colors.accentText)
-                        }
+                        XMutualChip()
                     }
 
-                    HStack(spacing: 2) {
+                    HStack(spacing: 3) {
                         Text(OttoFormatters.compactCount(follower.followersCount))
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                         Image(systemName: "person.2")
@@ -373,9 +326,9 @@ struct XFollowerListView: View {
                     .foregroundStyle(Theme.Colors.tertiaryText)
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .ottoRow(isSelected: isSelected)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.vertical, 7)
+            .xRowCard(isSelected: isSelected)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -384,20 +337,11 @@ struct XFollowerListView: View {
     // MARK: - Empty Editor
 
     private var emptyEditor: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "person.2")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-
-            Text("Select a follower")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            Text("Choose a follower from the sidebar to view details")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "person.2",
+            title: "Select a follower",
+            message: "Choose a follower from the sidebar to view details."
+        )
     }
 }
 

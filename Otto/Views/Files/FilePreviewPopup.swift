@@ -34,7 +34,7 @@ struct FilePreviewPopup: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.Colors.background)
+        .background(Theme.Colors.bg1)
         .onAppear {
             loadPreviewURL()
         }
@@ -348,7 +348,7 @@ struct FilePreviewPopup: View {
                             .foregroundStyle(idx == selectedSheet ? Theme.Colors.text : Theme.Colors.tertiaryText)
                             .padding(.horizontal, Theme.Spacing.sm)
                             .padding(.vertical, 4)
-                            .background(idx == selectedSheet ? Theme.Colors.bg1 : Color.clear)
+                            .background(idx == selectedSheet ? Theme.Colors.panel2 : Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
                     }
                     .buttonStyle(.plain)

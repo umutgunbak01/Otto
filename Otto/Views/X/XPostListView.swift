@@ -66,21 +66,20 @@ struct XProfileImage: View {
     }
 }
 
-/// Row card: panel bg, rounded hairline border, stronger border on hover.
+/// Quiet list row (mockup .lrow): no border or card fill — just a rounded
+/// wash on hover and a teal tint when selected.
 struct XRowCard: ViewModifier {
+    var isSelected: Bool = false
     @State private var isHovered = false
 
     func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .fill(Theme.Colors.panel)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
-                    .strokeBorder(
-                        isHovered ? Theme.Colors.borderStrong : Theme.Colors.border,
-                        lineWidth: 1
+                RoundedRectangle(cornerRadius: 11)
+                    .fill(
+                        isSelected
+                            ? Theme.Colors.selectTint
+                            : (isHovered ? Theme.Colors.panel : Color.clear)
                     )
             )
             .onHover { isHovered = $0 }
@@ -88,8 +87,8 @@ struct XRowCard: ViewModifier {
 }
 
 extension View {
-    func xRowCard() -> some View {
-        modifier(XRowCard())
+    func xRowCard(isSelected: Bool = false) -> some View {
+        modifier(XRowCard(isSelected: isSelected))
     }
 }
 
@@ -168,7 +167,6 @@ struct XPostListView: View {
     private var listPanel: some View {
         VStack(spacing: 0) {
             header
-            OttoDivider()
 
             if filteredPosts.isEmpty {
                 emptyState
@@ -184,109 +182,56 @@ struct XPostListView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: Theme.Spacing.md) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("X Posts")
-                    .font(Theme.Typography.title)
-                    .foregroundStyle(Theme.Colors.text)
+        HStack(alignment: .center, spacing: 10) {
+            Text("Posts")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
 
-                OttoCountBadge(count: filteredPosts.count)
+            OttoCountChip(text: "\(filteredPosts.count)")
 
-                Spacer()
-
-                if appState.isLoadingX {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                }
+            if appState.isLoadingX {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 16, height: 16)
             }
 
-            // Search field
+            Spacer(minLength: 8)
+
             if !appState.xPosts.isEmpty {
-                VStack(spacing: Theme.Spacing.sm) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-
-                        TextField("Search posts...", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .font(Theme.Typography.body)
-
-                        if !searchText.isEmpty {
-                            Button {
-                                searchText = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.Colors.tertiaryText)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, Theme.Spacing.md)
-                    .padding(.vertical, Theme.Spacing.sm)
-                    .background(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .fill(Theme.Colors.bgInput)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
-                            .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                    )
-
-                    // Sort picker
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Menu {
-                            ForEach(SortOption.allCases, id: \.self) { option in
-                                Button {
-                                    sortOption = option
-                                } label: {
-                                    HStack {
-                                        Text(option.rawValue)
-                                        if sortOption == option {
-                                            Image(systemName: "checkmark")
-                                        }
-                                    }
+                Menu {
+                    ForEach(SortOption.allCases, id: \.self) { option in
+                        Button {
+                            sortOption = option
+                        } label: {
+                            HStack {
+                                Text(option.rawValue)
+                                if sortOption == option {
+                                    Image(systemName: "checkmark")
                                 }
                             }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.up.arrow.down")
-                                    .font(.system(size: 9))
-                                Text("Sort: \(sortOption.rawValue)")
-                                    .font(.system(size: 12))
-                            }
-                            .foregroundStyle(Theme.Colors.textDim)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7)
-                                    .fill(Theme.Colors.panel)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 7)
-                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                            )
                         }
-                        #if os(macOS)
-                        .menuStyle(.borderlessButton)
-                        #endif
-
-                        Spacer()
                     }
+                } label: {
+                    OttoBarButtonLabel(label: "Sort: \(sortOption.rawValue)", showsCaret: true)
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Sort posts")
+
+                OttoSearchMini(placeholder: "Search posts…", text: $searchText, width: 200)
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Post List
 
     private var postList: some View {
         ScrollView {
-            LazyVStack(spacing: Theme.Spacing.sm) {
+            LazyVStack(spacing: 2) {
                 ForEach(filteredPosts) { post in
                     postRow(post)
                         .contentShape(Rectangle())
@@ -295,8 +240,10 @@ struct XPostListView: View {
                         }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.xxl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -313,33 +260,34 @@ struct XPostListView: View {
 
             // Content
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                // Author info and date
-                HStack {
+                // Author info and date (mockup .xhead)
+                HStack(spacing: 7) {
                     Text(post.authorDisplayName)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Theme.Colors.text)
                         .lineLimit(1)
 
                     Text("@\(post.authorUsername)")
-                        .font(.system(size: 11.5, design: .monospaced))
+                        .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                         .lineLimit(1)
 
                     Spacer()
 
                     Text(post.formattedDate)
-                        .font(Theme.Typography.monoCaption)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
                 // Post text preview
                 Text(post.text)
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.text)
-                    .lineLimit(2)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.Colors.textDim)
+                    .lineSpacing(3)
+                    .lineLimit(3)
 
-                // Engagement stats
-                HStack(spacing: Theme.Spacing.lg) {
+                // Engagement stats (mockup .engage)
+                HStack(spacing: 18) {
                     engagementStat(icon: "heart", count: post.likeCount)
                     engagementStat(icon: "arrow.2.squarepath", count: post.retweetCount)
                     engagementStat(icon: "bubble.right", count: post.replyCount)
@@ -348,16 +296,16 @@ struct XPostListView: View {
             }
         }
         .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.sm + 2)
+        .padding(.vertical, 11)
         .xRowCard()
     }
 
     private func engagementStat(icon: String, count: Int) -> some View {
-        HStack(spacing: Theme.Spacing.xs) {
+        HStack(spacing: 5) {
             Image(systemName: icon)
-                .font(.system(size: 11))
-            Text("\(count)")
-                .font(Theme.Typography.monoCaption)
+                .font(.system(size: 12))
+            Text(OttoFormatters.compactCount(count))
+                .font(.system(size: 10, design: .monospaced))
         }
         .foregroundStyle(Theme.Colors.tertiaryText)
     }
@@ -463,6 +411,8 @@ struct XPostListView: View {
                 }
             }
             .padding(Theme.Spacing.xl)
+            .frame(maxWidth: 828)
+            .frame(maxWidth: .infinity)
         }
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
@@ -472,21 +422,11 @@ struct XPostListView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "text.bubble")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text(searchText.isEmpty ? "No X posts yet" : "No matching posts")
-                    .font(Theme.Typography.title)
-                Text("Connect X in Integrations to import your tweets.")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "text.bubble",
+            title: searchText.isEmpty ? "No posts yet" : "No matching posts",
+            message: "Connect X in Integrations to index your posts."
+        )
     }
 }
 

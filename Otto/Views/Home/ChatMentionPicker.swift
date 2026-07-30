@@ -86,7 +86,7 @@ enum MentionSearch {
         for connection in appState.connections { consider(from(connection), weight: 1) }
         for company in appState.companies { consider(from(company), weight: 2) }
         for meeting in appState.meetings { consider(from(meeting), weight: 3) }
-        for note in appState.notes { consider(from(note), weight: 4) }
+        for note in appState.activeNotes { consider(from(note), weight: 4) }
         for todo in appState.todos { consider(from(todo), weight: 5) }
         for event in appState.events { consider(from(event), weight: 6) }
         for community in appState.communities { consider(from(community), weight: 7) }
@@ -116,7 +116,7 @@ enum MentionSearch {
         var dated: [(item: MentionItem, date: Date)] = []
         dated += appState.networkEntries.map { (from($0), $0.updatedAt) }
         dated += appState.meetings.map { (from($0), $0.meetingDate) }
-        dated += appState.notes.map { (from($0), $0.updatedAt) }
+        dated += appState.activeNotes.map { (from($0), $0.updatedAt) }
         dated += appState.todos.filter { !$0.isCompleted }.map { (from($0), $0.updatedAt) }
         dated += appState.companies.map { (from($0), $0.updatedAt) }
         return dated

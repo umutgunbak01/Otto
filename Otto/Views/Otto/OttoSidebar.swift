@@ -1,8 +1,13 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
-/// Left navigation sidebar (mockup .sidebar) — Home + Map, then Library /
-/// Network / X sections, with Integrations + Settings pinned at the bottom
-/// alongside a small model chip.
+/// Left navigation sidebar (mockup .sb) — brand, then Home / Map / Creative,
+/// then Library / Network / X Platform sections with counts, then custom
+/// tabs, with Integrations + Settings and the user card pinned at the
+/// bottom. Runs full window height; the traffic lights float over its top
+/// padding.
 struct OttoSidebar: View {
     @Environment(AppState.self) private var appState
     @Binding var showingHome: Bool
@@ -11,7 +16,7 @@ struct OttoSidebar: View {
     @Binding var showingSettings: Bool
     @Binding var showingIntegrations: Bool
 
-    /// Bound to the AgentService model UserDefaults keys so the model chip
+    /// Bound to the AgentService model UserDefaults keys so the user card
     /// updates the moment the user picks a new preset in Settings. We
     /// observe both keys (and the backend selector) so swapping backends
     /// re-renders the label without an app restart.
@@ -23,16 +28,28 @@ struct OttoSidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Brand — sits below the window traffic lights.
+            HStack(spacing: 9) {
+                BrandMark(size: 22)
+                Text("Otto")
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(Theme.Colors.text)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 38)
+            .padding(.bottom, 10)
+
             // Scrollable nav list — when the window is short, this scrolls so
             // the bottom buttons stay reachable.
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     OttoNavItem(
                         systemImage: "house",
                         label: "Home",
                         count: nil,
-                        isActive: showingHome && !showingMap && !showingCreative,
-                        action: { showingHome = true; showingMap = false; showingCreative = false }
+                        isActive: showingHome && !showingMap && !showingCreative
+                            && !showingSettings && !showingIntegrations,
+                        action: { showingHome = true; showingMap = false; showingCreative = false; showingSettings = false; showingIntegrations = false }
                     )
                     .padding(.top, 2)
 
@@ -40,16 +57,16 @@ struct OttoSidebar: View {
                         systemImage: "map",
                         label: "Map",
                         count: nil,
-                        isActive: showingMap,
-                        action: { showingMap = true; showingHome = false; showingCreative = false }
+                        isActive: showingMap && !showingSettings && !showingIntegrations,
+                        action: { showingMap = true; showingHome = false; showingCreative = false; showingSettings = false; showingIntegrations = false }
                     )
 
                     OttoNavItem(
-                        systemImage: "wand.and.stars",
+                        systemImage: "sparkles",
                         label: "Creative",
                         count: nil,
-                        isActive: showingCreative,
-                        action: { showingCreative = true; showingHome = false; showingMap = false }
+                        isActive: showingCreative && !showingSettings && !showingIntegrations,
+                        action: { showingCreative = true; showingHome = false; showingMap = false; showingSettings = false; showingIntegrations = false }
                     )
 
                     sectionHeader("Library")
@@ -62,7 +79,7 @@ struct OttoSidebar: View {
                         navItem(type)
                     }
 
-                    sectionHeader("X")
+                    sectionHeader("X Platform")
                     ForEach(xTypes, id: \.self) { type in
                         navItem(type)
                     }
@@ -85,52 +102,90 @@ struct OttoSidebar: View {
 
             // Pinned bottom block.
             OttoDivider()
+                .padding(.horizontal, 4)
                 .padding(.bottom, 8)
 
             OttoNavItem(
                 systemImage: "link",
                 label: "Integrations",
                 count: nil,
-                isActive: false,
-                action: { showingIntegrations = true }
+                isActive: showingIntegrations,
+                action: {
+                    showingIntegrations = true
+                    showingSettings = false
+                }
             )
             OttoNavItem(
                 systemImage: "gearshape",
                 label: "Settings",
                 count: nil,
-                isActive: false,
-                action: { showingSettings = true }
+                isActive: showingSettings,
+                action: {
+                    showingSettings = true
+                    showingIntegrations = false
+                }
             )
 
-            // Model chip — quiet mono line showing the active backend/model.
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(Theme.Colors.accent)
-                    .frame(width: 5, height: 5)
-                Text("\(modelLabel) · \(contextLabel)")
-                    .font(Theme.Typography.monoSmall)
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .lineLimit(1)
+            // User card — avatar, name, backend status, context chip
+            // (mockup .ucard).
+            HStack(spacing: 9) {
+                OttoUserAvatar(size: 26)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(Self.firstName)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(Theme.Colors.text)
+                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        PulseDot(color: Theme.Colors.green, size: 5)
+                        Text("\(modelLabel) · connected")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                            .tracking(0.4)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                if contextLabel != "—" {
+                    Text(contextLabel)
+                        .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Theme.Colors.accentText)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Theme.Colors.tintTeal)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(Theme.Colors.cyan.opacity(0.22), lineWidth: 1)
+                        )
+                }
             }
             .padding(.horizontal, 10)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 11)
+                    .fill(Theme.Colors.panel)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 11)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
+            .padding(.top, 10)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 12)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Theme.Colors.bg1)
-        .overlay(alignment: .trailing) {
-            OttoDivider()
-                .frame(width: 1)
-                .frame(maxHeight: .infinity)
-        }
+        .background(Theme.Colors.panelWash)
         .sheet(isPresented: $showingNewTabEditor) {
             CustomTabEditorSheet(existing: nil) { tab in
                 // Jump straight into the freshly created tab.
                 showingHome = false
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
                 appState.selectedCustomTabId = tab.id
             }
         }
@@ -138,28 +193,41 @@ struct OttoSidebar: View {
 
     // MARK: - Pieces
 
+    private static var firstName: String {
+        #if os(macOS)
+        let full = NSFullUserName()
+        if let first = full.split(separator: " ").first, !first.isEmpty {
+            return String(first)
+        }
+        #endif
+        return "You"
+    }
+
     private func sectionHeader(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(Theme.Typography.label)
-            .tracking(Theme.Tracking.xwide)
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .tracking(Theme.Tracking.xxwide)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .padding(.horizontal, 10)
-            .padding(.top, 14)
-            .padding(.bottom, 6)
+            .padding(.top, 18)
+            .padding(.bottom, 7)
     }
 
     private func navItem(_ type: NavType) -> some View {
         OttoNavItem(
             systemImage: type.icon,
-            label: type.label,
+            label: type.tab.pluralTitle,
             count: type.count(appState),
             isActive: !showingHome && !showingMap && !showingCreative
+                && !showingSettings && !showingIntegrations
                 && appState.selectedCustomTabId == nil
                 && appState.selectedTab == type.tab,
             action: {
                 showingHome = false
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
                 appState.selectedTab = type.tab
             }
         )
@@ -171,11 +239,14 @@ struct OttoSidebar: View {
             label: tab.name,
             count: appState.customRecords.filter { $0.tabId == tab.id }.count,
             isActive: !showingHome && !showingMap && !showingCreative
+                && !showingSettings && !showingIntegrations
                 && appState.selectedCustomTabId == tab.id,
             action: {
                 showingHome = false
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
                 appState.selectedCustomTabId = tab.id
             }
         )
@@ -233,7 +304,6 @@ struct OttoSidebar: View {
 
     private struct NavType: Hashable {
         let tab: ContentType
-        let label: String
         let icon: String
         // Compare by tab for Hashable
         func hash(into hasher: inout Hasher) { hasher.combine(tab) }
@@ -247,7 +317,13 @@ struct OttoSidebar: View {
             case .reminder:   return s.reminders.filter { !$0.isCompleted }.count
             case .bookmark:   return s.bookmarks.filter { !$0.isRead }.count
             case .meeting:    return s.meetings.count
-            case .email:      return s.emails.filter { !$0.isRead }.count
+            case .email:
+                // With triage on, the badge is the needs-reply queue — the
+                // number that actually demands action — not raw unread.
+                if EmailTriageSettings.isEnabled {
+                    return EmailTriageService.needsReplyCount(emails: s.emails, blockedSenders: s.blockedSenders)
+                }
+                return s.emails.filter { !$0.isRead }.count
             case .connection: return s.connections.count
             case .networkHub: return s.networkEntries.count
             case .company:    return s.companies.count
@@ -258,39 +334,41 @@ struct OttoSidebar: View {
             case .xFollower:  return s.xFollowers.count
             case .xDm:        return s.xDirectMessages.count
             case .habit:      return s.habits.filter { !$0.isArchived }.count
+            case .automation: return s.scheduledTasks.count
             }
         }
     }
 
     private var libraryTypes: [NavType] {
         [
-            NavType(tab: .todo,     label: "To-dos",    icon: "checkmark.square"),
-            NavType(tab: .note,     label: "Notes",     icon: "doc.text"),
-            NavType(tab: .idea,     label: "Ideas",     icon: "bolt"),
-            NavType(tab: .reminder, label: "Reminders", icon: "bell"),
-            NavType(tab: .bookmark, label: "Bookmarks", icon: "bookmark"),
-            NavType(tab: .habit,    label: "Habits",    icon: "repeat"),
-            NavType(tab: .meeting,  label: "Meetings",  icon: "video"),
-            NavType(tab: .email,    label: "Emails",    icon: "envelope"),
-            NavType(tab: .file,     label: "Files",     icon: "folder"),
+            NavType(tab: .todo,     icon: "checkmark.square"),
+            NavType(tab: .note,     icon: "doc.text"),
+            NavType(tab: .idea,     icon: "bolt"),
+            NavType(tab: .reminder, icon: "bell"),
+            NavType(tab: .bookmark, icon: "bookmark"),
+            NavType(tab: .habit,    icon: "repeat"),
+            NavType(tab: .meeting,  icon: "video"),
+            NavType(tab: .email,    icon: "envelope"),
+            NavType(tab: .file,     icon: "folder"),
+            NavType(tab: .automation, icon: "cpu"),
         ]
     }
 
     private var networkTypes: [NavType] {
         [
-            NavType(tab: .connection, label: "LinkedIn",    icon: "person.2"),
-            NavType(tab: .networkHub, label: "Network hub", icon: "globe"),
-            NavType(tab: .company,    label: "Companies",   icon: "briefcase"),
-            NavType(tab: .event,      label: "Events",      icon: "calendar"),
-            NavType(tab: .community,  label: "Communities", icon: "bubble.left.and.bubble.right"),
+            NavType(tab: .connection, icon: "person.crop.square"),
+            NavType(tab: .networkHub, icon: "globe"),
+            NavType(tab: .company,    icon: "building.2"),
+            NavType(tab: .event,      icon: "calendar"),
+            NavType(tab: .community,  icon: "bubble.left.and.bubble.right"),
         ]
     }
 
     private var xTypes: [NavType] {
         [
-            NavType(tab: .xPost,     label: "Posts",     icon: "text.bubble"),
-            NavType(tab: .xFollower, label: "Followers", icon: "person.2"),
-            NavType(tab: .xDm,       label: "DMs",       icon: "envelope"),
+            NavType(tab: .xPost,     icon: "text.bubble"),
+            NavType(tab: .xFollower, icon: "person.2"),
+            NavType(tab: .xDm,       icon: "envelope"),
         ]
     }
 }
@@ -308,29 +386,43 @@ struct OttoNavItem: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 9) {
+            HStack(spacing: 10) {
                 Image(systemName: systemImage)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 16)
-                    .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                    .foregroundStyle(
+                        isActive
+                            ? Theme.Colors.accentText
+                            : (hover ? Theme.Colors.textDim : Theme.Colors.tertiaryText)
+                    )
                 Text(label)
-                    .font(.system(size: 13))
-                    .foregroundStyle(isActive ? Theme.Colors.accentText : (hover ? Theme.Colors.text : Theme.Colors.textDim))
+                    .font(.system(size: 13, weight: isActive ? .medium : .regular))
+                    .foregroundStyle(isActive ? Theme.Colors.text : (hover ? Theme.Colors.text : Theme.Colors.textDim))
+                    .lineLimit(1)
                 Spacer(minLength: 6)
                 if let count = count {
                     Text(formatted(count))
-                        .font(Theme.Typography.monoSmall)
-                        .foregroundStyle(isActive ? Theme.Colors.accentText.opacity(0.75) : Theme.Colors.tertiaryText)
+                        .font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .opacity(count == 0 ? 0.38 : 1)
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 5.5)
+            .frame(height: 31)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
                     .fill(
                         isActive
-                            ? Theme.Colors.selectTint
-                            : (hover ? Theme.Colors.hoverTint : Color.clear)
+                            ? Theme.Colors.panel2
+                            : (hover ? Theme.Colors.panel : Color.clear)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                    .strokeBorder(
+                        isActive ? Color.white.opacity(0.05) : Color.clear,
+                        lineWidth: 1
                     )
             )
             .contentShape(Rectangle())

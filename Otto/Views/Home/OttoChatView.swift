@@ -55,6 +55,17 @@ struct OttoChatView: View {
     /// the group's leading entry id. Default (absent) = collapsed.
     @State private var expandedToolGroups: Set<UUID> = []
 
+    /// Saved-prompts picker popover (bookmark button in the composer row).
+    @State private var showSavedPromptsPopover = false
+
+    /// Non-nil opens the saved-prompt editor pre-filled with the composer's
+    /// current text ("Save current input as prompt…").
+    @State private var promptEditorDraft: PromptDraft?
+    private struct PromptDraft: Identifiable {
+        let id = UUID()
+        let text: String
+    }
+
     /// Run controller for the session on screen, when it has (or recently
     /// had) a live run this app-run. nil = a saved session rendered from the
     /// local cache, or a fresh blank chat.
@@ -107,8 +118,6 @@ struct OttoChatView: View {
                 messageList
             }
 
-            OttoDivider()
-
             if let controller = viewedController, let error = controller.error {
                 HStack(spacing: Theme.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle")
@@ -145,9 +154,13 @@ struct OttoChatView: View {
             AttachmentPreviewPopup(attachment: attachment, onClose: { previewAttachment = nil })
                 .frame(width: 760, height: 560)
         }
+        .sheet(item: $promptEditorDraft) { draft in
+            SavedPromptEditorSheet(existing: nil, draftPrompt: draft.text)
+        }
         .onAppear {
             loadActiveSession()
             consumePendingPromptIfNeeded()
+            consumeComposerInsertIfNeeded()
         }
         .onChange(of: appState.activeChatSessionId) { _, _ in
             // Always safe to switch — live runs stream into their own
@@ -156,6 +169,9 @@ struct OttoChatView: View {
         }
         .onChange(of: appState.pendingChatPrompt) { _, _ in
             consumePendingPromptIfNeeded()
+        }
+        .onChange(of: appState.pendingComposerInsert) { _, _ in
+            consumeComposerInsertIfNeeded()
         }
     }
 
@@ -199,73 +215,124 @@ struct OttoChatView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Spacer()
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 0) {
+                OttoOrb(size: 72)
+                    .padding(.bottom, 28)
 
-            BrandMark(size: 28)
+                // Eyebrow greeting (mockup .eyebrow).
+                HStack(spacing: 10) {
+                    Text("✦")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.Colors.cyan.opacity(0.75))
+                    Text(Self.greeting.uppercased())
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .tracking(2.6)
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                }
+                .padding(.bottom, 16)
 
-            VStack(spacing: Theme.Spacing.sm) {
-                Text("Ask or create")
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.text)
+                // Serif display headline (mockup h1.big — "Ask *or create*").
+                (Text("Ask ")
+                    + Text("or create").italic().foregroundStyle(Color(red: 0.812, green: 0.933, blue: 0.898))
+                )
+                .font(Theme.Typography.displayXL)
+                .foregroundStyle(Theme.Colors.text)
 
-                Text("Claude or Codex can answer, create, edit, and search across your Otto.")
-                    .font(.system(size: 13))
+                Text("\(backendDisplayName) can answer, create, edit, and search across your Otto.")
+                    .font(.system(size: 14))
                     .foregroundStyle(Theme.Colors.textDim)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
-            }
+                    .lineSpacing(3)
+                    .frame(maxWidth: 420)
+                    .padding(.top, 15)
 
-            if noBackendSignedIn {
-                HStack(spacing: Theme.Spacing.sm) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.amber)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("No agent backend signed in")
-                            .font(Theme.Typography.caption)
+                if noBackendSignedIn {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
                             .foregroundStyle(Theme.Colors.amber)
-                        Text("Run `claude` (Claude Code) or `codex login` in Terminal, then pick a backend in Settings → Agent.")
-                            .font(Theme.Typography.small)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("No agent backend signed in")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(Theme.Colors.amber)
+                            Text("Run `claude` (Claude Code) or `codex login` in Terminal, then pick a backend in Settings → Agent.")
+                                .font(Theme.Typography.small)
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.vertical, Theme.Spacing.sm)
+                    .frame(maxWidth: 380)
+                    .background(Theme.Colors.tintAmber)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                            .strokeBorder(Theme.Colors.amber.opacity(0.4), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                    .padding(.top, 20)
+                }
+
+                OttoFlowLayout(spacing: 8, alignment: .center) {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        OttoSuggestionChip(systemImage: suggestion.icon, label: suggestion.label) {
+                            inputText = suggestion.prompt
+                            sendMessage()
+                        }
                     }
                 }
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .frame(maxWidth: 380)
-                .background(Theme.Colors.tintAmber)
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.md)
-                        .strokeBorder(Theme.Colors.amber.opacity(0.4), lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                .frame(maxWidth: 660)
+                .padding(.top, 32)
             }
-
-            VStack(spacing: Theme.Spacing.sm) {
-                ForEach(suggestions, id: \.self) { suggestion in
-                    OttoChip(text: suggestion.label) {
-                        inputText = suggestion.prompt
-                        sendMessage()
-                    }
-                }
-            }
-
-            Spacer()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, Theme.Spacing.xxl)
+            .padding(.top, 60)
+            .padding(.bottom, 24)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// One empty-state suggestion chip: a short pill label, and the (possibly
-    /// longer, more instructive) prompt that's actually sent when clicked.
+    /// Time-of-day greeting for the hero eyebrow.
+    private static var greeting: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let name: String = {
+            #if os(macOS)
+            if let first = NSFullUserName().split(separator: " ").first, !first.isEmpty {
+                return String(first)
+            }
+            #endif
+            return "there"
+        }()
+        switch hour {
+        case 5..<12:  return "Good morning, \(name)"
+        case 12..<18: return "Good afternoon, \(name)"
+        default:      return "Good evening, \(name)"
+        }
+    }
+
+    /// Subtitle name for the active backend.
+    private var backendDisplayName: String {
+        switch AgentBackend.current {
+        case .claude: return "Claude"
+        case .codex:  return "Codex"
+        case .hermes: return "Hermes"
+        }
+    }
+
+    /// One empty-state suggestion chip: a short pill label, an SF Symbol,
+    /// and the (possibly longer, more instructive) prompt that's actually
+    /// sent when clicked.
     private struct Suggestion: Hashable {
         let label: String
         let prompt: String
+        let icon: String
 
-        init(_ label: String, prompt: String? = nil) {
+        init(_ label: String, prompt: String? = nil, icon: String = "sparkles") {
             self.label = label
             self.prompt = prompt ?? label
+            self.icon = icon
         }
     }
 
@@ -278,28 +345,29 @@ struct OttoChatView: View {
             .sorted { $0.1 < $1.1 }
             .first?.0
         if let todo = nextTodo {
-            out.append(Suggestion("What's the status of '\(Self.truncate(todo.title))'?"))
+            out.append(Suggestion("What's the status of '\(Self.truncate(todo.title))'?", icon: "checkmark.square"))
         } else if let urgent = appState.todos.first(where: { !$0.isCompleted && $0.priority == .urgent }) {
-            out.append(Suggestion("Summarize my urgent todo '\(Self.truncate(urgent.title))'"))
+            out.append(Suggestion("Summarize my urgent todo '\(Self.truncate(urgent.title))'", icon: "flag"))
         }
 
         if let lastMeeting = appState.meetings.sorted(by: { $0.meetingDate > $1.meetingDate }).first {
-            out.append(Suggestion("Summarize my last meeting: \(Self.truncate(lastMeeting.title))"))
+            out.append(Suggestion("Summarize my last meeting: \(Self.truncate(lastMeeting.title))", icon: "person.2"))
         }
 
-        if let recentNote = appState.notes.sorted(by: { $0.updatedAt > $1.updatedAt }).first {
-            out.append(Suggestion("What's in my note '\(Self.truncate(recentNote.title))'?"))
+        if let recentNote = appState.activeNotes.sorted(by: { $0.updatedAt > $1.updatedAt }).first {
+            out.append(Suggestion("What's in my note '\(Self.truncate(recentNote.title))'?", icon: "doc.text"))
         }
 
         if !appState.networkEntries.isEmpty || !appState.companies.isEmpty {
             out.append(Suggestion(
                 "Update network & companies from the last 7 days",
-                prompt: "Review my meetings, emails, and notes from the last 7 days and update my Network Hub entries, companies, events, and communities with any new information you find — people I met, role or company changes, deal amounts, event plans. List what you changed."
+                prompt: "Review my meetings, emails, and notes from the last 7 days and update my Network Hub entries, companies, events, and communities with any new information you find — people I met, role or company changes, deal amounts, event plans. List what you changed.",
+                icon: "arrow.clockwise"
             ))
         }
 
-        out.append(Suggestion("What's on my plate today?"))
-        out.append(Suggestion("What are my high priority todos?"))
+        out.append(Suggestion("What's on my plate today?", icon: "sun.max"))
+        out.append(Suggestion("What are my high priority todos?", icon: "flag"))
 
         return Array(out.prefix(5))
     }
@@ -375,7 +443,9 @@ struct OttoChatView: View {
                             .id("loading")
                     }
                 }
-                .padding(.vertical, Theme.Spacing.md)
+                .padding(.vertical, Theme.Spacing.lg)
+                .frame(maxWidth: 780)
+                .frame(maxWidth: .infinity)
             }
             .onChange(of: displayedEntries.count) { _, _ in
                 if let last = displayItems.last?.id {
@@ -491,8 +561,9 @@ struct OttoChatView: View {
         if toolCalls > 0 {
             parts.insert("\(toolCalls) tool\(toolCalls == 1 ? "" : "s")", at: 1)
         }
-        return Text(parts.joined(separator: " · "))
-            .font(Theme.Typography.caption)
+        return Text(parts.joined(separator: " · ").uppercased())
+            .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+            .tracking(1.0)
             .foregroundStyle(Theme.Colors.tertiaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, Theme.Spacing.sm)
@@ -652,6 +723,27 @@ struct OttoChatView: View {
                         insertMentionTrigger()
                     }
 
+                    ComposerGhostButton(icon: "bookmark", help: "Saved prompts — insert one, or save what you've typed") {
+                        showSavedPromptsPopover = true
+                    }
+                    .popover(isPresented: $showSavedPromptsPopover, arrowEdge: .top) {
+                        SavedPromptPicker(
+                            hasCurrentInput: !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            onInsert: { prompt in
+                                showSavedPromptsPopover = false
+                                insertSavedPrompt(prompt)
+                            },
+                            onSaveCurrent: {
+                                showSavedPromptsPopover = false
+                                promptEditorDraft = PromptDraft(text: inputText)
+                            },
+                            onManage: {
+                                showSavedPromptsPopover = false
+                                appState.selectedTab = .automation
+                            }
+                        )
+                    }
+
                     if !displayedEntries.isEmpty {
                         ComposerGhostButton(icon: "square.and.pencil", help: "New conversation") {
                             newConversation()
@@ -659,6 +751,9 @@ struct OttoChatView: View {
                     }
 
                     Spacer(minLength: 0)
+
+                    OttoModelChip()
+                        .padding(.trailing, 4)
 
                     Button {
                         if isRunLiveHere {
@@ -668,16 +763,23 @@ struct OttoChatView: View {
                         }
                     } label: {
                         Image(systemName: isRunLiveHere ? "stop.fill" : "arrow.up")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(Theme.Colors.onAccent)
-                            .frame(width: 28, height: 28)
+                            .frame(width: 30, height: 30)
                             .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                RoundedRectangle(cornerRadius: 9)
                                     .fill(
-                                        isRunLiveHere || canSend
-                                            ? Theme.Colors.accent
-                                            : Theme.Colors.accent.opacity(0.35)
+                                        LinearGradient(
+                                            colors: [Theme.Colors.accentGradTop, Theme.Colors.accentGradBottom],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
                                     )
+                                    .opacity(isRunLiveHere || canSend ? 1 : 0.35)
+                            )
+                            .shadow(
+                                color: Theme.Colors.accentGradBottom.opacity(isRunLiveHere || canSend ? 0.26 : 0),
+                                radius: 8, y: 3
                             )
                     }
                     .buttonStyle(.plain)
@@ -689,22 +791,43 @@ struct OttoChatView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 10)
+            .padding(.top, 13)
+            .padding(.bottom, 11)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl)
-                    .fill(Theme.Colors.bgInput)
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.045), Color.white.opacity(0.018)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                RoundedRectangle(cornerRadius: 16)
                     .strokeBorder(
-                        (composerHovered || inputFocused) ? Theme.Colors.accent : Theme.Colors.borderStrong,
+                        (composerHovered || inputFocused) ? Color.white.opacity(0.14) : Theme.Colors.border,
                         lineWidth: 1
                     )
             )
-            .animation(.easeInOut(duration: 0.15), value: composerHovered || inputFocused)
+            .overlay(alignment: .top) {
+                // Teal edge highlight along the top border (mockup
+                // .composer::before) — brightens on focus.
+                LinearGradient(
+                    colors: [.clear, Theme.Colors.cyan.opacity(0.45), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(height: 1)
+                .padding(.horizontal, 56)
+                .opacity(inputFocused ? 1 : 0.35)
+            }
+            .shadow(color: Color.black.opacity(0.4), radius: 26, y: 14)
+            .frame(maxWidth: 720)
+            .animation(.easeInOut(duration: 0.2), value: composerHovered || inputFocused)
             .onHover { composerHovered = $0 }
         }
+        .frame(maxWidth: .infinity)
         // The @-mention panel FLOATS above the composer (overlapping the
         // transcript) instead of joining the layout — inline it would push
         // the composer down and hide what the user is typing. The overlay
@@ -720,8 +843,9 @@ struct OttoChatView: View {
                 .alignmentGuide(.top) { $0[.bottom] + Theme.Spacing.sm }
             }
         }
-        .padding(.horizontal, Theme.Spacing.lg)
-        .padding(.vertical, Theme.Spacing.md)
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, Theme.Spacing.sm)
+        .padding(.bottom, 22)
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: Self.allowedAttachmentTypes,
@@ -982,6 +1106,28 @@ struct OttoChatView: View {
         sendMessage()
     }
 
+    /// A saved prompt sent from the Automations tab ("Use in chat") — fill
+    /// the field but DON'T send; the user reviews and edits first.
+    private func consumeComposerInsertIfNeeded() {
+        guard let text = appState.pendingComposerInsert, !text.isEmpty else { return }
+        appState.pendingComposerInsert = nil
+        insertText(text)
+    }
+
+    /// Insert from the composer's bookmark popover.
+    private func insertSavedPrompt(_ prompt: SavedPrompt) {
+        Task { await appState.markSavedPromptUsed(id: prompt.id) }
+        insertText(prompt.prompt)
+    }
+
+    /// Empty field → replace; otherwise append on a new line so an inserted
+    /// prompt never silently clobbers typed text.
+    private func insertText(_ text: String) {
+        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        inputText = trimmed.isEmpty ? text : inputText + "\n" + text
+        inputFocused = true
+    }
+
     /// Hand the prompt to this conversation's run controller (created on
     /// first send) — it owns the turn log, streams events, and persists the
     /// session from the very first turn, so the query survives this view
@@ -1062,20 +1208,22 @@ private struct MessageBubble: View {
                     // assistant messages render Claude's markdown so ### and **
                     // don't show as literal characters.
                     if isUser {
+                        // Asymmetric radius — the bottom-trailing corner tucks
+                        // toward the sender (mockup .mu .bub 14/14/5/14).
+                        let bubbleShape = UnevenRoundedRectangle(
+                            topLeadingRadius: 14,
+                            bottomLeadingRadius: 14,
+                            bottomTrailingRadius: 5,
+                            topTrailingRadius: 14
+                        )
                         SelectableMessageText(
                             attributed: ChatMessageRenderer.userText(text),
                             onOttoLink: onOttoLink
                         )
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(
-                                RoundedRectangle(cornerRadius: Theme.Radius.xl)
-                                    .fill(Theme.Colors.userBubble)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: Theme.Radius.xl)
-                                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                            )
+                            .padding(.vertical, 10)
+                            .background(bubbleShape.fill(Theme.Colors.userBubble))
+                            .overlay(bubbleShape.strokeBorder(Theme.Colors.border, lineWidth: 1))
                     } else {
                         // Assistant messages have no bubble — just the mark and text.
                         SelectableMessageText(
@@ -1327,19 +1475,21 @@ private struct ThinkingBubble: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.sm) {
-            Image(systemName: "brain")
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-                .padding(.top, 3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Thinking")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Theme.Colors.textDim)
-                    .opacity(pulse ? 0.45 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
-                        value: pulse
-                    )
+            VStack(alignment: .leading, spacing: 3) {
+                // Serif italic + blinking teal dot (mockup .thinking).
+                HStack(spacing: 9) {
+                    Text("Thinking")
+                        .font(Theme.Typography.displaySm.italic())
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                    Circle()
+                        .fill(Theme.Colors.cyan)
+                        .frame(width: 4, height: 4)
+                        .opacity(pulse ? 0.25 : 1.0)
+                        .animation(
+                            .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                            value: pulse
+                        )
+                }
                 Text(text)
                     .font(.system(size: 12).italic())
                     .foregroundStyle(Theme.Colors.textDim)
@@ -1467,19 +1617,21 @@ private struct ToolStepRow: View {
 
     @State private var pulse: Bool = false
 
-    /// Icon tint: green checkmark once done, amber on error, dim while
+    /// Icon tint: teal once done (mockup .tchip), amber on error, dim while
     /// the call is still in flight.
     private var iconTint: Color {
         if isError { return Theme.Colors.amber }
-        return isInFlight ? Theme.Colors.textDim : Theme.Colors.green
+        return isInFlight ? Theme.Colors.textDim : Theme.Colors.cyan
     }
 
     var body: some View {
         HStack(spacing: 0) {
+            // Mono tool chip (mockup .tchip) — panel fill, hairline border,
+            // teal icon once the call lands.
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Image(systemName: callIcon)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(iconTint)
                         .opacity(isInFlight ? (pulse ? 0.35 : 1.0) : 1.0)
                         .animation(
@@ -1489,8 +1641,9 @@ private struct ToolStepRow: View {
                             value: pulse
                         )
                     Text(callLabel)
-                        .font(Theme.Typography.monoCaption)
-                        .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.textDim)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .tracking(0.4)
+                        .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.tertiaryText)
                 }
 
                 if let resultLabel, !resultLabel.isEmpty {
@@ -1504,11 +1657,15 @@ private struct ToolStepRow: View {
                             .foregroundStyle(isError ? Theme.Colors.amber : Theme.Colors.tertiaryText)
                             .lineLimit(2)
                     }
-                    .padding(.leading, 17)  // align under callLabel (icon width + spacing)
+                    .padding(.leading, 16)  // align under callLabel (icon width + spacing)
                 }
             }
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .fill(Theme.Colors.panel)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.sm)
                     .strokeBorder(
@@ -1773,6 +1930,7 @@ private enum PreviewDetail: Identifiable {
         case .event:      return appState.events.first(where: { $0.id == itemId }).map { .event($0) }
         case .community:  return appState.communities.first(where: { $0.id == itemId }).map { .community($0) }
         case .habit:      return appState.habits.first(where: { $0.id == itemId }).map { .habit($0) }
+        case .automation: return nil
         }
     }
 }
@@ -1845,15 +2003,26 @@ private struct ItemPreviewCard: View {
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
             .padding(.horizontal, 13)
-            .padding(.vertical, 10)
+            .padding(.vertical, 11)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                RoundedRectangle(cornerRadius: Theme.Radius.lg)
                     .fill(Theme.Colors.panel)
                     .overlay(
-                        RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg)
                             .strokeBorder(Theme.Colors.border, lineWidth: 1)
                     )
             )
+            .overlay(alignment: .leading) {
+                // Teal result-card spine (mockup .rescard border-left).
+                UnevenRoundedRectangle(
+                    topLeadingRadius: Theme.Radius.lg,
+                    bottomLeadingRadius: Theme.Radius.lg,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0
+                )
+                .fill(Theme.Colors.cyan)
+                .frame(width: 2)
+            }
         }
         .buttonStyle(.plain)
         .padding(.horizontal, Theme.Spacing.lg)
@@ -1878,6 +2047,7 @@ private struct ItemPreviewCard: View {
         case .xPost:      return appState.xPosts.first(where: { $0.id == itemId }).map { "@\($0.authorUsername)" }
         case .xFollower:  return appState.xFollowers.first(where: { $0.id == itemId })?.displayName
         case .xDm:        return appState.xDirectMessages.first(where: { $0.id == itemId }).map { $0.senderDisplayName.isEmpty ? "@\($0.senderUsername)" : $0.senderDisplayName }
+        case .automation: return nil
         }
     }
 
@@ -1907,6 +2077,7 @@ private struct ItemPreviewCard: View {
             case .xFollower:  return appState.xFollowers.first(where: { $0.id == itemId }).map { "@\($0.username)" }
             case .xDm:        return appState.xDirectMessages.first(where: { $0.id == itemId })?.text
             case .reminder:   return nil
+            case .automation: return nil
             }
         }()
         guard let raw else { return nil }

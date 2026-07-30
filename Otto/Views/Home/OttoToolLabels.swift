@@ -75,6 +75,8 @@ enum OttoToolLabels {
             break
         }
         switch name {
+        case "semantic_search":
+            return Label(verb: "Recalling", arg: quoted(string(input, "query")))
         case "search_items":
             return Label(verb: "Searching for", arg: quoted(string(input, "query")))
         case "grep_data":
@@ -156,6 +158,20 @@ enum OttoToolLabels {
             return Label(verb: "Completing habit:", arg: resolveItemTitle(input: input, appState: appState))
         case "list_habits":
             return Label(verb: "Listing habits", arg: nil)
+        case "save_prompt":
+            return Label(verb: "Saving prompt:", arg: quoted(string(input, "name")))
+        case "list_saved_prompts":
+            return Label(verb: "Listing saved prompts", arg: nil)
+        case "update_saved_prompt":
+            return Label(verb: "Updating prompt:", arg: trim(string(input, "prompt_ref")))
+        case "schedule_task":
+            return Label(verb: "Scheduling task:", arg: quoted(string(input, "name")))
+        case "list_scheduled_tasks":
+            return Label(verb: "Listing recurring tasks", arg: nil)
+        case "update_scheduled_task":
+            return Label(verb: "Updating task:", arg: trim(string(input, "task")))
+        case "run_scheduled_task":
+            return Label(verb: "Running task:", arg: trim(string(input, "task")))
         case "attach_item_preview":
             return Label(verb: "Attaching preview:", arg: resolveItemTitle(input: input, appState: appState))
         case "visualize":

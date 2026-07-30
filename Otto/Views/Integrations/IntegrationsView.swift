@@ -5,6 +5,9 @@ import AppKit
 struct IntegrationsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    /// True when hosted in the main stage (sidebar navigation) instead of a
+    /// sheet — fills the pane, drops the ✕/fixed frame.
+    var inline: Bool = false
     /// Non-nil while the detail page for an integration replaces the grid.
     @State private var detailIntegration: IntegrationType?
     @State private var searchText = ""
@@ -111,8 +114,12 @@ struct IntegrationsView: View {
                 integrationsGrid
             }
         }
-        .frame(width: 720, height: 620)
-        .background(Theme.Colors.background)
+        .frame(
+            width: inline ? nil : 720,
+            height: inline ? nil : 620
+        )
+        .frame(maxWidth: inline ? .infinity : nil, maxHeight: inline ? .infinity : nil)
+        .background(inline ? Color.clear : Theme.Colors.background)
         .sheet(isPresented: $showingTodoistTokenInput) {
             todoistTokenInputSheet
         }
@@ -249,9 +256,12 @@ struct IntegrationsView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text("Integrations")
-                .font(Theme.Typography.title)
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
+
+            OttoCountChip(text: "\(connectedCount) connected")
 
             Spacer()
 
@@ -265,31 +275,48 @@ struct IntegrationsView: View {
                             .frame(width: 14, height: 14)
                     } else {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 12))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                     Text(isAnyRecentSyncRunning ? "Syncing…" : "Sync recent")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.Colors.textDim)
                 }
-                .font(Theme.Typography.caption)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.Colors.panel))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
+                )
             }
-            .buttonStyle(GhostButtonStyle())
+            .buttonStyle(.plain)
             .disabled(isAnyRecentSyncRunning)
             #if os(macOS)
             .help("Sync recent items from every connected integration at once")
             #endif
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .frame(width: 24, height: 24)
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(Circle())
+            if !inline {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
-        .padding(Theme.Spacing.xl)
+        .padding(.horizontal, Theme.Spacing.xl)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+    }
+
+    private var connectedCount: Int {
+        IntegrationType.allCases.filter { isConnected($0) }.count
     }
 
     // MARK: - Sync All Recent
@@ -374,24 +401,11 @@ struct IntegrationsView: View {
     }
 
     private func categoryPill(_ category: IntegrationCategory) -> some View {
-        let isSelected = selectedCategory == category
-        return Button {
-            selectedCategory = category
-        } label: {
-            Text(category.rawValue)
-                .font(Theme.Typography.caption.weight(.medium))
-                .foregroundStyle(isSelected ? Theme.Colors.bg0 : Theme.Colors.textDim)
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule().fill(isSelected ? Theme.Colors.text : Color.clear)
-                )
-                .overlay(
-                    Capsule().strokeBorder(isSelected ? Color.clear : Theme.Colors.borderStrong, lineWidth: 1)
-                )
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
+        OttoPillButton(
+            label: category.rawValue,
+            isOn: selectedCategory == category,
+            action: { selectedCategory = category }
+        )
     }
 
     private var filteredIntegrations: [IntegrationType] {
@@ -423,10 +437,7 @@ struct IntegrationsView: View {
                 .padding(.top, Theme.Spacing.xxl * 2)
             } else {
                 LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: Theme.Spacing.md),
-                        GridItem(.flexible(), spacing: Theme.Spacing.md),
-                    ],
+                    columns: [GridItem(.adaptive(minimum: 236, maximum: 380), spacing: Theme.Spacing.md)],
                     spacing: Theme.Spacing.md
                 ) {
                     ForEach(filteredIntegrations, id: \.self) { integration in
@@ -452,46 +463,89 @@ struct IntegrationsView: View {
                 connectIntegration(integration)
             }
         } label: {
-            HStack(spacing: Theme.Spacing.md) {
-                Image(systemName: integration.icon)
-                    .font(.system(size: 17))
-                    .foregroundStyle(integrationColor(integration))
-                    .frame(width: 40, height: 40)
-                    .background(integrationColor(integration).opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+            // Mockup .icard — logo + name/category head, two-line
+            // description, then a status footer.
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 11) {
+                    Image(systemName: integration.icon)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(integrationColor(integration))
+                        .frame(width: 32, height: 32)
+                        .background(integrationColor(integration).opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 9))
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(integration.rawValue)
-                        .font(Theme.Typography.headline)
-                        .foregroundStyle(Theme.Colors.text)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(integration.rawValue)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Theme.Colors.text)
+                            .lineLimit(1)
+                        Text(integration.category.rawValue.uppercased())
+                            .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                            .tracking(1.0)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
 
-                    Text(integration.description)
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
                 }
 
-                Spacer(minLength: 0)
+                Text(integration.description)
+                    .font(.system(size: 11.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(minHeight: 32, alignment: .topLeading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 10)
 
-                if connected {
-                    Image(systemName: needsReauth ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                        .font(.system(size: 15))
-                        .foregroundStyle(needsReauth ? Theme.Colors.amber : Theme.Colors.green)
+                HStack {
+                    if connected {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(needsReauth ? Theme.Colors.amber : Theme.Colors.green)
+                                .frame(width: 5, height: 5)
+                            Text(needsReauth ? "RECONNECT" : "CONNECTED")
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .tracking(0.9)
+                                .foregroundStyle(needsReauth ? Theme.Colors.amber : Theme.Colors.green)
+                        }
+                    } else {
+                        Text("NOT CONNECTED")
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                            .tracking(0.9)
+                            .foregroundStyle(Theme.Colors.tertiaryText)
+                    }
+
+                    Spacer(minLength: 0)
+
+                    if !connected && canConnect(integration) {
+                        // Visual affordance — the whole card is the button.
+                        Text("Connect")
+                            .font(.system(size: 11))
+                            .foregroundStyle(hovered ? Theme.Colors.text : Theme.Colors.textDim)
+                            .padding(.horizontal, 10)
+                            .frame(height: 24)
+                            .background(RoundedRectangle(cornerRadius: Theme.Radius.md).fill(Theme.Colors.panel))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: Theme.Radius.md)
+                                    .strokeBorder(hovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+                            )
+                    }
                 }
+                .padding(.top, 11)
             }
-            .padding(Theme.Spacing.lg)
+            .padding(15)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl)
-                    .fill(hovered ? Theme.Colors.elevatedSurface : Theme.Colors.panel)
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(Theme.Colors.panel)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.xl)
+                RoundedRectangle(cornerRadius: 13)
                     .strokeBorder(hovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
             )
-            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.xl))
+            .offset(y: hovered ? -1 : 0)
+            .contentShape(RoundedRectangle(cornerRadius: 13))
         }
         .buttonStyle(.plain)
         .onHover { isHovering in
@@ -530,7 +584,8 @@ struct IntegrationsView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(integration.rawValue)
-                        .font(Theme.Typography.title)
+                        .font(Theme.Typography.displayMd)
+                        .foregroundStyle(Theme.Colors.text)
 
                     if isConnected(integration) {
                         if appState.needsGoogleReauth && (integration == .gmail || integration == .googleCalendar) {
@@ -561,17 +616,19 @@ struct IntegrationsView: View {
 
             Spacer()
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .frame(width: 24, height: 24)
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(Circle())
+            if !inline {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(Theme.Spacing.xl)
     }

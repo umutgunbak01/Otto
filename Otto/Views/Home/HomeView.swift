@@ -8,7 +8,6 @@ struct HomeView: View {
     @Environment(AppState.self) private var appState
 
     @State private var isSearchMode: Bool = false
-    @State private var showHistory: Bool = false
 
     // Search state
     @State private var searchText: String = ""
@@ -31,10 +30,9 @@ struct HomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            homeHeader
-            OttoDivider()
-
             if isSearchMode {
+                homeHeader
+                OttoDivider()
                 searchContent
                     .transition(.opacity)
             } else {
@@ -42,7 +40,6 @@ struct HomeView: View {
                     .transition(.opacity)
             }
         }
-        .background(Theme.Colors.background)
         .onChange(of: appState.homeSearchRequested) { _, requested in
             // One-shot request from the top bar's ⌘K search pill.
             if requested {
@@ -73,87 +70,37 @@ struct HomeView: View {
 
     private var homeHeader: some View {
         HStack(spacing: 10) {
-            if isSearchMode {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        isSearchMode = false
-                    }
-                } label: {
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Home")
-                            .font(Theme.Typography.caption)
-                    }
-                    .foregroundStyle(Theme.Colors.secondaryText)
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isSearchMode = false
                 }
-                .buttonStyle(.plain)
-
-                Text("Search")
-                    .font(Theme.Typography.title)
-
-                Spacer()
-            } else {
-                Text("Home")
-                    .font(Theme.Typography.title)
-
-                Spacer()
-
-                headerIconButton(
-                    systemImage: "clock.arrow.circlepath",
-                    help: "Chat history",
-                    isActive: showHistory
-                ) {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        showHistory.toggle()
-                    }
+            } label: {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Home")
+                        .font(Theme.Typography.caption)
                 }
-
-                headerIconButton(systemImage: "plus.bubble", help: "New chat") {
-                    appState.activeChatSessionId = nil
-                }
-
-                headerIconButton(systemImage: "magnifyingglass", help: "Search") {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        isSearchMode = true
-                    }
-                }
+                .foregroundStyle(Theme.Colors.secondaryText)
             }
+            .buttonStyle(.plain)
+
+            Text("Search")
+                .font(Theme.Typography.display)
+                .foregroundStyle(Theme.Colors.text)
+
+            Spacer()
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.top, Theme.Spacing.lg)
         .padding(.bottom, Theme.Spacing.md)
     }
 
-    private func headerIconButton(
-        systemImage: String,
-        help: String,
-        isActive: Bool = false,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.secondaryText)
-                .frame(width: 27, height: 27)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(isActive ? Theme.Colors.selectTint : Theme.Colors.panel)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
-
     // MARK: - Ask Content
 
     private var askContent: some View {
         HStack(spacing: 0) {
-            if showHistory {
+            if appState.showChatHistory {
                 ChatHistorySidebar()
                     .environment(appState)
                     .transition(.move(edge: .leading).combined(with: .opacity))
@@ -647,9 +594,9 @@ struct HomeView: View {
             }
         }
 
-        // Search Notes
+        // Search Notes (trashed ones stay out of search)
         if searchOptions.contentTypes.contains(.note) {
-            for note in appState.notes {
+            for note in appState.activeNotes {
                 if !matchesDateFilter(note.updatedAt) { continue }
                 if !hasTextQuery || matchesQuery(title: note.title, content: searchOptions.includeContent ? note.content : nil, query: query) {
                     results.append(.from(note))
@@ -1006,7 +953,7 @@ struct HomeView: View {
     private func categoryCount(_ type: ContentType) -> Int {
         switch type {
         case .todo: return appState.todos.count
-        case .note: return appState.notes.count
+        case .note: return appState.activeNotes.count
         case .idea: return appState.ideas.count
         case .reminder: return appState.reminders.count
         case .bookmark: return appState.bookmarks.count
@@ -1023,7 +970,7 @@ struct HomeView: View {
     private func computeRecentItems() {
         var candidates: [UniversalSearchResult] = []
         candidates += appState.todos.filter { !$0.isCompleted }.map { .from($0) }
-        candidates += appState.notes.map { .from($0) }
+        candidates += appState.activeNotes.map { .from($0) }
         candidates += appState.ideas.filter { $0.status != .archived }.map { .from($0) }
         candidates += appState.reminders.filter { !$0.isCompleted }.map { .from($0) }
         candidates += appState.bookmarks.map { .from($0) }

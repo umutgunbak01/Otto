@@ -83,45 +83,15 @@ struct DropdownPicker<T: Hashable & CustomStringConvertible>: View {
 
 struct TodoFilterPicker: View {
     @Binding var selection: TodoListView.TodoFilter
-    var accentColor: Color = Theme.Colors.accent
 
     var body: some View {
-        HStack(spacing: 2) {
-            pillButton(for: .active)
-            pillButton(for: .completed)
-        }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.bgInput)
+        OttoPillRail(
+            options: [
+                (TodoListView.TodoFilter.active, "Upcoming"),
+                (TodoListView.TodoFilter.completed, "Completed"),
+            ],
+            selection: $selection
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-        )
-    }
-
-    private func pillButton(for option: TodoListView.TodoFilter) -> some View {
-        let isSelected = selection == option
-        return Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                selection = option
-            }
-        } label: {
-            Text(option.rawValue)
-                .font(Theme.Typography.caption)
-                .fontWeight(isSelected ? .medium : .regular)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
-                )
-                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.secondaryText)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -243,46 +213,12 @@ struct CategorySelector: View {
 
 struct BookmarkFilterPicker: View {
     @Binding var selection: BookmarkListView.BookmarkFilter
-    var accentColor: Color = Theme.Colors.accent
 
     var body: some View {
-        HStack(spacing: 2) {
-            pillButton(for: .all)
-            pillButton(for: .unread)
-            pillButton(for: .read)
-        }
-        .padding(3)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(Theme.Colors.bgInput)
+        OttoPillRail(
+            options: BookmarkListView.BookmarkFilter.allCases.map { ($0, $0.rawValue) },
+            selection: $selection
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-        )
-    }
-
-    private func pillButton(for option: BookmarkListView.BookmarkFilter) -> some View {
-        let isSelected = selection == option
-        return Button {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                selection = option
-            }
-        } label: {
-            Text(option.rawValue)
-                .font(Theme.Typography.caption)
-                .fontWeight(isSelected ? .medium : .regular)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.vertical, Theme.Spacing.sm)
-                .background(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
-                )
-                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.secondaryText)
-        }
-        .buttonStyle(.plain)
     }
 }
 

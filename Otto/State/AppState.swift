@@ -111,6 +111,10 @@ final class AppState {
     // via `remember` / `update_memory` and by the user in Settings → Agent.
     var agentMemories: [AgentMemoryEntry] = []
 
+    // Automations — the saved-prompt library and recurring agent tasks
+    // (managed in the Automations tab, run by TaskSchedulerService).
+    var savedPrompts: [SavedPrompt] = []
+    var scheduledTasks: [ScheduledTask] = []
 
     // UI State
     // Assigning a built-in tab always leaves custom-tab mode — every existing
@@ -130,10 +134,24 @@ final class AppState {
     /// picks it up on appear, sends it, and clears the field.
     var pendingChatPrompt: String?
 
+    /// One-shot request to open a specific chat session: MainView switches to
+    /// Home and selects it. Set by task-completion notification taps and by
+    /// the Automations tab's run-history rows.
+    var pendingOpenChatSessionId: UUID?
+
+    /// One-shot request to place text in the chat composer WITHOUT sending —
+    /// unlike `pendingChatPrompt`, which fires the message immediately. Set by
+    /// the Automations tab's "Use in chat" action on a saved prompt.
+    var pendingComposerInsert: String?
+
     /// One-shot request from the top bar's search pill: MainView switches to
     /// Home, and HomeView flips into search mode when it sees this go true,
     /// then resets it.
     var homeSearchRequested: Bool = false
+
+    /// Chat-history rail visibility — lifted from HomeView so the top bar's
+    /// history button can toggle it from outside the Home hierarchy.
+    var showChatHistory: Bool = false
 
     // Voice mode — lifted from OttoChatView so the wake-word path can present
     // the overlay programmatically and hand it a greeting to speak on open.
@@ -166,6 +184,13 @@ final class AppState {
     // Locate item (used by Home search to scroll to and select an item)
     var locateItemId: UUID?
 
+    /// The open note editor's document UndoManager, if a note is open. The
+    /// global Cmd+Z monitor consults it so block operations (delete/move/
+    /// convert) stay undoable even when no text view has keyboard focus —
+    /// without it, Cmd+Z in block-selection mode would fall through to the
+    /// app-level undo (restoring trashed notes mid-edit).
+    @ObservationIgnored weak var notesEditorUndoManager: UndoManager?
+
     /// Navigate to an item's home tab and ask that tab's list view to open /
     /// highlight it. List views watch `locateItemId`; MainView watches it too
     /// so a locate issued from Home (chat cards, universal search) leaves the
@@ -191,6 +216,9 @@ final class AppState {
     let wakeWord = WakeWordService()
     let meetingPrep = MeetingPrepService()
     let meetingTranscription = MeetingTranscriptionCoordinator()
+    /// Recurring-task scheduler (Automations). Configured in `init`; started
+    /// at the end of `loadData()` once the task list is hydrated.
+    let taskScheduler = TaskSchedulerService()
     private let notifications = NotificationService.shared
     private let fireflies = FirefliesService.shared
     private let gmail = GmailService.shared
@@ -236,6 +264,9 @@ final class AppState {
         // Wire the meeting-prep background worker. `start()` is deferred to
         // OttoApp.task so the calendar data has a chance to load first.
         meetingPrep.configure(appState: self)
+
+        // The recurring-task scheduler is configured + started at the end of
+        // `loadData()` (a MainActor context, after tasks are hydrated).
     }
 
     deinit {
@@ -318,6 +349,8 @@ final class AppState {
             askHistory = store.askHistory
             chatSessions = store.chatSessions.sorted { $0.updatedAt > $1.updatedAt }
             agentMemories = store.agentMemories
+            savedPrompts = store.savedPrompts
+            scheduledTasks = store.scheduledTasks
             domainTags = store.domainTags
             importedMeetings = store.importedMeetings
             blockedSenders = store.blockedSenders
@@ -332,6 +365,16 @@ final class AppState {
             errorMessage = "Failed to load data: \(error.localizedDescription)"
         }
 
+        // Start the recurring-task scheduler now that tasks are hydrated —
+        // its first tick performs the anacron-style catch-up sweep for
+        // anything that came due while the app wasn't running. Idempotent.
+        taskScheduler.configure(appState: self)
+        taskScheduler.start()
+
+        // Semantic index: build the on-device embedding index in the
+        // background and keep it fresh via the persistence-revision watcher.
+        SemanticIndexService.install(appState: self)
+
         // Backfill OG metadata for bookmarks that don't have it yet
         fetchMissingBookmarkMetadata()
 
@@ -343,6 +386,9 @@ final class AppState {
         // One-shot last-contact backfill on launch — picks up activity that
         // arrived in emails/calendar/X while the indexer logic was new.
         await recomputeConnectionActivity()
+
+        // Notes trash retention: drop entries deleted more than 30 days ago.
+        await purgeExpiredTrashedNotes()
     }
 
     /// Launch backfill: .xlsx files imported before `XLSXReader` existed
@@ -519,6 +565,10 @@ final class AppState {
             habits.insert(habit, at: 0)
             try? await persistence.updateHabits(habits)
             selectedTab = .habit
+
+        case .automation:
+            // Automations are configured in their tab, not created via quick input
+            break
         }
     }
 
@@ -701,6 +751,16 @@ final class AppState {
 
     // MARK: - Note Operations
 
+    /// Notes that are not in the Trash — what lists, search, mentions, and
+    /// agent tools operate on.
+    var activeNotes: [Note] { notes.filter { $0.deletedAt == nil } }
+
+    /// Notes sitting in the Trash, most recently deleted first.
+    var trashedNotes: [Note] {
+        notes.filter { $0.deletedAt != nil }
+            .sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+    }
+
     @MainActor
     func addNote(_ note: Note) async {
         notes.insert(note, at: 0)
@@ -709,32 +769,126 @@ final class AppState {
 
     @MainActor
     func updateNote(_ note: Note) async {
-        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return }
-        notes[index] = note
-        notes[index].updatedAt = Date()
-        let updatedNote = notes[index]
+        guard applyNoteUpdate(note) else { return }
         try? await persistence.updateNotes(notes)
     }
 
+    /// In-memory update. Returns false (skipping the `updatedAt` bump and the
+    /// disk write) when the incoming note is identical to the stored one —
+    /// merely opening a note must not reorder the sidebar or rewrite the store.
+    @MainActor
+    @discardableResult
+    private func applyNoteUpdate(_ note: Note) -> Bool {
+        guard let index = notes.firstIndex(where: { $0.id == note.id }) else { return false }
+        var incoming = note
+        incoming.updatedAt = notes[index].updatedAt
+        guard incoming != notes[index] else { return false }
+        notes[index] = note
+        notes[index].updatedAt = Date()
+        return true
+    }
+
+    /// Last-chance flush for `NSApplication.willTerminateNotification`: async
+    /// Tasks won't get another runloop turn at that point, so block the main
+    /// thread (bounded) until the store hits disk.
+    @MainActor
+    func saveNoteBeforeTermination(_ note: Note) {
+        guard applyNoteUpdate(note) else { return }
+        let snapshot = notes
+        let persistence = self.persistence
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached(priority: .userInitiated) {
+            try? await persistence.updateNotes(snapshot)
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + 2)
+    }
+
+    /// Soft delete — the note moves to the sidebar's Trash section and stays
+    /// restorable for ~30 days.
     @MainActor
     func deleteNote(_ note: Note) async {
-        let captured = note
-        undoService.pushUndo(label: "Note deleted") { [self] in
-            await self.addNote(captured)
+        undoService.pushUndo(label: "Note moved to Trash") { [self] in
+            await self.restoreNotes([note.id])
         }
-        notes.removeAll { $0.id == note.id }
+        setNotesDeleted([note.id], deleted: true)
         try? await persistence.updateNotes(notes)
     }
 
     @MainActor
     func deleteNotes(_ ids: Set<UUID>) async {
-        let captured = notes.filter { ids.contains($0.id) }
-        undoService.pushUndo(label: "\(captured.count) notes deleted") { [self] in
-            for note in captured {
-                await self.addNote(note)
-            }
+        undoService.pushUndo(label: "\(ids.count) note\(ids.count == 1 ? "" : "s") moved to Trash") { [self] in
+            await self.restoreNotes(ids)
         }
-        notes.removeAll { ids.contains($0.id) }
+        setNotesDeleted(ids, deleted: true)
+        try? await persistence.updateNotes(notes)
+    }
+
+    @MainActor
+    func restoreNotes(_ ids: some Collection<UUID>) async {
+        setNotesDeleted(Set(ids), deleted: false)
+        try? await persistence.updateNotes(notes)
+    }
+
+    @MainActor
+    private func setNotesDeleted(_ ids: Set<UUID>, deleted: Bool) {
+        let stamp = deleted ? Date() : nil
+        for index in notes.indices where ids.contains(notes[index].id) {
+            notes[index].deletedAt = stamp
+        }
+    }
+
+    /// Hard delete (from the Trash UI). Also garbage-collects image assets the
+    /// note referenced, unless another note still uses them.
+    @MainActor
+    func permanentlyDeleteNote(_ note: Note) async {
+        notes.removeAll { $0.id == note.id }
+        NoteAssetStore.purgeAssets(of: note, keeping: notes)
+        try? await persistence.updateNotes(notes)
+    }
+
+    @MainActor
+    func emptyNoteTrash() async {
+        let trashed = notes.filter { $0.deletedAt != nil }
+        guard !trashed.isEmpty else { return }
+        notes.removeAll { $0.deletedAt != nil }
+        for note in trashed { NoteAssetStore.purgeAssets(of: note, keeping: notes) }
+        try? await persistence.updateNotes(notes)
+    }
+
+    /// Drop Trash entries older than 30 days (called once after load).
+    @MainActor
+    func purgeExpiredTrashedNotes() async {
+        let cutoff = Date().addingTimeInterval(-30 * 86400)
+        let expired = notes.filter { ($0.deletedAt ?? .distantFuture) < cutoff }
+        guard !expired.isEmpty else { return }
+        notes.removeAll { note in expired.contains(where: { $0.id == note.id }) }
+        for note in expired { NoteAssetStore.purgeAssets(of: note, keeping: notes) }
+        try? await persistence.updateNotes(notes)
+    }
+
+    /// Duplicate a note as a new local note. Used both for plain duplication
+    /// and for "edit a local copy" of read-only Notion-synced notes — the copy
+    /// deliberately drops `notionPageId` so sync never overwrites it.
+    @MainActor
+    @discardableResult
+    func duplicateNote(_ note: Note) async -> Note {
+        let copy = Note(
+            title: note.title.isEmpty ? "Untitled (copy)" : "\(note.title) (copy)",
+            content: note.content,
+            primaryCategory: note.primaryCategory,
+            domainTagIds: note.domainTagIds,
+            icon: note.icon
+        )
+        notes.insert(copy, at: 0)
+        try? await persistence.updateNotes(notes)
+        return copy
+    }
+
+    @MainActor
+    func setNotePinned(_ id: UUID, pinned: Bool) async {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        notes[index].isPinned = pinned
         try? await persistence.updateNotes(notes)
     }
 
@@ -1513,19 +1667,28 @@ final class AppState {
     /// from view renders.
     @MainActor
     func recomputeConnectionActivity() async {
-        guard !connections.isEmpty else { return }
-        let updated = ContactActivityIndexer.recompute(
+        guard !connections.isEmpty || !networkEntries.isEmpty else { return }
+        let (updatedConnections, updatedEntries) = ContactActivityIndexer.recompute(
             connections: connections,
+            networkEntries: networkEntries,
             emails: emails,
             calendarEvents: calendarEvents,
+            meetings: meetings,
             xDMs: xDirectMessages,
             xFollowers: xFollowers
         )
-        // Only persist if anything actually changed (saves a JSON write per sync).
-        let anyChanged = zip(connections, updated).contains { $0.lastContactedAt != $1.lastContactedAt }
-        connections = updated
-        if anyChanged {
+        // Only persist when something actually changed (saves a JSON write per sync).
+        let connectionsChanged = zip(connections, updatedConnections)
+            .contains { $0.lastContactedAt != $1.lastContactedAt }
+        let entriesChanged = zip(networkEntries, updatedEntries)
+            .contains { $0.lastContactedAt != $1.lastContactedAt }
+        connections = updatedConnections
+        networkEntries = updatedEntries
+        if connectionsChanged {
             try? await persistence.updateConnections(connections)
+        }
+        if entriesChanged {
+            try? await persistence.updateNetworkEntries(networkEntries)
         }
     }
 
@@ -1658,6 +1821,119 @@ final class AppState {
     func deleteAgentMemory(id: UUID) async {
         agentMemories.removeAll { $0.id == id }
         try? await persistence.updateAgentMemories(agentMemories)
+    }
+
+    // MARK: - Saved Prompt Operations
+
+    @MainActor
+    func addSavedPrompt(_ prompt: SavedPrompt) async {
+        savedPrompts.insert(prompt, at: 0)
+        try? await persistence.updateSavedPrompts(savedPrompts)
+    }
+
+    @MainActor
+    func updateSavedPrompt(_ prompt: SavedPrompt) async {
+        guard let idx = savedPrompts.firstIndex(where: { $0.id == prompt.id }) else { return }
+        var updated = prompt
+        updated.updatedAt = Date()
+        savedPrompts[idx] = updated
+        try? await persistence.updateSavedPrompts(savedPrompts)
+    }
+
+    @MainActor
+    func deleteSavedPrompt(_ prompt: SavedPrompt) async {
+        let captured = prompt
+        undoService.pushUndo(label: "Saved prompt deleted") { [self] in
+            await self.addSavedPrompt(captured)
+        }
+        savedPrompts.removeAll { $0.id == prompt.id }
+        try? await persistence.updateSavedPrompts(savedPrompts)
+    }
+
+    /// Stamp `lastUsedAt` when the composer picker inserts a prompt. Doesn't
+    /// bump `updatedAt` — usage isn't an edit.
+    @MainActor
+    func markSavedPromptUsed(id: UUID) async {
+        guard let idx = savedPrompts.firstIndex(where: { $0.id == id }) else { return }
+        savedPrompts[idx].lastUsedAt = Date()
+        try? await persistence.updateSavedPrompts(savedPrompts)
+    }
+
+    /// Case-insensitive name resolver for chat tools (exact → prefix → contains).
+    func findSavedPrompt(byName needle: String) -> SavedPrompt? {
+        let q = needle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return nil }
+        if let exact = savedPrompts.first(where: { $0.name.lowercased() == q }) { return exact }
+        if let prefix = savedPrompts.first(where: { $0.name.lowercased().hasPrefix(q) }) { return prefix }
+        return savedPrompts.first(where: { $0.name.lowercased().contains(q) })
+    }
+
+    // MARK: - Scheduled Task Operations
+
+    @MainActor
+    func addScheduledTask(_ task: ScheduledTask) async {
+        var new = task
+        if new.isEnabled && new.nextDueAt == nil {
+            new.nextDueAt = new.schedule.nextOccurrence(after: Date())
+        }
+        scheduledTasks.insert(new, at: 0)
+        try? await persistence.updateScheduledTasks(scheduledTasks)
+        taskScheduler.tickSoon()
+    }
+
+    /// Plain persist — used by the scheduler to record run state. Editor and
+    /// tool paths should go through `saveScheduledTaskEdits` instead so the
+    /// due date tracks schedule changes.
+    @MainActor
+    func updateScheduledTask(_ task: ScheduledTask) async {
+        guard let idx = scheduledTasks.firstIndex(where: { $0.id == task.id }) else { return }
+        var updated = task
+        updated.updatedAt = Date()
+        scheduledTasks[idx] = updated
+        try? await persistence.updateScheduledTasks(scheduledTasks)
+    }
+
+    /// Upsert coming from the editor sheet or agent tools. Recomputes
+    /// `nextDueAt` only when it must change — a new task, an edited schedule,
+    /// or a re-enable — so a rename doesn't discard a pending catch-up run.
+    /// Disabling clears the due date (no catch-up accrues while off).
+    @MainActor
+    func saveScheduledTaskEdits(_ task: ScheduledTask) async {
+        let existing = scheduledTasks.first { $0.id == task.id }
+        var updated = task
+        if !updated.isEnabled {
+            updated.nextDueAt = nil
+        } else if existing == nil
+                    || existing?.schedule != updated.schedule
+                    || existing?.isEnabled == false
+                    || updated.nextDueAt == nil {
+            updated.nextDueAt = updated.schedule.nextOccurrence(after: Date())
+        }
+        if existing != nil {
+            await updateScheduledTask(updated)
+        } else {
+            await addScheduledTask(updated)
+        }
+        taskScheduler.tickSoon()
+    }
+
+    @MainActor
+    func deleteScheduledTask(_ task: ScheduledTask) async {
+        let captured = task
+        undoService.pushUndo(label: "Recurring task deleted") { [self] in
+            await self.addScheduledTask(captured)
+        }
+        scheduledTasks.removeAll { $0.id == task.id }
+        try? await persistence.updateScheduledTasks(scheduledTasks)
+    }
+
+    /// Case-insensitive name resolver for chat tools (exact → prefix → contains).
+    func findScheduledTask(byName needle: String) -> ScheduledTask? {
+        let q = needle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return nil }
+        if let exact = scheduledTasks.first(where: { $0.name.lowercased() == q }) { return exact }
+        if let prefix = scheduledTasks.first(where: { $0.name.lowercased().hasPrefix(q) }) { return prefix }
+        return scheduledTasks.first(where: { $0.name.lowercased().contains(q) })
     }
 
     // MARK: - Ask History Operations
@@ -1984,7 +2260,7 @@ final class AppState {
             try? await persistence.updateReminders(reminders)
             selectedTab = .reminder
 
-        case .bookmark, .meeting, .email, .connection, .company, .event, .community, .file, .xPost, .xFollower, .xDm, .habit, .networkHub:
+        case .bookmark, .meeting, .email, .connection, .company, .event, .community, .file, .xPost, .xFollower, .xDm, .habit, .networkHub, .automation:
             // Not applicable for email conversion
             break
         }
@@ -3076,6 +3352,10 @@ final class AppState {
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
+
+        case .automation:
+            // Automations are configured in their own tab, not produced by conversion
+            break
         }
     }
 
@@ -3083,9 +3363,14 @@ final class AppState {
     func convertNote(_ note: Note, to newType: ContentType) async {
         guard newType != .note else { return }
 
-        // Remove from notes
-        notes.removeAll { $0.id == note.id }
-        try? await persistence.updateNotes(notes)
+        // A Reminder has no content field — converting used to silently drop
+        // the note body. For reminders the note is kept and the reminder is
+        // created alongside it; every other target carries the content over,
+        // so the note moves.
+        if newType != .reminder {
+            notes.removeAll { $0.id == note.id }
+            try? await persistence.updateNotes(notes)
+        }
 
         switch newType {
         case .todo:
@@ -3163,6 +3448,10 @@ final class AppState {
 
         case .habit:
             // Habits are tracked separately and not produced by conversion
+            break
+
+        case .automation:
+            // Automations are configured in their own tab, not produced by conversion
             break
         }
     }
@@ -3259,6 +3548,10 @@ final class AppState {
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
+
+        case .automation:
+            // Automations are configured in their own tab, not produced by conversion
+            break
         }
     }
 
@@ -3345,6 +3638,10 @@ final class AppState {
         case .habit:
             // Habits are tracked separately and not produced by conversion
             break
+
+        case .automation:
+            // Automations are configured in their own tab, not produced by conversion
+            break
         }
     }
 
@@ -3429,6 +3726,10 @@ final class AppState {
 
         case .habit:
             // Habits are tracked separately and not produced by conversion
+            break
+
+        case .automation:
+            // Automations are configured in their own tab, not produced by conversion
             break
         }
     }

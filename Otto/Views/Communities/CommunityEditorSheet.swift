@@ -59,7 +59,7 @@ struct CommunityEditorSheet: View {
     private var header: some View {
         HStack {
             Text(isEditing ? "EDIT COMMUNITY" : "NEW COMMUNITY")
-                .hudLabel(tracking: Theme.Tracking.xxwide, color: ContentType.community.color)
+                .hudLabel(tracking: Theme.Tracking.xxwide)
             Spacer()
             Button { dismiss() } label: { Image(systemName: "xmark").foregroundStyle(Theme.Colors.textDim) }
                 .buttonStyle(.plain)

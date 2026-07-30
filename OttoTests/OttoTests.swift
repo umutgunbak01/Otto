@@ -189,3 +189,181 @@ struct OttoTests {
         #expect(rawInput == nil)
     }
 }
+
+// MARK: - TaskSchedule occurrence math + scheduler decisions (Automations)
+
+struct TaskSchedulerTests {
+
+    /// Fixed calendar so results don't depend on the machine's timezone.
+    /// Istanbul has had no DST since 2016 — stable wall-clock arithmetic.
+    private var cal: Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "Europe/Istanbul")!
+        return c
+    }
+
+    private func date(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+        var comps = DateComponents()
+        comps.year = y; comps.month = mo; comps.day = d
+        comps.hour = h; comps.minute = mi
+        return cal.date(from: comps)!
+    }
+
+    // MARK: nextOccurrence
+
+    @Test func dailyBeforeTimeFiresSameDay() {
+        let s = TaskSchedule(days: .daily, hour: 9, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 7, 29, 7, 30), calendar: cal)
+        #expect(next == date(2026, 7, 29, 9, 0))
+    }
+
+    @Test func dailyAfterTimeFiresTomorrow() {
+        let s = TaskSchedule(days: .daily, hour: 9, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 7, 29, 9, 0), calendar: cal)
+        #expect(next == date(2026, 7, 30, 9, 0))
+    }
+
+    @Test func weekdaySetPicksNearestListedDay() {
+        // 2026-07-29 is a Wednesday; schedule runs Mondays only.
+        let s = TaskSchedule(days: .weekdays([.mon]), hour: 9, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 7, 29, 12, 0), calendar: cal)
+        #expect(next == date(2026, 8, 3, 9, 0))
+    }
+
+    @Test func weekdaySetPicksEarliestOfSeveral() {
+        // Wednesday afternoon; {mon, thu} → Thursday the 30th, not next Monday.
+        let s = TaskSchedule(days: .weekdays([.mon, .thu]), hour: 9, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 7, 29, 12, 0), calendar: cal)
+        #expect(next == date(2026, 7, 30, 9, 0))
+    }
+
+    @Test func monthlyClampsToShortMonths() {
+        // "31st" in February 2026 (28 days) → Feb 28.
+        let s = TaskSchedule(days: .monthly(day: 31), hour: 8, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 2, 10, 12, 0), calendar: cal)
+        #expect(next == date(2026, 2, 28, 8, 0))
+    }
+
+    @Test func monthlyRollsToNextMonth() {
+        let s = TaskSchedule(days: .monthly(day: 15), hour: 8, minute: 0)
+        let next = s.nextOccurrence(after: date(2026, 3, 20, 12, 0), calendar: cal)
+        #expect(next == date(2026, 4, 15, 8, 0))
+    }
+
+    // MARK: evaluate — the anacron rule
+
+    private func task(
+        due: Date?,
+        lastRun: Date? = nil,
+        enabled: Bool = true,
+        catchUp: ScheduledTask.CatchUpPolicy = .runASAP
+    ) -> ScheduledTask {
+        ScheduledTask(
+            name: "t", prompt: "p",
+            schedule: TaskSchedule(days: .daily, hour: 9, minute: 0),
+            isEnabled: enabled, catchUpPolicy: catchUp,
+            nextDueAt: due, lastRunAt: lastRun
+        )
+    }
+
+    @Test func waitsBeforeDue() {
+        let t = task(due: date(2026, 7, 29, 9, 0))
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 8, 59), calendar: cal)
+        #expect(action == .wait)
+    }
+
+    @Test func runsOnTime() {
+        let due = date(2026, 7, 29, 9, 0)
+        let t = task(due: due, lastRun: date(2026, 7, 28, 9, 0))
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 9, 0), calendar: cal)
+        #expect(action == .run(scheduledFor: due))
+    }
+
+    @Test func catchesUpLaterSameDay() {
+        // The user's exact scenario: 9:00 task, Mac opened at 10:00.
+        let due = date(2026, 7, 29, 9, 0)
+        let t = task(due: due, lastRun: date(2026, 7, 28, 9, 0))
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 10, 0), calendar: cal)
+        #expect(action == .run(scheduledFor: due))
+    }
+
+    @Test func catchesUpAfterMultiDayGapOnce() {
+        // Mac off since Monday; due Tue 9:00; opened Wed 7:00 → run now.
+        let due = date(2026, 7, 28, 9, 0)
+        let t = task(due: due, lastRun: date(2026, 7, 27, 9, 0))
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 7, 0), calendar: cal)
+        #expect(action == .run(scheduledFor: due))
+    }
+
+    @Test func oncePerDayGuardSuppressesSameDayRefire() {
+        // The 7:00 catch-up above ran (lastRun = today 7:00) and advanced the
+        // due date to today 9:00. At 9:00 the task must NOT run again — it
+        // advances silently to tomorrow.
+        let t = task(due: date(2026, 7, 29, 9, 0), lastRun: date(2026, 7, 29, 7, 0))
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 9, 0), calendar: cal)
+        #expect(action == .advance(to: date(2026, 7, 30, 9, 0)))
+    }
+
+    @Test func skipPolicySkipsFullyMissedDay() {
+        // skip-to-next task due Monday 9:00; app first opened Wednesday →
+        // don't run a stale day, advance to the next occurrence.
+        let t = task(due: date(2026, 7, 27, 9, 0), lastRun: date(2026, 7, 26, 9, 0), catchUp: .skipToNext)
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 11, 0), calendar: cal)
+        #expect(action == .advance(to: date(2026, 7, 30, 9, 0)))
+    }
+
+    @Test func skipPolicyStillRunsLateOnTheScheduledDay() {
+        let due = date(2026, 7, 29, 9, 0)
+        let t = task(due: due, lastRun: date(2026, 7, 28, 9, 0), catchUp: .skipToNext)
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 11, 0), calendar: cal)
+        #expect(action == .run(scheduledFor: due))
+    }
+
+    @Test func disabledTaskNeverRuns() {
+        let t = task(due: date(2026, 7, 29, 9, 0), enabled: false)
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 10, 0), calendar: cal)
+        #expect(action == .wait)
+    }
+
+    @Test func missingDueDateGetsSeeded() {
+        let t = task(due: nil)
+        let action = TaskSchedulerService.evaluate(task: t, now: date(2026, 7, 29, 10, 0), calendar: cal)
+        #expect(action == .advance(to: date(2026, 7, 30, 9, 0)))
+    }
+
+    // MARK: schedule Codable round-trip
+
+    @Test func scheduleRoundTripsThroughJSON() throws {
+        let original = ScheduledTask(
+            name: "Digest", prompt: "Summarize",
+            schedule: TaskSchedule(days: .weekdays([.mon, .wed]), hour: 14, minute: 30),
+            catchUpPolicy: .skipToNext,
+            autoApproveTools: true
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ScheduledTask.self, from: data)
+        #expect(decoded == original)
+    }
+
+    @Test func legacyTaskJSONDefaultsAutoApproveOff() throws {
+        // Tasks saved before the auto-approve toggle existed decode with it off.
+        let data = try JSONEncoder().encode(ScheduledTask(name: "t", prompt: "p"))
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "autoApproveTools")
+        let stripped = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try JSONDecoder().decode(ScheduledTask.self, from: stripped)
+        #expect(decoded.autoApproveTools == false)
+    }
+
+    @Test func chatSessionDecodesLegacyJSONWithoutPinFlag() throws {
+        // Sessions saved before titlePinned existed must keep decoding (a
+        // decode failure would silently wipe ALL chat history via the store's
+        // lenient fallback).
+        let legacy = """
+        {"id":"\(UUID().uuidString)","title":"Old chat","turns":[],"createdAt":712627200,"updatedAt":712627200}
+        """
+        let decoded = try JSONDecoder().decode(ChatSession.self, from: Data(legacy.utf8))
+        #expect(decoded.titlePinned == false)
+        #expect(decoded.title == "Old chat")
+    }
+}

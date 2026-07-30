@@ -61,6 +61,7 @@ final class OttoToolExecutor {
         case .uncomplete_todo:  result = await setTodoCompletion(input, completed: false)
         case .complete_reminder:result = await completeReminder(input)
         case .delete_item:      result = await deleteItem(input)
+        case .semantic_search:  result = await semanticSearch(input)
         case .search_items:     result = searchItems(input)
         case .grep_data:        result = grepData(input)
         case .get_item:         result = getItem(input)
@@ -76,6 +77,13 @@ final class OttoToolExecutor {
         case .log_habit_entry:  result = await logHabitEntryTool(input)
         case .complete_habit:   result = await completeHabitTool(input)
         case .list_habits:      result = listHabitsTool(input)
+        case .save_prompt:            result = await savePromptTool(input)
+        case .list_saved_prompts:     result = listSavedPromptsTool(input)
+        case .update_saved_prompt:    result = await updateSavedPromptTool(input)
+        case .schedule_task:          result = await scheduleTaskTool(input)
+        case .list_scheduled_tasks:   result = listScheduledTasksTool(input)
+        case .update_scheduled_task:  result = await updateScheduledTaskTool(input)
+        case .run_scheduled_task:     result = runScheduledTaskTool(input)
         case .read_file:        result = await readFile(input)
         case .create_file:      result = await createFile(input)
         case .genmedia_search_models:     result = await genmediaSearchModels(input)
@@ -115,6 +123,7 @@ final class OttoToolExecutor {
         .delete_item,
         .remember, .update_memory,
         .create_habit, .update_habit, .log_habit_entry, .complete_habit,
+        .save_prompt, .update_saved_prompt, .schedule_task, .update_scheduled_task,
         // A successful genmedia_run lands a real artifact in the Files tab,
         // so it earns the same "thing happened" chime as the create_* tools.
         .genmedia_run,
@@ -189,6 +198,19 @@ final class OttoToolExecutor {
                 "Already remembered (id: \(existing.id.uuidString)). Use update_memory to change it.",
                 summary: "Already remembered"
             )
+        }
+        // Semantic near-duplicate guard: a same-meaning memory phrased
+        // differently surfaces the existing entry instead of stacking a
+        // paraphrase (memories are in the semantic index as type "memory").
+        if !appState.agentMemories.isEmpty {
+            let outcome = await SemanticIndexService.shared.search(queries: [content], types: ["memory"], limit: 1)
+            if case .ready(let hits) = outcome, let top = hits.first, top.score > 0.92,
+               let existing = appState.agentMemories.first(where: { $0.id == top.id }) {
+                return ok(
+                    "A near-identical memory already exists (id: \(existing.id.uuidString)): \"\(existing.content)\". Call update_memory with that id if it should change; nothing was added.",
+                    summary: "Similar memory exists"
+                )
+            }
         }
         let category = string(input, "category")
             .flatMap(AgentMemoryEntry.Category.init(rawValue:)) ?? .fact
@@ -559,6 +581,10 @@ final class OttoToolExecutor {
         guard var note = appState.notes.first(where: { $0.id == id }) else {
             return err("No note with id \(id.uuidString).", summary: "Update note failed")
         }
+        if note.notionPageId != nil {
+            return err("This note is synced from Notion and read-only — edits would be lost on the next sync. Duplicate it as a local note first.",
+                       summary: "Update note failed")
+        }
         var changed = false
         if let t = string(input, "title"), !t.isEmpty { note.title = t; changed = true }
         if let c = string(input, "content") { note.content = c; changed = true }
@@ -671,7 +697,8 @@ final class OttoToolExecutor {
             email: string(input, "email") ?? "",
             linkedin: string(input, "linkedin").nonEmpty,
             closeness: parseCloseness(string(input, "closeness")) ?? .unknown,
-            notes: string(input, "notes") ?? ""
+            notes: string(input, "notes") ?? "",
+            followUpCadence: string(input, "follow_up_cadence").nonEmpty.flatMap(FollowUpCadence.init(rawValue:))
         )
         await appState.addNetworkEntry(entry)
         let display = name.isEmpty ? company : name
@@ -700,6 +727,18 @@ final class OttoToolExecutor {
         if let v = string(input, "linkedin") { entry.linkedin = v.nonEmpty; changed = true }
         if let v = parseCloseness(string(input, "closeness")) { entry.closeness = v; changed = true }
         if let v = string(input, "notes") { entry.notes = v; changed = true }
+        if let v = string(input, "follow_up_cadence").nonEmpty {
+            if v == "none" {
+                entry.followUpCadence = nil; changed = true
+            } else if let cadence = FollowUpCadence(rawValue: v) {
+                entry.followUpCadence = cadence; changed = true
+            }
+        }
+        if input["mark_contacted"] as? Bool == true {
+            entry.lastContactedAt = Date()
+            entry.followUpSnoozedUntil = nil
+            changed = true
+        }
         guard changed else { return err("No fields provided to update.", summary: "Update network entry failed") }
         await appState.updateNetworkEntry(entry)
         let display = entry.name.isEmpty ? entry.company : entry.name
@@ -974,6 +1013,18 @@ final class OttoToolExecutor {
             }
             await appState.deleteCommunity(cm)
             return ok("Deleted community \(id.uuidString).", summary: "Deleted community: \(cm.name)")
+        case "saved_prompt":
+            guard let p = appState.savedPrompts.first(where: { $0.id == id }) else {
+                return err("No saved prompt with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteSavedPrompt(p)
+            return ok("Deleted saved prompt \(id.uuidString).", summary: "Deleted prompt: \(p.name)")
+        case "scheduled_task":
+            guard let t = appState.scheduledTasks.first(where: { $0.id == id }) else {
+                return err("No scheduled task with id \(id.uuidString).", summary: "Delete failed")
+            }
+            await appState.deleteScheduledTask(t)
+            return ok("Deleted scheduled task \(id.uuidString).", summary: "Deleted task: \(t.name)")
         default:
             if let tab = appState.customTabs.first(where: { $0.slug == type }) {
                 guard let record = appState.customRecords.first(where: { $0.id == id && $0.tabId == tab.id }) else {
@@ -1705,6 +1756,68 @@ final class OttoToolExecutor {
 
     // MARK: - Search / get
 
+    /// Meaning-based search over the on-device embedding index. The heavy
+    /// lifting happens on the SemanticIndexService actor (off-main); this
+    /// just shapes the outcome into the flat-JSON result the agent reads.
+    private func semanticSearch(_ input: [String: Any]) async -> ToolResult {
+        guard let query = (input["query"] as? String).nonEmpty else {
+            return err("semantic_search requires a non-empty `query`.", summary: "Semantic search: missing query")
+        }
+        var queries = [query]
+        if let alts = input["alt_queries"] as? [String] {
+            queries += alts.compactMap { ($0 as String?).nonEmpty }.prefix(4)
+        }
+        let types: Set<String>? = (input["types"] as? [String]).flatMap { raw in
+            let cleaned = Set(raw.compactMap { ($0 as String?).nonEmpty })
+            return cleaned.isEmpty ? nil : cleaned
+        }
+        let limit = min(max(input["limit"] as? Int ?? 12, 1), 30)
+
+        let outcome = await SemanticIndexService.shared.search(queries: queries, types: types, limit: limit)
+
+        func payloadItems(_ hits: [SemanticHit]) -> [[String: Any]] {
+            let iso = ISO8601DateFormatter()
+            return hits.map { hit in
+                var item: [String: Any] = [
+                    "type": hit.type,
+                    "id": hit.id.uuidString,
+                    "title": hit.title,
+                    "snippet": hit.snippet,
+                    "relevance": Double(String(format: "%.3f", hit.score)) ?? 0
+                ]
+                if let date = hit.date { item["date"] = iso.string(from: date) }
+                return item
+            }
+        }
+
+        var payload: [String: Any] = ["query": query]
+        let hits: [SemanticHit]
+        switch outcome {
+        case .ready(let ranked):
+            hits = ranked
+            payload["status"] = "ok"
+        case .building(let done, let total, let partial):
+            hits = partial
+            payload["status"] = "index_building"
+            payload["note"] = "First index pass still running (\(done)/\(total) items embedded) — results only cover what's indexed so far. search_items / grep_data see everything."
+        case .unavailable(let reason):
+            return err(
+                "Semantic index unavailable: \(reason). Use search_items (keyword) or grep_data (regex over the workspace tables) instead.",
+                summary: "Semantic search unavailable"
+            )
+        }
+        payload["returned"] = hits.count
+        payload["results"] = payloadItems(hits)
+        if hits.isEmpty {
+            payload["note"] = (payload["note"] as? String).map { $0 + " " } ?? ""
+            payload["note"] = (payload["note"] as! String) + "No semantic matches — for exact strings or structured listing try grep_data / search_items."
+        }
+
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])) ?? Data()
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        return ok(json, summary: "Semantic search: \(hits.count) hit\(hits.count == 1 ? "" : "s") for “\(String(query.prefix(40)))”")
+    }
+
     private func searchItems(_ input: [String: Any]) -> ToolResult {
         // Text query is now optional — omit to list-by-date/filter.
         let needle: String? = {
@@ -1799,7 +1912,7 @@ final class OttoToolExecutor {
             }
         }
         if types.contains("note") {
-            for n in appState.notes where textMatches([n.title, n.content]) {
+            for n in appState.activeNotes where textMatches([n.title, n.content]) {
                 matches.append(.init(id: n.id, type: "note", title: n.title,
                                      snippet: String(n.content.prefix(140)),
                                      date: n.updatedAt, dueDate: nil, score: lastScore, hitAllTokens: lastHitAll))
@@ -3453,6 +3566,283 @@ final class OttoToolExecutor {
     }
 
     // MARK: - Result helpers
+
+    // MARK: - Saved prompts & recurring tasks (Automations)
+
+    private func savePromptTool(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else {
+            return err("save_prompt needs a non-empty `name`.", summary: "save_prompt: missing name")
+        }
+        guard let prompt = string(input, "prompt")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return err("save_prompt needs a non-empty `prompt`.", summary: "save_prompt: missing prompt")
+        }
+        if let existing = appState.savedPrompts.first(where: { $0.name.lowercased() == name.lowercased() }) {
+            return ok(
+                "A saved prompt named \"\(existing.name)\" already exists (id: \(existing.id.uuidString)). Use update_saved_prompt to change it, or delete_item (type=saved_prompt) to replace it.",
+                summary: "Prompt already exists"
+            )
+        }
+        let saved = SavedPrompt(name: name, prompt: prompt)
+        await appState.addSavedPrompt(saved)
+        return ok(
+            "Saved prompt \"\(name)\" (id: \(saved.id.uuidString)). The user can insert it from the composer's bookmark picker or schedule it as a recurring task.",
+            summary: "Saved prompt: \(name)"
+        )
+    }
+
+    private func listSavedPromptsTool(_ input: [String: Any]) -> ToolResult {
+        let prompts = appState.savedPrompts
+        guard !prompts.isEmpty else {
+            return ok("No saved prompts.", summary: "0 saved prompts")
+        }
+        var lines: [String] = []
+        for p in prompts {
+            lines.append("- \(p.name) (id: \(p.id.uuidString))")
+            lines.append("  \(clipText(p.prompt, 200))")
+        }
+        return ok(lines.joined(separator: "\n"), summary: "\(prompts.count) saved prompt\(prompts.count == 1 ? "" : "s")")
+    }
+
+    private func updateSavedPromptTool(_ input: [String: Any]) async -> ToolResult {
+        guard let ref = string(input, "prompt_ref")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !ref.isEmpty else {
+            return err("update_saved_prompt needs `prompt_ref` (UUID or name).", summary: "update_saved_prompt: missing ref")
+        }
+        let target: SavedPrompt?
+        if let id = UUID(uuidString: ref) {
+            target = appState.savedPrompts.first { $0.id == id }
+        } else {
+            target = appState.findSavedPrompt(byName: ref)
+        }
+        guard var prompt = target else {
+            return err("No saved prompt matching \"\(ref)\". Call list_saved_prompts to see what exists.", summary: "Prompt not found")
+        }
+
+        var changed = false
+        if let name = string(input, "name")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty, name != prompt.name {
+            // Renaming onto another prompt's name would make fuzzy refs ambiguous.
+            if appState.savedPrompts.contains(where: { $0.id != prompt.id && $0.name.lowercased() == name.lowercased() }) {
+                return err("Another saved prompt is already named \"\(name)\".", summary: "Name taken")
+            }
+            prompt.name = name
+            changed = true
+        }
+        if let text = string(input, "prompt")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty, text != prompt.prompt {
+            prompt.prompt = text
+            changed = true
+        }
+        guard changed else {
+            return ok("Nothing to change — pass `name` and/or `prompt`.", summary: "No changes")
+        }
+        await appState.updateSavedPrompt(prompt)
+        return ok(
+            "Updated saved prompt \"\(prompt.name)\" (id: \(prompt.id.uuidString)).",
+            summary: "Updated prompt: \(prompt.name)"
+        )
+    }
+
+    /// Shared schedule parser for schedule_task / update_scheduled_task.
+    /// Merges provided fields over `base` (the existing schedule on update,
+    /// defaults on create). Exactly one of the tuple's sides is non-nil.
+    private func parseTaskSchedule(
+        _ input: [String: Any],
+        base: TaskSchedule
+    ) -> (schedule: TaskSchedule?, error: String?) {
+        var schedule = base
+
+        if let time = string(input, "time")?.trimmingCharacters(in: .whitespaces), !time.isEmpty {
+            let parts = time.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2, (0...23).contains(parts[0]), (0...59).contains(parts[1]) else {
+                return (nil, "Invalid `time` \"\(time)\" — use 24h \"HH:mm\", e.g. \"09:00\".")
+            }
+            schedule.hour = parts[0]
+            schedule.minute = parts[1]
+        }
+
+        let weekdayMap: [String: Habit.Weekday] = [
+            "mon": .mon, "tue": .tue, "wed": .wed, "thu": .thu, "fri": .fri, "sat": .sat, "sun": .sun
+        ]
+        let providedWeekdays: Set<Habit.Weekday>? = (input["weekdays"] as? [Any]).map { raw in
+            Set(raw.compactMap { ($0 as? String).flatMap { weekdayMap[$0.lowercased()] } })
+        }
+
+        if let frequency = string(input, "frequency")?.lowercased() {
+            switch frequency {
+            case "daily":
+                schedule.days = .daily
+            case "weekdays":
+                schedule.days = .weekdays([.mon, .tue, .wed, .thu, .fri])
+            case "weekly":
+                guard let days = providedWeekdays, !days.isEmpty else {
+                    return (nil, "frequency=weekly needs `weekdays`, e.g. [\"mon\"].")
+                }
+                schedule.days = .weekdays(days)
+            case "monthly":
+                guard let day = input["day_of_month"] as? Int else {
+                    return (nil, "frequency=monthly needs `day_of_month` (1–31).")
+                }
+                schedule.days = .monthly(day: min(max(day, 1), 31))
+            default:
+                return (nil, "Unknown frequency \"\(frequency)\".")
+            }
+        } else if let days = providedWeekdays, !days.isEmpty {
+            // Weekday change without an explicit frequency.
+            schedule.days = .weekdays(days)
+        } else if let day = input["day_of_month"] as? Int, case .monthly = schedule.days {
+            schedule.days = .monthly(day: min(max(day, 1), 31))
+        }
+
+        return (schedule, nil)
+    }
+
+    private func scheduleTaskTool(_ input: [String: Any]) async -> ToolResult {
+        guard let name = string(input, "name")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else {
+            return err("schedule_task needs a non-empty `name`.", summary: "schedule_task: missing name")
+        }
+        guard let prompt = string(input, "prompt")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !prompt.isEmpty else {
+            return err("schedule_task needs a non-empty `prompt`.", summary: "schedule_task: missing prompt")
+        }
+        guard string(input, "frequency") != nil else {
+            return err("schedule_task needs `frequency` (daily | weekdays | weekly | monthly).", summary: "schedule_task: missing frequency")
+        }
+        if let existing = appState.scheduledTasks.first(where: { $0.name.lowercased() == name.lowercased() }) {
+            return err(
+                "A recurring task named \"\(existing.name)\" already exists (id: \(existing.id.uuidString)). Use update_scheduled_task to change it, or pick another name.",
+                summary: "Task already exists"
+            )
+        }
+
+        let parsed = parseTaskSchedule(input, base: TaskSchedule())
+        if let message = parsed.error {
+            return err(message, summary: "schedule_task: bad schedule")
+        }
+        let schedule = parsed.schedule ?? TaskSchedule()
+
+        let catchUp: ScheduledTask.CatchUpPolicy =
+            string(input, "catch_up")?.lowercased() == "skip" ? .skipToNext : .runASAP
+        let task = ScheduledTask(
+            name: name,
+            prompt: prompt,
+            schedule: schedule,
+            catchUpPolicy: catchUp,
+            notifyOnCompletion: (input["notify"] as? Bool) ?? true,
+            autoApproveTools: (input["auto_approve"] as? Bool) ?? false
+        )
+        await appState.saveScheduledTaskEdits(task)
+
+        let dueText = appState.scheduledTasks.first(where: { $0.id == task.id })?.nextDueAt
+            .map { Self.taskDateFormatter.string(from: $0) } ?? "—"
+        return ok(
+            "Scheduled \"\(name)\" (id: \(task.id.uuidString)) — \(schedule.displaySummary), next run \(dueText). Each run happens in its own background chat session; if the Mac is off at fire time it catches up at the first opportunity.",
+            summary: "Scheduled: \(name) · \(schedule.displaySummary)"
+        )
+    }
+
+    private func listScheduledTasksTool(_ input: [String: Any]) -> ToolResult {
+        let tasks = appState.scheduledTasks
+        guard !tasks.isEmpty else {
+            return ok("No recurring tasks.", summary: "0 recurring tasks")
+        }
+        var lines: [String] = []
+        for t in tasks {
+            var bits = [t.schedule.displaySummary, t.isEnabled ? "enabled" : "disabled"]
+            if t.autoApproveTools { bits.append("auto-approve") }
+            if t.isEnabled, let due = t.nextDueAt {
+                bits.append("next \(Self.taskDateFormatter.string(from: due))")
+            }
+            if let last = t.latestRun {
+                var lastBit = "last run \(last.status.rawValue)"
+                if let error = last.errorMessage, !error.isEmpty {
+                    lastBit += " (\(clipText(error, 80)))"
+                }
+                bits.append(lastBit)
+            }
+            lines.append("- \(t.name) (id: \(t.id.uuidString)) — \(bits.joined(separator: " · "))")
+            lines.append("  \(clipText(t.prompt, 160))")
+        }
+        return ok(lines.joined(separator: "\n"), summary: "\(tasks.count) recurring task\(tasks.count == 1 ? "" : "s")")
+    }
+
+    private func resolveScheduledTask(_ input: [String: Any]) -> ScheduledTask? {
+        guard let ref = string(input, "task")?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !ref.isEmpty else { return nil }
+        if let id = UUID(uuidString: ref) {
+            return appState.scheduledTasks.first { $0.id == id }
+        }
+        return appState.findScheduledTask(byName: ref)
+    }
+
+    private func updateScheduledTaskTool(_ input: [String: Any]) async -> ToolResult {
+        guard var task = resolveScheduledTask(input) else {
+            return err("No recurring task matching `task`. Call list_scheduled_tasks to see what exists.", summary: "Task not found")
+        }
+        if let name = string(input, "name")?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            task.name = name
+        }
+        if let prompt = string(input, "prompt")?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
+            task.prompt = prompt
+        }
+        let parsed = parseTaskSchedule(input, base: task.schedule)
+        if let message = parsed.error {
+            return err(message, summary: "update_scheduled_task: bad schedule")
+        }
+        task.schedule = parsed.schedule ?? task.schedule
+        if let catchUp = string(input, "catch_up")?.lowercased() {
+            task.catchUpPolicy = catchUp == "skip" ? .skipToNext : .runASAP
+        }
+        if let notify = input["notify"] as? Bool {
+            task.notifyOnCompletion = notify
+        }
+        if let autoApprove = input["auto_approve"] as? Bool {
+            task.autoApproveTools = autoApprove
+        }
+        if let enabled = input["enabled"] as? Bool {
+            task.isEnabled = enabled
+        }
+        await appState.saveScheduledTaskEdits(task)
+
+        let fresh = appState.scheduledTasks.first { $0.id == task.id }
+        var status = fresh?.isEnabled == true ? "enabled" : "disabled"
+        if let due = fresh?.nextDueAt, fresh?.isEnabled == true {
+            status += ", next run \(Self.taskDateFormatter.string(from: due))"
+        }
+        return ok(
+            "Updated \"\(task.name)\" — \(task.schedule.displaySummary) (\(status)).",
+            summary: "Updated task: \(task.name)"
+        )
+    }
+
+    private func runScheduledTaskTool(_ input: [String: Any]) -> ToolResult {
+        guard let task = resolveScheduledTask(input) else {
+            return err("No recurring task matching `task`. Call list_scheduled_tasks to see what exists.", summary: "Task not found")
+        }
+        if appState.taskScheduler.isRunning(task.id) {
+            return err("\"\(task.name)\" is already running.", summary: "Already running")
+        }
+        appState.taskScheduler.runNow(task)
+        return ok(
+            "Started \"\(task.name)\" — it's running in a background chat session and will notify the user when done. The schedule is unaffected.",
+            summary: "Running: \(task.name)"
+        )
+    }
+
+    private func clipText(_ text: String, _ maxChars: Int) -> String {
+        let flattened = text.replacingOccurrences(of: "\n", with: " ")
+        guard flattened.count > maxChars else { return flattened }
+        return String(flattened.prefix(maxChars)) + "…"
+    }
+
+    private static let taskDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE MMM d, HH:mm"
+        return f
+    }()
 
     private func ok(_ content: String, summary: String) -> ToolResult {
         ToolResult(content: content, isError: false, summary: summary)

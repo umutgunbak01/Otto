@@ -10,8 +10,9 @@ struct TagChipView: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Text(tag.name)
-                .font(Theme.Typography.monoSmall)
+            Text(tag.name.uppercased())
+                .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+                .tracking(0.9)
 
             if isRemovable && isHovered {
                 Image(systemName: "xmark")
@@ -22,11 +23,13 @@ struct TagChipView: View {
                     }
             }
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(Theme.Colors.hoverTint)
-        .foregroundStyle(Theme.Colors.textDim)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2.5)
+        .foregroundStyle(Theme.Colors.tertiaryText)
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Theme.Colors.border, lineWidth: 1)
+        )
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering

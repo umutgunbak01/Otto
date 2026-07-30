@@ -1,6 +1,6 @@
 import Foundation
 
-struct Note: Identifiable, Codable {
+struct Note: Identifiable, Codable, Equatable {
     let id: UUID
     var title: String
     var content: String
@@ -9,6 +9,14 @@ struct Note: Identifiable, Codable {
     var researchPrompt: String
     var mindMapImageData: Data?
     var notionPageId: String?
+    /// Emoji shown next to the title and in the sidebar (Notion-style page icon).
+    var icon: String?
+    /// Pinned notes surface in their own sidebar section above the date groups.
+    var isPinned: Bool
+    /// Soft-delete timestamp. A non-nil value means the note is in the Trash;
+    /// it is hidden from lists, search, mentions, and agent tools until
+    /// restored, and purged for good ~30 days later.
+    var deletedAt: Date?
     var createdAt: Date
     var updatedAt: Date
 
@@ -16,6 +24,7 @@ struct Note: Identifiable, Codable {
     enum CodingKeys: String, CodingKey {
         case id, title, content, primaryCategory, domainTagIds
         case researchPrompt, mindMapImageData, notionPageId
+        case icon, isPinned, deletedAt
         case researchFindings // Old field name for migration
         case createdAt, updatedAt
     }
@@ -29,6 +38,9 @@ struct Note: Identifiable, Codable {
         researchPrompt: String = "",
         mindMapImageData: Data? = nil,
         notionPageId: String? = nil,
+        icon: String? = nil,
+        isPinned: Bool = false,
+        deletedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -40,6 +52,9 @@ struct Note: Identifiable, Codable {
         self.researchPrompt = researchPrompt
         self.mindMapImageData = mindMapImageData
         self.notionPageId = notionPageId
+        self.icon = icon
+        self.isPinned = isPinned
+        self.deletedAt = deletedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -70,6 +85,11 @@ struct Note: Identifiable, Codable {
 
         // Notion page ID is optional
         notionPageId = try? container.decode(String.self, forKey: .notionPageId)
+
+        // Newer fields — absent in older data
+        icon = try? container.decode(String.self, forKey: .icon)
+        isPinned = (try? container.decode(Bool.self, forKey: .isPinned)) ?? false
+        deletedAt = try? container.decode(Date.self, forKey: .deletedAt)
     }
 
     // Custom encoder to use new field name
@@ -84,6 +104,9 @@ struct Note: Identifiable, Codable {
         try container.encode(researchPrompt, forKey: .researchPrompt)
         try container.encodeIfPresent(mindMapImageData, forKey: .mindMapImageData)
         try container.encodeIfPresent(notionPageId, forKey: .notionPageId)
+        try container.encodeIfPresent(icon, forKey: .icon)
+        if isPinned { try container.encode(isPinned, forKey: .isPinned) }
+        try container.encodeIfPresent(deletedAt, forKey: .deletedAt)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }

@@ -4,16 +4,18 @@ import AppKit
 #endif
 
 /// Top-level shell. Lays the app out in the same grid as
-/// `otto-redesign-mockup.html`:
+/// `otto-redesign-full.html`:
 ///
-///   ┌──────────────────────────────┐  topbar (48pt, full width)
-///   ├─────────┬────────────────────┤
-///   │ sidebar │ content            │  body
-///   │  224pt  │                    │
-///   └─────────┴────────────────────┘
+///   ┌─────────┬────────────────────┬─────────┐
+///   │ sidebar │ topbar (54pt)      │ daily   │
+///   │  250pt  ├────────────────────┤ brief   │
+///   │         │ stage content      │ 340pt   │
+///   │         │                    │ (home)  │
+///   └─────────┴────────────────────┴─────────┘
 ///
-/// `content` swaps between Home (chat + right panel), the Map, and the
-/// individual list views depending on the sidebar selection.
+/// The sidebar and the briefing rail run full height; the top bar spans only
+/// the middle stage. The briefing rail shows on Home when the window is wide
+/// enough — every other view goes "solo" (sidebar + stage).
 struct MainView: View {
     @Environment(AppState.self) private var appState
 
@@ -29,16 +31,7 @@ struct MainView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 0) {
-                OttoTopBar(onSearch: {
-                    // Jump to Home and open universal search.
-                    showingHome = true
-                    showingMap = false
-                    showingCreative = false
-                    appState.homeSearchRequested = true
-                })
-                .frame(height: 48)
-
+            GeometryReader { geo in
                 HStack(spacing: 0) {
                     OttoSidebar(
                         showingHome: $showingHome,
@@ -47,10 +40,38 @@ struct MainView: View {
                         showingSettings: $showingSettings,
                         showingIntegrations: $showingIntegrations
                     )
-                    .frame(width: 224)
+                    .frame(width: 250)
 
-                    mainContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    OttoVerticalDivider()
+
+                    VStack(spacing: 0) {
+                        OttoTopBar(
+                            title: crumbTitle,
+                            isHome: showingHome && !showingMap && !showingCreative
+                                && !showingSettings && !showingIntegrations,
+                            onSearch: {
+                                // Jump to Home and open universal search.
+                                showingHome = true
+                                showingMap = false
+                                showingCreative = false
+                                showingSettings = false
+                                showingIntegrations = false
+                                appState.homeSearchRequested = true
+                            }
+                        )
+                        .frame(height: 54)
+
+                        mainContent
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    if showingHome && !showingMap && !showingCreative
+                        && !showingSettings && !showingIntegrations
+                        && geo.size.width >= 1180 {
+                        OttoVerticalDivider()
+                        OttoRightPanel()
+                            .frame(width: 340)
+                    }
                 }
             }
 
@@ -80,18 +101,12 @@ struct MainView: View {
                 .zIndex(15)
             }
         }
-        .frame(minWidth: 960, minHeight: 680)
-        .background(Theme.Colors.bg0)
+        .frame(minWidth: 1000, minHeight: 680)
+        .background(OttoBackdrop())
         .alert("Error", isPresented: .constant(appState.errorMessage != nil)) {
             Button("OK") { appState.errorMessage = nil }
         } message: {
             Text(appState.errorMessage ?? "")
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView()
-        }
-        .sheet(isPresented: $showingIntegrations) {
-            IntegrationsView()
         }
         .onChange(of: appState.locateItemId) { _, itemId in
             // A locate request targets a list view — leave Home/Map so the
@@ -100,6 +115,8 @@ struct MainView: View {
                 showingHome = false
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
             }
         }
         .onChange(of: appState.pendingChatPrompt) { _, prompt in
@@ -109,6 +126,33 @@ struct MainView: View {
                 showingHome = true
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
+            }
+        }
+        .onChange(of: appState.pendingOpenChatSessionId) { _, sessionId in
+            // Task-run notification tap / Automations history row: open the
+            // session in the chat. Home consumes nothing here — selecting the
+            // session id is enough for OttoChatView to attach to it.
+            if let sessionId {
+                showingHome = true
+                showingMap = false
+                showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
+                appState.activeChatSessionId = sessionId
+                appState.pendingOpenChatSessionId = nil
+            }
+        }
+        .onChange(of: appState.pendingComposerInsert) { _, text in
+            // "Use in chat" on a saved prompt — bring the composer on screen;
+            // OttoChatView consumes the text into its input field (no send).
+            if text != nil {
+                showingHome = true
+                showingMap = false
+                showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
             }
         }
         .onChange(of: appState.showVoiceOverlay) { _, shown in
@@ -119,6 +163,8 @@ struct MainView: View {
                 showingHome = true
                 showingMap = false
                 showingCreative = false
+                showingSettings = false
+                showingIntegrations = false
             }
         }
         .task {
@@ -143,34 +189,34 @@ struct MainView: View {
 
     // MARK: - Main content area
 
+    /// The current view's crumb title (mockup .crumb).
+    private var crumbTitle: String {
+        if showingSettings { return "Settings" }
+        if showingIntegrations { return "Integrations" }
+        if showingCreative { return "Creative" }
+        if showingMap { return "Map" }
+        if showingHome { return "Home" }
+        if let customTab = appState.customTabs.first(where: { $0.id == appState.selectedCustomTabId }) {
+            return customTab.name
+        }
+        return appState.selectedTab.pluralTitle
+    }
+
     @ViewBuilder
     private var mainContent: some View {
-        if showingCreative {
+        if showingSettings {
+            SettingsView(inline: true)
+        } else if showingIntegrations {
+            IntegrationsView(inline: true)
+        } else if showingCreative {
             CreativeView()
         } else if showingMap {
             MapView()
-                .background(Theme.Colors.bg0)
         } else if showingHome {
-            homeContent
+            HomeView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             listContent
-                .background(Theme.Colors.bg0)
-        }
-    }
-
-    /// Home — chat column plus the right panel (hidden on compact widths),
-    /// mirroring the mockup's `#view-home` grid.
-    private var homeContent: some View {
-        GeometryReader { geo in
-            HStack(spacing: 0) {
-                HomeView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if geo.size.width >= 1000 {
-                    OttoRightPanel()
-                        .frame(width: 276)
-                }
-            }
         }
     }
 
@@ -205,6 +251,7 @@ struct MainView: View {
         case .xFollower:  XFollowerListView()
         case .xDm:        XDirectMessageListView()
         case .habit:      HabitListView()
+        case .automation: AutomationsView()
         }
     }
 
@@ -214,13 +261,29 @@ struct MainView: View {
     private func setupUndoMonitor() {
         undoMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.modifierFlags.contains(.command),
-               !event.modifierFlags.contains(.shift),
                event.charactersIgnoringModifiers == "z" {
-                if let responder = NSApp.keyWindow?.firstResponder as? NSTextView,
-                   responder.undoManager?.canUndo == true {
+                let isRedo = event.modifierFlags.contains(.shift)
+                // While ANY text view is editing (including TextField field
+                // editors), Cmd+Z belongs to the text system — even when its
+                // undo stack is momentarily empty. Falling through here used
+                // to turn "undo typing" into "resurrect a deleted note".
+                if NSApp.keyWindow?.firstResponder is NSTextView {
                     return event
                 }
-                if appState.undoService.canUndo {
+                // An open note editor's block operations (delete/move/turn
+                // into) are undoable even when keyboard focus sits on the
+                // editor chrome rather than a text view.
+                if let editorUndo = appState.notesEditorUndoManager {
+                    if isRedo, editorUndo.canRedo {
+                        editorUndo.redo()
+                        return nil
+                    }
+                    if !isRedo, editorUndo.canUndo {
+                        editorUndo.undo()
+                        return nil
+                    }
+                }
+                if !isRedo, appState.undoService.canUndo {
                     Task { await appState.undoService.undo() }
                     return nil
                 }

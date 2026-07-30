@@ -46,6 +46,10 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
 
+    /// True when hosted in the main stage (sidebar navigation) instead of a
+    /// sheet — fills the pane, drops ✕/Cancel/fixed frame.
+    var inline: Bool = false
+
     @State private var selectedPane: SettingsPane = .agent
     @State private var isSaved: Bool = false
     @State private var falApiKey: String = ""
@@ -78,6 +82,8 @@ struct SettingsView: View {
     @AppStorage(MeetingDetectionSettings.enabledKey) private var meetingDetectionEnabled: Bool = MeetingDetectionSettings.defaultEnabled
     @AppStorage(ScreenCapturePrivacySettings.enabledKey) private var screenCapturePrivacyEnabled: Bool = ScreenCapturePrivacySettings.defaultEnabled
     @AppStorage(MeetingNotesLanguageSettings.key) private var rawNotesLanguage: String = MeetingNotesLanguageSettings.defaultValue.rawValue
+    @AppStorage(QuickCaptureSettings.enabledKey) private var quickCaptureEnabled: Bool = QuickCaptureSettings.defaultEnabled
+    @AppStorage(EmailTriageSettings.enabledKey) private var emailTriageEnabled: Bool = EmailTriageSettings.defaultEnabled
 
     private var selectedBackend: AgentBackend {
         AgentBackend(rawValue: rawBackend) ?? .claude
@@ -120,8 +126,12 @@ struct SettingsView: View {
                 footer
             }
         }
-        .frame(width: 700, height: 560)
-        .background(Theme.Colors.bg0)
+        .frame(
+            width: inline ? nil : 700,
+            height: inline ? nil : 560
+        )
+        .frame(maxWidth: inline ? .infinity : nil, maxHeight: inline ? .infinity : nil)
+        .background(inline ? Color.clear : Theme.Colors.bg0)
         .onAppear {
             if let existingFalKey = UserDefaults.standard.string(forKey: FalAIService.apiKeyDefaultsKey) {
                 falApiKey = existingFalKey
@@ -137,7 +147,7 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Settings")
-                .font(Theme.Typography.title)
+                .font(Theme.Typography.display)
                 .foregroundStyle(Theme.Colors.text)
                 .padding(.horizontal, Theme.Spacing.md)
                 .padding(.top, Theme.Spacing.lg)
@@ -171,35 +181,37 @@ struct SettingsView: View {
         }
         .padding(.horizontal, Theme.Spacing.sm)
         .frame(width: 176)
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.panelWash)
     }
 
     // MARK: - Header / footer
 
     private var paneHeader: some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(selectedPane.title)
-                    .font(Theme.Typography.title)
+                    .font(Theme.Typography.displayMd)
                     .foregroundStyle(Theme.Colors.text)
                 Text(selectedPane.subtitle)
                     .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .foregroundStyle(Theme.Colors.tertiaryText)
             }
 
             Spacer()
 
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Theme.Colors.tertiaryText)
-                    .frame(width: 24, height: 24)
-                    .background(Theme.Colors.borderSubtle)
-                    .clipShape(Circle())
+            if !inline {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.Colors.tertiaryText)
+                        .frame(width: 24, height: 24)
+                        .background(Theme.Colors.borderSubtle)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, Theme.Spacing.xl)
         .padding(.vertical, Theme.Spacing.lg)
@@ -214,10 +226,12 @@ struct SettingsView: View {
 
             Spacer()
 
-            Button("Cancel") {
-                dismiss()
+            if !inline {
+                Button("Cancel") {
+                    dismiss()
+                }
+                .buttonStyle(GhostButtonStyle())
             }
-            .buttonStyle(GhostButtonStyle())
 
             Button("Save") {
                 if !falApiKey.isEmpty {
@@ -231,7 +245,11 @@ struct SettingsView: View {
                     isSaved = true
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                    dismiss()
+                    if inline {
+                        withAnimation { isSaved = false }
+                    } else {
+                        dismiss()
+                    }
                 }
             }
             .buttonStyle(AccentButtonStyle())
@@ -259,6 +277,8 @@ struct SettingsView: View {
             }
 
             AgentMemorySettingsCard()
+
+            SemanticIndexSettingsCard()
 
             AgentSafetySettingsCard()
         }
@@ -590,6 +610,39 @@ struct SettingsView: View {
     // MARK: - Interface pane
 
     private var interfacePane: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            #if os(macOS)
+            SettingsCard(title: "Quick capture") {
+                SettingsToggleRow(
+                    title: "Global shortcut",
+                    subtitle: "Summon a floating Otto input from any app. Type a thought, hit ⏎, and it runs in the background — notes, todos, questions — with a notification when it's done.",
+                    isOn: $quickCaptureEnabled
+                )
+
+                if quickCaptureEnabled {
+                    HStack(alignment: .center, spacing: Theme.Spacing.md) {
+                        Text("Shortcut")
+                            .font(Theme.Typography.body)
+                            .foregroundStyle(Theme.Colors.text)
+                        Spacer()
+                        QuickCaptureShortcutRecorder()
+                    }
+
+                    if QuickCaptureController.shared.registrationFailed {
+                        Text("Couldn't register this shortcut — another app may already use it. Record a different one.")
+                            .font(Theme.Typography.small)
+                            .foregroundStyle(Theme.Colors.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            #endif
+
+            interfaceTogglesCard
+        }
+    }
+
+    private var interfaceTogglesCard: some View {
         SettingsCard {
             SettingsToggleRow(
                 title: "Show in menu bar",
@@ -607,6 +660,12 @@ struct SettingsView: View {
                 title: "Hide Otto while transcribing",
                 subtitle: "While a meeting is being transcribed, keep Otto's banner and windows out of screen shares so the other party can't see you're transcribing. Works with browser-based shares (Meet, Zoom/Teams in a tab); a native full-screen recorder on the latest macOS may still capture it.",
                 isOn: $screenCapturePrivacyEnabled
+            )
+
+            SettingsToggleRow(
+                title: "Email triage",
+                subtitle: "Adds a \"Needs reply\" queue to the Emails tab — person-to-person threads whose last message is waiting on you (newsletters and notifications filtered out) — plus one-click reply drafts written in your voice. Everything is computed locally from already-synced mail; Gmail stays read-only, drafts are copy-paste.",
+                isOn: $emailTriageEnabled
             )
 
             HStack(alignment: .center, spacing: Theme.Spacing.md) {

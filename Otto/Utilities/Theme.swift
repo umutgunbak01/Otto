@@ -7,21 +7,26 @@ import UIKit
 
 // MARK: - Design System
 //
-// Tokens follow otto-redesign-mockup.html: calm dark surfaces, hairline
-// borders, one cyan accent, semantic green/amber/red/violet. Sans-serif for
-// UI text; monospace reserved for data (counts, dates, domains, handles).
-// Legacy HUD symbol names (cyan, cyanGlow, panelEdge, …) are kept as aliases
-// so existing views pick up the new palette without call-site edits.
+// Tokens follow otto-redesign-full.html: a near-black warm page with faint
+// radial tints and film grain, alpha-white panels and hairlines, one teal
+// accent plus semantic amber/green/red/violet/blue (each with a dim wash),
+// serif display type for titles, monospace for data (counts, dates, domains,
+// handles, overlines). Legacy symbol names (cyan, cyanGlow, panelEdge, bg0…)
+// are kept as aliases so existing views pick up the new palette without
+// call-site edits.
 
 enum Theme {
-    // Colors — mockup dark palette
+    // Colors — full-redesign dark palette
     enum Colors {
-        // Surfaces
-        static let bgPage              = Color(red: 0.031, green: 0.035, blue: 0.039) // #08090a
-        static let bg0                 = Color(red: 0.043, green: 0.047, blue: 0.055) // #0b0c0e
-        static let bg1                 = Color(red: 0.055, green: 0.059, blue: 0.071) // #0e0f12
-        static let bg2                 = Color(red: 0.071, green: 0.075, blue: 0.086) // #121316
-        static let bgInput             = Color(red: 0.086, green: 0.090, blue: 0.106) // #16171b
+        // Surfaces. The page is one near-black; panes layer alpha whites on
+        // top of the shared backdrop rather than their own opaque fills.
+        static let bgPage              = Color(red: 0.039, green: 0.039, blue: 0.043) // #0a0a0b
+        static let bg0                 = bgPage
+        static let bg1                 = Color(red: 0.051, green: 0.051, blue: 0.055) // #0d0d0e
+        static let bg2                 = Color(red: 0.075, green: 0.075, blue: 0.082) // #131315
+        static let bgInput             = Color(red: 0.086, green: 0.086, blue: 0.094) // #161618
+        /// Opaque header fill for sticky table headers (mockup #111114).
+        static let bgRaised            = Color(red: 0.067, green: 0.067, blue: 0.078) // #111114
 
         // Backwards-compatible aliases used by existing list views.
         static let background          = bg0
@@ -29,46 +34,55 @@ enum Theme {
         static let sidebar             = bg1
         static let elevatedSurface     = Color.white.opacity(0.045)
 
-        // Accent — the mockup's single cyan. `cyanGlow` is intentionally
-        // clear: the redesign has no glows, and pointing the alias at clear
-        // switches every legacy `.shadow(color: cyanGlow…)` off at once.
-        static let cyan                = Color(red: 0.369, green: 0.780, blue: 0.910) // #5ec7e8
-        static let cyanDim             = Color(red: 0.282, green: 0.600, blue: 0.702) // #4899b3
+        // Accent — the mockup's teal. `cyanGlow` is intentionally clear:
+        // the redesign has no glows, and pointing the alias at clear switches
+        // every legacy `.shadow(color: cyanGlow…)` off at once.
+        static let cyan                = Color(red: 0.431, green: 0.906, blue: 0.824) // #6ee7d2
+        static let cyanDim             = Color(red: 0.169, green: 0.749, blue: 0.643) // #2bbfa4
         static let cyanGlow            = Color.clear
-        static let accentText          = Color(red: 0.490, green: 0.839, blue: 0.941) // #7dd6f0
-        static let onAccent            = Color(red: 0.024, green: 0.129, blue: 0.169) // #06212b
+        static let accentText          = Color(red: 0.369, green: 0.918, blue: 0.831) // #5eead4
+        static let onAccent            = Color(red: 0.020, green: 0.149, blue: 0.125) // #052620
+
+        // Accent gradient endpoints (send / primary CTA fills).
+        static let accentGradTop       = Color(red: 0.545, green: 0.941, blue: 0.863) // #8bf0dc
+        static let accentGradBottom    = Color(red: 0.263, green: 0.812, blue: 0.706) // #43cfb4
 
         // Status accents
-        static let amber               = Color(red: 0.949, green: 0.694, blue: 0.333) // #f2b155
-        static let red                 = Color(red: 0.949, green: 0.416, blue: 0.510) // #f26a82
-        static let green               = Color(red: 0.290, green: 0.871, blue: 0.502) // #4ade80
-        static let violet              = Color(red: 0.706, green: 0.573, blue: 0.910) // #b492e8
+        static let amber               = Color(red: 0.941, green: 0.776, blue: 0.455) // #f0c674
+        static let red                 = Color(red: 0.937, green: 0.549, blue: 0.518) // #ef8c84
+        static let green               = Color(red: 0.373, green: 0.827, blue: 0.604) // #5fd39a
+        static let violet              = Color(red: 0.725, green: 0.655, blue: 0.961) // #b9a7f5
+        static let blue                = Color(red: 0.522, green: 0.722, blue: 0.941) // #85b8f0
 
-        // Semantic tints — chip backgrounds.
-        static let tintGreen           = green.opacity(0.12)
-        static let tintAmber           = amber.opacity(0.12)
-        static let tintRed             = red.opacity(0.12)
-        static let tintViolet          = violet.opacity(0.12)
+        // Semantic tints — chip / icon-square washes.
+        static let tintGreen           = green.opacity(0.10)
+        static let tintAmber           = amber.opacity(0.10)
+        static let tintRed             = red.opacity(0.10)
+        static let tintViolet          = violet.opacity(0.10)
+        static let tintBlue            = blue.opacity(0.10)
+        static let tintTeal            = cyan.opacity(0.12)
 
-        // Text
-        static let text                = Color(red: 0.914, green: 0.918, blue: 0.925) // #e9eaec
-        static let textDim             = Color(red: 0.604, green: 0.608, blue: 0.639) // #9a9ba3
+        // Text — warm off-whites (mockup --t1/--t2/--t3).
+        static let text                = Color(red: 0.957, green: 0.949, blue: 0.929) // #f4f2ed
+        static let textDim             = Color(red: 0.933, green: 0.922, blue: 0.894).opacity(0.64)
         static let secondaryText       = textDim
-        static let tertiaryText        = Color(red: 0.373, green: 0.380, blue: 0.412) // #5f6169
+        static let tertiaryText        = Color(red: 0.933, green: 0.922, blue: 0.894).opacity(0.40)
 
-        // Panels & borders — hairline whites, never cyan.
-        static let panel               = bg2
-        static let panelEdge           = Color.white.opacity(0.07)
-        static let gridLine            = Color.white.opacity(0.04)
-        static let border              = Color.white.opacity(0.07)
+        // Panels & borders — hairline whites, never teal.
+        static let panel               = Color.white.opacity(0.026)
+        static let panel2              = Color.white.opacity(0.052)
+        static let panelWash           = Color.white.opacity(0.012)
+        static let panelEdge           = Color.white.opacity(0.065)
+        static let gridLine            = Color.white.opacity(0.024)
+        static let border              = Color.white.opacity(0.065)
         static let borderStrong        = Color.white.opacity(0.13)
         static let borderSubtle        = Color.white.opacity(0.045)
         /// Hover/highlight tint over dark panels.
         static let hoverTint           = Color.white.opacity(0.045)
-        /// Selection tint (accent-tinted, matches mockup --bg-active).
-        static let selectTint          = Color(red: 0.369, green: 0.780, blue: 0.910).opacity(0.10)
-        /// User chat bubble surface.
-        static let userBubble          = Color(red: 0.102, green: 0.110, blue: 0.129) // #1a1c21
+        /// Selection tint (teal-washed, matches mockup --teal-dim).
+        static let selectTint          = Color(red: 0.431, green: 0.906, blue: 0.824).opacity(0.10)
+        /// User chat bubble surface (mockup .mu .bub uses --panel-2).
+        static let userBubble          = Color.white.opacity(0.052)
 
         // Brand aliases — the rest of the codebase still references these.
         static let accent              = cyan
@@ -86,10 +100,10 @@ enum Theme {
         static let hobby               = violet
     }
 
-    // Typography — sans-serif for UI, monospace only for data (counts,
-    // dates, domains, handles, chips). The `mono*` set exists for those
-    // data displays; `label` stays mono because it renders uppercase
-    // group/section labels exactly like the mockup's .group-label.
+    // Typography — sans-serif for UI text, a serif display face (New York)
+    // for the big editorial titles, monospace for data (counts, dates,
+    // domains, handles, overlines). Mirrors the mockup's Inter / Instrument
+    // Serif / Geist Mono trio with system faces.
     enum Typography {
         #if os(macOS)
         static let largeTitle = Font.system(size: 26, weight: .bold)
@@ -105,6 +119,18 @@ enum Theme {
         static let monoBody    = Font.system(size: 12, weight: .regular,  design: .monospaced)
         static let monoCaption = Font.system(size: 11, weight: .regular,  design: .monospaced)
         static let monoSmall   = Font.system(size: 10.5, weight: .medium, design: .monospaced)
+
+        // Serif display set — mockup's Instrument Serif moments.
+        /// Hero headline ("Ask or create").
+        static let displayXL   = Font.system(size: 40, weight: .regular, design: .serif)
+        /// View titles (mockup .vtitle 27px).
+        static let display     = Font.system(size: 25, weight: .regular, design: .serif)
+        /// Briefing headline / empty-state title (mockup 23.5px).
+        static let displayMd   = Font.system(size: 21, weight: .regular, design: .serif)
+        /// Document titles in editors (mockup .dtitle 35px).
+        static let displayLg   = Font.system(size: 31, weight: .regular, design: .serif)
+        /// Inline serif italic (thinking indicator).
+        static let displaySm   = Font.system(size: 13, weight: .regular, design: .serif)
         #else
         static let largeTitle = Font.system(size: 28, weight: .bold)
         static let title      = Font.system(size: 18, weight: .semibold)
@@ -119,6 +145,12 @@ enum Theme {
         static let monoBody    = Font.system(size: 13, weight: .regular,  design: .monospaced)
         static let monoCaption = Font.system(size: 12, weight: .regular,  design: .monospaced)
         static let monoSmall   = Font.system(size: 10.5, weight: .medium, design: .monospaced)
+
+        static let displayXL   = Font.system(size: 40, weight: .regular, design: .serif)
+        static let display     = Font.system(size: 25, weight: .regular, design: .serif)
+        static let displayMd   = Font.system(size: 21, weight: .regular, design: .serif)
+        static let displayLg   = Font.system(size: 31, weight: .regular, design: .serif)
+        static let displaySm   = Font.system(size: 13, weight: .regular, design: .serif)
         #endif
     }
 
@@ -132,7 +164,7 @@ enum Theme {
         static let xxl: CGFloat = 32
     }
 
-    // Corner Radius — mockup: 6 / 8 / 12.
+    // Corner Radius — mockup: 6–16, cards mostly 11–14.
     enum Radius {
         static let sm: CGFloat = 6
         static let md: CGFloat = 8
@@ -143,13 +175,13 @@ enum Theme {
     }
 
     // Letter spacing — used only on mono uppercase labels now, so the values
-    // are far tighter than the old HUD (mockup: .12em of 10px ≈ 1.2).
+    // are far tighter than the old HUD (mockup overline: .2em of 9.5px ≈ 1.9).
     enum Tracking {
         static let tight: CGFloat = 0.2
         static let normal: CGFloat = 0.4
         static let wide: CGFloat = 0.8
         static let xwide: CGFloat = 1.2
-        static let xxwide: CGFloat = 1.6
+        static let xxwide: CGFloat = 1.9
     }
 }
 
@@ -193,7 +225,7 @@ extension View {
         self
     }
 
-    /// Uppercase letter-spaced mono label — mockup's .group-label / card h3.
+    /// Uppercase letter-spaced mono label — mockup's .ovl / .glabel.
     func hudLabel(tracking: CGFloat = Theme.Tracking.xwide, color: Color = Theme.Colors.tertiaryText) -> some View {
         self
             .font(Theme.Typography.label)
@@ -240,15 +272,22 @@ struct GhostButtonStyle: ButtonStyle {
     }
 }
 
-/// Filled accent button — the mockup's .new-btn.
+/// Filled accent button — the mockup's .newbtn (teal gradient, dark ink).
 struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding(.horizontal, Theme.Spacing.md)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Theme.Colors.accent.opacity(configuration.isPressed ? 0.85 : 1))
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        LinearGradient(
+                            colors: [Theme.Colors.accentGradTop, Theme.Colors.accentGradBottom],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .opacity(configuration.isPressed ? 0.85 : 1)
             )
             .foregroundStyle(Theme.Colors.onAccent)
             .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)

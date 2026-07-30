@@ -5,8 +5,9 @@ import AppKit
 import ScreenCaptureKit
 
 /// One-shot screen capture using ScreenCaptureKit's `SCScreenshotManager`.
-/// Returns a PNG on disk that the caller owns (delete when done). Main display
-/// only for v1.
+/// Returns a PNG on disk that the caller owns (delete when done). Captures the
+/// primary display by default; callers can prefer a specific display (quick
+/// capture passes the screen its panel was summoned on).
 ///
 /// Requires macOS 14+ (SCScreenshotManager.captureImage is macOS 14+). First
 /// use triggers the system's screen-recording TCC prompt; Info.plist already
@@ -28,15 +29,20 @@ actor ScreenCaptureService {
         }
     }
 
-    /// Capture the primary (first-listed) display to a PNG in the temp dir.
-    /// Returns the file URL; caller moves/deletes as needed.
-    func captureMainDisplay() async throws -> URL {
+    /// Capture one display to a PNG in the temp dir. `preferring` picks a
+    /// specific display (e.g. the one the user is working on); nil — or an
+    /// id SCK doesn't report — falls back to the primary (first-listed)
+    /// display. Returns the file URL; caller moves/deletes as needed.
+    func captureMainDisplay(preferring displayID: CGDirectDisplayID? = nil) async throws -> URL {
         guard #available(macOS 14.0, *) else { throw CaptureError.unavailable }
 
         // `SCShareableContent.current` is the async API that also triggers the
         // TCC permission check. On denial it throws — propagate the error.
         let content = try await SCShareableContent.current
-        guard let display = content.displays.first else {
+        let preferred = displayID.flatMap { id in
+            content.displays.first { $0.displayID == id }
+        }
+        guard let display = preferred ?? content.displays.first else {
             throw CaptureError.noDisplay
         }
 

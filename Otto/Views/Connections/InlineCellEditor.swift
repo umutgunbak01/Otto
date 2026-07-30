@@ -345,12 +345,12 @@ private struct LastContactDisplay: View {
         HStack(spacing: 0) {
             if let date = date {
                 Text(ConnectionDateFormat.relative(date))
-                    .font(Theme.Typography.monoCaption)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .help(ConnectionDateFormat.short(date))
             } else {
                 Text("—")
-                    .font(Theme.Typography.monoCaption)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
             }
             Spacer(minLength: 0)
@@ -384,14 +384,16 @@ private struct ClosenessMenuCell: View {
         } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
-                    Text(connection.closeness.label).font(Theme.Typography.monoSmall).lineLimit(1)
+                    Text(connection.closeness.label)
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
                     Text("▾").font(.system(size: 8)).opacity(0.7)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(connection.closeness == .unknown ? Theme.Colors.hoverTint : connection.closeness.color.opacity(0.12))
+                        .fill(connection.closeness == .unknown ? Theme.Colors.hoverTint : connection.closeness.color.opacity(0.10))
                 )
                 Spacer(minLength: 0)
             }
@@ -430,14 +432,16 @@ private struct CategoryMenuCell: View {
         } label: {
             HStack(spacing: 4) {
                 HStack(spacing: 3) {
-                    Text(connection.category.label).font(Theme.Typography.monoSmall).lineLimit(1)
+                    Text(connection.category.label)
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
                     Text("▾").font(.system(size: 8)).opacity(0.7)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(connection.category == .unknown ? Theme.Colors.hoverTint : connection.category.color.opacity(0.12))
+                        .fill(connection.category == .unknown ? Theme.Colors.hoverTint : connection.category.color.opacity(0.10))
                 )
                 Spacer(minLength: 0)
             }

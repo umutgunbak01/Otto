@@ -28,6 +28,8 @@ struct OttoDataStore: Codable {
     var askHistory: [AskHistoryItem]
     var chatSessions: [ChatSession]
     var agentMemories: [AgentMemoryEntry]
+    var savedPrompts: [SavedPrompt]
+    var scheduledTasks: [ScheduledTask]
     var lastGmailSync: Date?
     var lastCalendarSync: Date?
     var lastXSync: Date?
@@ -43,6 +45,7 @@ struct OttoDataStore: Codable {
         case xPosts, xFollowers, xDirectMessages, habits
         case domainTags, importedMeetings, blockedSenders, askHistory, chatSessions
         case agentMemories
+        case savedPrompts, scheduledTasks
         case lastGmailSync, lastCalendarSync, lastXSync, lastModified
     }
 
@@ -74,6 +77,8 @@ struct OttoDataStore: Codable {
         askHistory: [AskHistoryItem] = [],
         chatSessions: [ChatSession] = [],
         agentMemories: [AgentMemoryEntry] = [],
+        savedPrompts: [SavedPrompt] = [],
+        scheduledTasks: [ScheduledTask] = [],
         lastGmailSync: Date? = nil,
         lastCalendarSync: Date? = nil,
         lastXSync: Date? = nil,
@@ -106,6 +111,8 @@ struct OttoDataStore: Codable {
         self.askHistory = askHistory
         self.chatSessions = chatSessions
         self.agentMemories = agentMemories
+        self.savedPrompts = savedPrompts
+        self.scheduledTasks = scheduledTasks
         self.lastGmailSync = lastGmailSync
         self.lastCalendarSync = lastCalendarSync
         self.lastXSync = lastXSync
@@ -158,6 +165,9 @@ struct OttoDataStore: Codable {
         chatSessions = (try? container.decode([ChatSession].self, forKey: .chatSessions)) ?? []
         // Agent memory is a newer addition — fall back to empty for older stores.
         agentMemories = (try? container.decode([AgentMemoryEntry].self, forKey: .agentMemories)) ?? []
+        // Saved prompts + recurring tasks are newer additions — fall back to empty.
+        savedPrompts = (try? container.decode([SavedPrompt].self, forKey: .savedPrompts)) ?? []
+        scheduledTasks = (try? container.decode([ScheduledTask].self, forKey: .scheduledTasks)) ?? []
         lastGmailSync = try? container.decode(Date.self, forKey: .lastGmailSync)
         lastCalendarSync = try? container.decode(Date.self, forKey: .lastCalendarSync)
         lastXSync = try? container.decode(Date.self, forKey: .lastXSync)
@@ -285,6 +295,18 @@ actor PersistenceService {
     func updateAgentMemories(_ memories: [AgentMemoryEntry]) async throws {
         var store = try await load()
         store.agentMemories = memories
+        try await save(store)
+    }
+
+    func updateSavedPrompts(_ prompts: [SavedPrompt]) async throws {
+        var store = try await load()
+        store.savedPrompts = prompts
+        try await save(store)
+    }
+
+    func updateScheduledTasks(_ tasks: [ScheduledTask]) async throws {
+        var store = try await load()
+        store.scheduledTasks = tasks
         try await save(store)
     }
 

@@ -6,6 +6,7 @@ struct IdeaListView: View {
     @State private var selectedIdeaId: UUID?
     @State private var searchText: String = ""
     @State private var isSidebarCollapsed: Bool = false
+    @State private var hoveredIdeaId: UUID?
 
     var filteredIdeas: [Idea] {
         var ideas = appState.ideas
@@ -106,50 +107,23 @@ struct IdeaListView: View {
         VStack(spacing: 0) {
             // Header
             VStack(spacing: 10) {
-                HStack {
+                HStack(spacing: 8) {
                     Text("Ideas")
-                        .font(Theme.Typography.headline)
+                        .font(.system(size: 16, weight: .regular, design: .serif))
                         .foregroundStyle(Theme.Colors.text)
+
+                    OttoCountChip(text: "\(filteredIdeas.count)")
 
                     Spacer()
 
-                    Text("\(filteredIdeas.count)")
-                        .font(Theme.Typography.monoSmall)
-                        .foregroundStyle(Theme.Colors.textDim)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .strokeBorder(Theme.Colors.border, lineWidth: 1)
-                        )
-
                     // Create new idea button
-                    Button {
+                    OttoGlyphButton(systemImage: "square.and.pencil", help: "New idea", size: 24) {
                         createNewIdea()
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.secondaryText)
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .help("New idea")
                 }
 
                 // Search
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Theme.Colors.hoverTint)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
+                OttoSearchMini(placeholder: "Search", text: $searchText, width: nil)
 
                 // Status filter
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -169,15 +143,7 @@ struct IdeaListView: View {
 
             // Idea list
             if filteredIdeas.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "lightbulb")
-                        .font(.system(size: 24, weight: .thin))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                    Text("No ideas")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.Colors.tertiaryText)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ideasEmptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
@@ -190,7 +156,17 @@ struct IdeaListView: View {
                 }
             }
         }
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.panelWash)
+    }
+
+    /// Shared empty state — sidebar and right pane use the same copy.
+    private var ideasEmptyState: some View {
+        OttoEmptyState(
+            systemImage: "bolt",
+            title: "Nothing brewing — yet",
+            message: "Ideas you capture in chat or voice land here, and move through a raw → researched → validated workflow as Otto digs into them.",
+            tip: "Say \"Otto, idea:\" in voice mode"
+        )
     }
 
     // MARK: - Sidebar Idea Row (compact, Notion-style)
@@ -206,18 +182,19 @@ struct IdeaListView: View {
             HStack(spacing: 8) {
                 // Lightbulb icon
                 Image(systemName: "lightbulb")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.tertiaryText)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
+                    .frame(width: 18)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(idea.title.isEmpty ? "Untitled" : idea.title)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.text)
+                        .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.textDim)
                         .lineLimit(1)
 
                     if !idea.content.isEmpty {
-                        Text(strippedNotePreview(idea.content))
-                            .font(.system(size: 11.5))
+                        Text(NoteDocument.preview(idea.content))
+                            .font(.system(size: 11))
                             .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
@@ -239,12 +216,23 @@ struct IdeaListView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                    .fill(isSelected ? Theme.Colors.selectTint : Color.clear)
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(
+                        isSelected
+                            ? Theme.Colors.selectTint
+                            : (hoveredIdeaId == idea.id ? Theme.Colors.panel : Color.clear)
+                    )
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                hoveredIdeaId = idea.id
+            } else if hoveredIdeaId == idea.id {
+                hoveredIdeaId = nil
+            }
+        }
     }
 
     // MARK: - Sidebar Status Chip
@@ -258,12 +246,17 @@ struct IdeaListView: View {
             }
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(isSelected ? Theme.Colors.selectTint : Color.clear)
-                .foregroundStyle(isSelected ? Theme.Colors.accentText : Theme.Colors.textDim)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? Theme.Colors.text : Theme.Colors.tertiaryText)
+                .padding(.horizontal, 11)
+                .frame(height: 24)
+                .background(
+                    Capsule().fill(isSelected ? Theme.Colors.panel2 : Color.clear)
+                )
+                .overlay(
+                    Capsule().strokeBorder(isSelected ? Theme.Colors.border : Color.clear, lineWidth: 1)
+                )
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -271,20 +264,7 @@ struct IdeaListView: View {
     // MARK: - Empty Editor
 
     private var emptyEditor: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "lightbulb")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.5))
-
-            Text("Select an idea")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            Text("Choose an idea from the sidebar to start editing")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.Colors.tertiaryText.opacity(0.6))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ideasEmptyState
     }
 
     // MARK: - Helpers

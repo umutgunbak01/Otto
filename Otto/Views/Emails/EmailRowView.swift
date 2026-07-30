@@ -9,20 +9,25 @@ struct EmailRowView: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            // Unread indicator (mockup .unread-dot / .read-pad)
+            // Unread indicator (mockup .unread-dot / .read-pad) — teal dot
+            // with a soft glow; clear 6pt spacer once read.
             Circle()
-                .fill(email.isRead ? Color.clear : Theme.Colors.accent)
-                .frame(width: 7, height: 7)
+                .fill(email.isRead ? Color.clear : Theme.Colors.cyan)
+                .frame(width: 6, height: 6)
+                .shadow(
+                    color: email.isRead ? Color.clear : Theme.Colors.cyan.opacity(0.5),
+                    radius: 4
+                )
 
-            // Tinted initials avatar (mockup .fava)
-            senderAvatar
+            // Gradient initials avatar (mockup .fava) — stable per name.
+            OttoAvatar(name: email.displaySender, size: 28)
 
             // Content
             VStack(alignment: .leading, spacing: 2) {
                 // Sender line
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
                     Text(email.displaySender)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(email.isRead ? Theme.Colors.textDim : Theme.Colors.text)
                         .lineLimit(1)
 
@@ -30,28 +35,39 @@ struct EmailRowView: View {
 
                     // Date (data → mono)
                     Text(email.formattedDate)
-                        .font(Theme.Typography.monoCaption)
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundStyle(Theme.Colors.tertiaryText)
                 }
 
                 // Subject
                 Text(email.subject)
-                    .font(email.isRead
-                          ? Font.system(size: 13, weight: .regular)
-                          : Font.system(size: 13.5, weight: .semibold))
+                    .font(.system(size: 13, weight: email.isRead ? .regular : .medium))
                     .foregroundStyle(email.isRead ? Theme.Colors.textDim : Theme.Colors.text)
                     .lineLimit(1)
 
                 // Preview
                 Text(email.preview)
-                    .font(Theme.Typography.callout)
-                    .foregroundStyle(Theme.Colors.textDim)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.Colors.tertiaryText)
                     .lineLimit(1)
             }
 
             // Actions (visible on hover)
             if isHovered {
                 HStack(spacing: Theme.Spacing.sm) {
+                    // Draft a reply in the user's voice (email triage, opt-in)
+                    if EmailTriageSettings.isEnabled {
+                        Button {
+                            ReplyDraftService.shared.beginDraft(for: email, appState: appState)
+                        } label: {
+                            Image(systemName: "arrowshape.turn.up.left")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.Colors.tertiaryText)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Draft reply")
+                    }
+
                     // Convert type menu
                     ConvertTypeMenuCompact(currentType: .note) { newType in
                         Task { await appState.convertEmail(email, to: newType) }
@@ -61,72 +77,32 @@ struct EmailRowView: View {
                         Task { await appState.deleteEmail(email) }
                     } label: {
                         Image(systemName: "trash")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.Colors.secondaryText)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
+            // Quiet list row (mockup .lrow) — no border; unread rows keep a
+            // faint panel wash to lift them off the page.
+            RoundedRectangle(cornerRadius: 11)
                 .fill(
                     isSelected
                         ? Theme.Colors.selectTint
-                        : (email.isRead ? Color.clear : Theme.Colors.panel)
+                        : (isHovered
+                            ? Theme.Colors.panel
+                            : (email.isRead ? Color.clear : Theme.Colors.panel))
                 )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
         )
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
         }
         #endif
-    }
-
-    // MARK: - Avatar
-
-    private var senderAvatar: some View {
-        let initials = avatarInitials
-        let tint = avatarTint(for: email.sender)
-
-        return Circle()
-            .fill(tint.background)
-            .frame(width: 26, height: 26)
-            .overlay {
-                Text(initials)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(tint.foreground)
-            }
-    }
-
-    private var avatarInitials: String {
-        let name = email.senderName ?? email.sender
-        let parts = name.split(separator: " ").prefix(2)
-        if parts.count >= 2 {
-            return parts.map { String($0.prefix(1)) }.joined().uppercased()
-        }
-        return String(name.prefix(2)).uppercased()
-    }
-
-    private func avatarTint(for sender: String) -> (background: Color, foreground: Color) {
-        let tints: [(Color, Color)] = [
-            (Theme.Colors.tintViolet, Theme.Colors.violet),
-            (Theme.Colors.tintGreen, Theme.Colors.green),
-            (Theme.Colors.selectTint, Theme.Colors.accentText),
-            (Theme.Colors.tintAmber, Theme.Colors.amber),
-            (Theme.Colors.tintRed, Theme.Colors.red)
-        ]
-        var hash = 0
-        for scalar in sender.unicodeScalars {
-            hash = (hash &* 31 &+ Int(scalar.value)) & 0xFFFF
-        }
-        return tints[hash % tints.count]
     }
 }
 

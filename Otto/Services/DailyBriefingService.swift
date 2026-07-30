@@ -193,7 +193,7 @@ final class DailyBriefingService {
     private static let briefingSystemPrompt = """
     You are Otto's daily-briefing writer. Produce today's briefing for the user's home panel.
 
-    You have Otto's MCP tools. Use ONLY the read tools — search_items, grep_data, get_item, list_habits, read_file. Do NOT create, update, complete, or delete anything during this task.
+    You have Otto's MCP tools. Use ONLY the read tools — semantic_search, search_items, grep_data, get_item, list_habits, read_file. Do NOT create, update, complete, or delete anything during this task.
 
     Investigate before you write. For each upcoming calendar event, look up the attendees and their companies (search_items with type network / connection / company, or grep_data on network_hub.csv / companies.csv) and what happened last (search_items across meeting / email / note with their name or company). A good event note reads like "Last met Jun 12 — discussed pricing; they owed you the data-room link" or "First meeting — VC intro via Arın". Keep each note to 1–2 short sentences, concrete and useful for prep. Never invent facts: if you find nothing, omit the note or say "no prior history".
 
@@ -203,7 +203,7 @@ final class DailyBriefingService {
       "summary": "2–3 sentences narrating the day: what matters most, what to prep, what can slip",
       "events": [{ "time": "09:30" or "Tomorrow 14:00" or "All day", "title": "...", "note": "prep/context from your lookups", "location": "..." }],
       "todos": [{ "title": "...", "note": "why it matters today", "urgency": "high" or "normal" }],
-      "heads_up": ["overdue work, waiting-on replies, an important unread email, a habit streak at risk"]
+      "heads_up": ["overdue work, waiting-on replies, an important unread email, a habit streak at risk, a relationship follow-up that's overdue (from the Follow-ups due section — name the person)"]
     }
 
     Limits: events ≤5 (today and tomorrow only; [] if none), todos ≤6 (only the ones that actually matter today), heads_up ≤4. All values are plain text — no markdown, no otto:// links.
@@ -301,10 +301,35 @@ final class DailyBriefingService {
 
         // Inbox.
         let unread = appState.emails.filter { !$0.isRead }
-        lines.append("## Inbox")
-        lines.append("\(unread.count) unread.")
-        for e in unread.sorted(by: { $0.receivedDate > $1.receivedDate }).prefix(3) {
-            lines.append("- \"\(e.subject)\" from \(e.displaySender) (\(dayFormatter.string(from: e.receivedDate)))")
+        if EmailTriageSettings.isEnabled {
+            let queue = EmailTriageService.needsReply(emails: appState.emails, blockedSenders: appState.blockedSenders)
+            lines.append("## Inbox — needs reply (\(queue.count) threads waiting on the user)")
+            for e in queue.prefix(4) {
+                lines.append("- \"\(e.subject)\" from \(e.displaySender) (\(dayFormatter.string(from: e.receivedDate)))")
+            }
+        } else {
+            lines.append("## Inbox")
+            lines.append("\(unread.count) unread.")
+            for e in unread.sorted(by: { $0.receivedDate > $1.receivedDate }).prefix(3) {
+                lines.append("- \"\(e.subject)\" from \(e.displaySender) (\(dayFormatter.string(from: e.receivedDate)))")
+            }
+        }
+
+        // Keep-in-touch queue — relationships whose follow-up cadence lapsed.
+        let dueFollowUps = appState.networkEntries
+            .compactMap { entry in entry.followUpOverdueDays().map { (entry, $0) } }
+            .sorted { $0.1 > $1.1 }
+        if !dueFollowUps.isEmpty {
+            lines.append("")
+            lines.append("## Follow-ups due (keep in touch)")
+            for (entry, days) in dueFollowUps.prefix(5) {
+                let who = [entry.name, entry.displayInfo].filter { !$0.isEmpty }.joined(separator: " — ")
+                let overdue = days == 0 ? "due today" : "\(days)d overdue"
+                lines.append("- \(who): \(overdue)")
+            }
+            if dueFollowUps.count > 5 {
+                lines.append("- …and \(dueFollowUps.count - 5) more")
+            }
         }
 
         return lines.joined(separator: "\n")

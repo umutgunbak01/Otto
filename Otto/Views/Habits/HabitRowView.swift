@@ -3,10 +3,23 @@ import SwiftUI
 struct HabitRowView: View {
     @Environment(AppState.self) private var appState
     let habit: Habit
+    var isSelected: Bool = false
     let onTap: () -> Void
 
+    @State private var isHovered = false
     @State private var showQuickLog = false
     @State private var quickLogValue: String = ""
+
+    // Layout constants shared with HabitListView's week-letter header so the
+    // M–S letters sit exactly above the dot columns.
+    static let dotSize: CGFloat = 14
+    static let dotSpacing: CGFloat = 6
+    static let streakChipWidth: CGFloat = 44
+    static let actionSize: CGFloat = 28
+    /// Distance from the row's trailing edge to the right edge of the
+    /// week-dot block: row padding + action button + gap + streak chip + gap.
+    static let weekTrailingInset: CGFloat =
+        Theme.Spacing.md + actionSize + Theme.Spacing.md + streakChipWidth + Theme.Spacing.md
 
     private var progress: Double { habit.progress(on: Date()) }
     private var target: Double { max(1, habit.dailyTarget) }
@@ -17,29 +30,44 @@ struct HabitRowView: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            iconBlock
+            OttoSquare(systemImage: habit.iconName, color: color)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(habit.title)
-                        .font(.system(size: 13.5, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Theme.Colors.text)
-                    targetBadge
+                        .lineLimit(1)
+                    freqChip
                 }
-                progressLine
+                statusLine
             }
 
             Spacer(minLength: Theme.Spacing.sm)
+
+            weekDots
 
             streakChip
 
             actionButton
         }
-        .padding(.vertical, Theme.Spacing.md)
+        .padding(.vertical, 10)
         .padding(.horizontal, Theme.Spacing.md)
-        .cardStyle()
+        .background(
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint while the detail popup is open.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
+                    isSelected
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
+                )
+        )
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        #if os(macOS)
+        .onHover { isHovered = $0 }
+        #endif
         .contextMenu {
             Button("Open Details") { onTap() }
             if habit.isArchived {
@@ -56,102 +84,142 @@ struct HabitRowView: View {
 
     // MARK: - Pieces
 
-    private var iconBlock: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                .fill(color.opacity(0.1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(color.opacity(isMet ? 0.5 : 0.2), lineWidth: 1)
-                )
-                .frame(width: 36, height: 36)
-            Image(systemName: habit.iconName)
-                .font(.system(size: 14))
-                .foregroundStyle(isMet ? color : color.opacity(0.7))
+    /// Compact frequency chip — mono uppercase outline (TagChipView style).
+    private var freqChip: some View {
+        Text(freqLabel)
+            .font(.system(size: 8.5, weight: .regular, design: .monospaced))
+            .tracking(0.9)
+            .foregroundStyle(Theme.Colors.tertiaryText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2.5)
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Theme.Colors.border, lineWidth: 1)
+            )
+    }
+
+    private var freqLabel: String {
+        switch habit.frequency {
+        case .daily:
+            return "DAILY"
+        case .weekdays(let days):
+            if days.isEmpty || days.count == 7 { return "DAILY" }
+            return "\(days.count)×/WEEK"
+        case .weeklyCount(let n):
+            return "\(n)×/WEEK"
         }
     }
 
     @ViewBuilder
-    private var targetBadge: some View {
-        let label: String = {
-            switch habit.kind {
-            case .binary:
-                return habit.frequency.displayName
-            case .quantity, .duration, .count:
+    private var statusLine: some View {
+        if habit.kind == .binary {
+            Text(isMet ? "Done today" : "Not done")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(isMet ? color : Theme.Colors.tertiaryText)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
                 let unit = habit.unit ?? ""
-                return "\(format(target))\(unit.isEmpty ? "" : " \(unit)") · \(habit.frequency.displayName)"
+                Text("\(format(progress)) / \(format(target))\(unit.isEmpty ? "" : " \(unit)")")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(isMet ? color : Theme.Colors.tertiaryText)
+                ProgressBar(progress: ratio, color: color)
+                    .frame(height: 3)
+                    .frame(maxWidth: 200)
             }
-        }()
-        Text(label)
-            .font(Theme.Typography.monoSmall)
-            .foregroundStyle(Theme.Colors.textDim)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Theme.Colors.hoverTint)
-            )
-    }
-
-    private var progressLine: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                if habit.kind == .binary {
-                    Text(isMet ? "Done today" : "Not done")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(isMet ? color : Theme.Colors.textDim)
-                } else {
-                    let unit = habit.unit ?? ""
-                    Text("\(format(progress)) / \(format(target))\(unit.isEmpty ? "" : " \(unit)")")
-                        .font(Theme.Typography.monoCaption)
-                        .foregroundStyle(isMet ? color : Theme.Colors.textDim)
-                }
-                Spacer()
-            }
-            ProgressBar(progress: ratio, color: color)
-                .frame(height: 3)
-                .frame(maxWidth: 240)
         }
     }
+
+    // MARK: - Week dots
+
+    /// The 7 dates of the current ISO week (Mon–Sun), computed once per row.
+    private var weekDays: [Date] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let daysFromMonday = (cal.component(.weekday, from: today) + 5) % 7
+        let monday = cal.date(byAdding: .day, value: -daysFromMonday, to: today) ?? today
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: monday) }
+    }
+
+    private var weekDots: some View {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let created = cal.startOfDay(for: habit.createdAt)
+        return HStack(spacing: Self.dotSpacing) {
+            ForEach(weekDays, id: \.self) { day in
+                dot(for: day, today: today, created: created)
+            }
+        }
+    }
+
+    private func dot(for day: Date, today: Date, created: Date) -> some View {
+        let isToday = day == today
+
+        return Group {
+            if habit.isMet(on: day) {
+                Circle().fill(color)
+            } else if isToday {
+                Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 1.5)
+            } else if day < today, day >= created, habit.isRequired(on: day) {
+                // Missed: required, in the past, not done.
+                Circle().strokeBorder(Color.white.opacity(0.16), lineWidth: 1.5)
+            } else {
+                // Upcoming, off-schedule, or pre-creation days stay faint.
+                Circle().strokeBorder(Color.white.opacity(0.07), lineWidth: 1.5)
+            }
+        }
+        .frame(width: Self.dotSize, height: Self.dotSize)
+        .overlay {
+            if isToday {
+                Circle()
+                    .strokeBorder(color, lineWidth: 1.5)
+                    .padding(-3)
+            }
+        }
+    }
+
+    // MARK: - Streak + action
 
     private var streakChip: some View {
         HStack(spacing: 3) {
             Image(systemName: "flame.fill")
                 .font(.system(size: 9))
-            Text("\(streak)")
-                .font(Theme.Typography.monoCaption)
+            Text("\(streak)d")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
         }
-        .foregroundStyle(streak > 0 ? Theme.Colors.amber : Theme.Colors.textDim)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(streak > 0 ? Theme.Colors.tintAmber : Theme.Colors.hoverTint)
-        )
+        .foregroundStyle(streak > 0 ? Theme.Colors.amber : Theme.Colors.tertiaryText)
+        .frame(width: Self.streakChipWidth, alignment: .trailing)
     }
 
-    @ViewBuilder
+    /// 28pt rounded-square quick action — checkmark in the teal-wash style
+    /// when today is met, plus otherwise. Binary habits toggle directly;
+    /// quantified habits keep the quick-log popover.
     private var actionButton: some View {
-        if habit.kind == .binary {
-            Button {
+        Button {
+            if habit.kind == .binary {
                 Task { await toggleBinary() }
-            } label: {
-                Image(systemName: isMet ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(isMet ? color : Theme.Colors.textDim)
-            }
-            .buttonStyle(.plain)
-        } else {
-            Button {
+            } else {
                 quickLogValue = ""
                 showQuickLog = true
-            } label: {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 22))
-                    .foregroundStyle(color)
             }
-            .buttonStyle(.plain)
+        } label: {
+            Image(systemName: isMet ? "checkmark" : "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isMet ? Theme.Colors.cyan : Theme.Colors.textDim)
+                .frame(width: Self.actionSize, height: Self.actionSize)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .fill(isMet ? Theme.Colors.tintTeal : Theme.Colors.panel)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.md)
+                        .strokeBorder(
+                            isMet ? Theme.Colors.cyan.opacity(0.35) : Theme.Colors.border,
+                            lineWidth: 1
+                        )
+                )
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Quick log popover

@@ -18,6 +18,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
     case xFollower = "xFollower"
     case xDm = "xDm"
     case habit = "habit"
+    case automation = "automation"
 
     var id: String { rawValue }
 
@@ -42,6 +43,31 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// Plural tab title used by the sidebar, the top-bar crumb, and view
+    /// headers (mockup nav labels).
+    var pluralTitle: String {
+        switch self {
+        case .todo: return "To-dos"
+        case .note: return "Notes"
+        case .idea: return "Ideas"
+        case .reminder: return "Reminders"
+        case .bookmark: return "Bookmarks"
+        case .meeting: return "Meetings"
+        case .email: return "Emails"
+        case .connection: return "LinkedIn"
+        case .networkHub: return "Network hub"
+        case .company: return "Companies"
+        case .event: return "Events"
+        case .community: return "Communities"
+        case .file: return "Files"
+        case .xPost: return "Posts"
+        case .xFollower: return "Followers"
+        case .xDm: return "DMs"
+        case .habit: return "Habits"
+        case .automation: return "Automations"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .todo: return "To-Do"
@@ -61,6 +87,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .xFollower: return "X Followers"
         case .xDm: return "X DMs"
         case .habit: return "Habits"
+        case .automation: return "Automations"
         }
     }
 
@@ -83,6 +110,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .xFollower: return "person.2.fill"
         case .xDm: return "message.fill"
         case .habit: return "flame"
+        case .automation: return "calendar.badge.clock"
         }
     }
 
@@ -105,6 +133,7 @@ enum ContentType: String, Codable, CaseIterable, Identifiable {
         case .xFollower:  return Theme.Colors.green
         case .xDm:        return Theme.Colors.cyan
         case .habit:      return Theme.Colors.green
+        case .automation: return Theme.Colors.aiAccent
         }
     }
 }

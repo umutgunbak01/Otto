@@ -17,24 +17,30 @@ struct TodoRowView: View {
                     await appState.toggleTodo(todo)
                 }
             } label: {
+                // Rounded-square check (mockup .cb) — teal wash when done.
                 ZStack {
-                    Circle()
-                        .stroke(Theme.Colors.borderStrong, lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: 5.5)
+                        .strokeBorder(
+                            todo.isCompleted
+                                ? Theme.Colors.cyan.opacity(0.45)
+                                : (isCheckboxHovered ? Theme.Colors.cyan.opacity(0.55) : Color.white.opacity(0.22)),
+                            lineWidth: 1.5
+                        )
+                        .background(
+                            RoundedRectangle(cornerRadius: 5.5)
+                                .fill(todo.isCompleted ? Theme.Colors.tintTeal : Color.clear)
+                        )
                         .frame(width: 16, height: 16)
 
                     if todo.isCompleted {
-                        Circle()
-                            .fill(Theme.Colors.accent)
-                            .frame(width: 16, height: 16)
-
                         Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Theme.Colors.onAccent)
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Theme.Colors.cyan)
                     } else if isCheckboxHovered {
                         // Show checkmark preview on hover
                         Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(Theme.Colors.accent.opacity(0.6))
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(Theme.Colors.cyan.opacity(0.6))
                     }
                 }
                 .animation(.easeInOut(duration: 0.15), value: isCheckboxHovered)
@@ -139,10 +145,10 @@ struct TodoRowView: View {
 
                 // Right side - Category/Priority tag
                 HStack(spacing: Theme.Spacing.sm) {
-                    // Priority indicator (subtle)
+                    // Priority flag (mockup .pflag — outline, colored)
                     if todo.priority == .high || todo.priority == .urgent {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 11))
+                        Image(systemName: "flag")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(priorityColor)
                     }
 
@@ -172,22 +178,18 @@ struct TodoRowView: View {
                 onSelect?()
             }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .padding(.horizontal, Theme.Spacing.md)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint when selected.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
                     isSelected
-                        ? Theme.Colors.accent.opacity(0.35)
-                        : (isHovered ? Theme.Colors.borderStrong : Theme.Colors.border),
-                    lineWidth: 1
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
                 )
         )
-        .padding(.vertical, 3)
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering

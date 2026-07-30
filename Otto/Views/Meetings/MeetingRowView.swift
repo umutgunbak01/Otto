@@ -8,31 +8,23 @@ struct MeetingRowView: View {
     @State private var isHovered: Bool = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 11) {
-            // Meeting icon (mockup .sq)
-            ZStack {
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(Theme.Colors.selectTint)
-                    .frame(width: 30, height: 30)
+        HStack(alignment: .center, spacing: Theme.Spacing.md) {
+            // Meeting icon square (mockup .sq) — dim when no transcript.
+            OttoSquare(systemImage: "video", color: Theme.Colors.cyan, dim: !meeting.hasTranscript)
 
-                Image(systemName: "video.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.Colors.accentText)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 // Title
                 Text(meeting.title)
-                    .font(.system(size: 13.5, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
                 // Participants + tags sub-line
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     if !meeting.participants.isEmpty {
                         Text(participantsPreview)
-                            .font(Theme.Typography.callout)
-                            .foregroundStyle(Theme.Colors.textDim)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.Colors.tertiaryText)
                             .lineLimit(1)
                     }
 
@@ -42,44 +34,78 @@ struct MeetingRowView: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: Theme.Spacing.sm)
 
-            // Transcript chip + date/duration (mockup .end)
+            // Action-items + transcript chips + date/duration (mockup .end)
             HStack(spacing: Theme.Spacing.sm) {
+                if actionItemCount > 0 {
+                    monoCapsule(
+                        "\(actionItemCount) action item\(actionItemCount == 1 ? "" : "s")",
+                        color: Theme.Colors.amber
+                    )
+                }
+
                 if meeting.hasTranscript {
-                    AngularChip(fill: Theme.Colors.tintGreen) {
-                        Text("transcript")
-                            .font(Theme.Typography.monoSmall)
-                            .foregroundStyle(Theme.Colors.green)
-                    }
+                    monoCapsule("transcript", color: Theme.Colors.green)
                 } else {
-                    AngularChip {
-                        Text("no transcript")
-                            .font(Theme.Typography.monoSmall)
-                            .foregroundStyle(Theme.Colors.tertiaryText)
-                    }
+                    dimCapsule("no transcript")
                 }
 
                 Text(dateAndDuration)
-                    .font(Theme.Typography.monoCaption)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .foregroundStyle(Theme.Colors.tertiaryText)
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .fill(isSelected ? Theme.Colors.selectTint : Theme.Colors.panel)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.md)
-                .strokeBorder(isHovered ? Theme.Colors.borderStrong : Theme.Colors.border, lineWidth: 1)
+            // Quiet list row (mockup .lrow) — no border, wash on hover,
+            // teal tint when selected.
+            RoundedRectangle(cornerRadius: 11)
+                .fill(
+                    isSelected
+                        ? Theme.Colors.selectTint
+                        : (isHovered ? Theme.Colors.panel : Color.clear)
+                )
         )
         #if os(macOS)
         .onHover { hovering in
             isHovered = hovering
         }
         #endif
+    }
+
+    // MARK: - Chips
+
+    /// Colored mono capsule (mockup .chip2 semantic chips).
+    private func monoCapsule(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(color.opacity(0.10)))
+            .overlay(Capsule().strokeBorder(color.opacity(0.2), lineWidth: 1))
+    }
+
+    /// Neutral dim capsule for the "no transcript" state.
+    private func dimCapsule(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+            .foregroundStyle(Theme.Colors.tertiaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Theme.Colors.panel))
+            .overlay(Capsule().strokeBorder(Theme.Colors.border, lineWidth: 1))
+    }
+
+    /// The model stores action items as newline-separated markdown text —
+    /// count the non-empty lines for the chip.
+    private var actionItemCount: Int {
+        meeting.actionItems
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .count
     }
 
     private var dateAndDuration: String {

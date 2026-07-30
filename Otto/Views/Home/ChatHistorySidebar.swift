@@ -43,7 +43,7 @@ struct ChatHistorySidebar: View {
             }
         }
         .frame(width: 240)
-        .background(Theme.Colors.bg1)
+        .background(Theme.Colors.panelWash)
         .overlay(alignment: .trailing) {
             Rectangle()
                 .fill(Theme.Colors.border)

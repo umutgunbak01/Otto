@@ -93,10 +93,8 @@ struct BookmarkListView: View {
 
     private var listPanel: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header — no hairline underneath; content scrolls directly below.
             header
-
-            OttoDivider()
 
             // Content
             if filteredBookmarks.isEmpty {
@@ -113,70 +111,61 @@ struct BookmarkListView: View {
         VStack(spacing: Theme.Spacing.md) {
             HStack(alignment: .center, spacing: 10) {
                 Text("Bookmarks")
-                    .font(Theme.Typography.title)
+                    .font(Theme.Typography.display)
                     .foregroundStyle(Theme.Colors.text)
                     .lineLimit(1)
 
-                OttoCountBadge(count: filteredBookmarks.count)
+                OttoCountChip(text: "\(appState.bookmarks.count) · \(unreadCount) unread")
 
                 Spacer()
             }
 
-            // Filters — horizontally scrollable so the narrow list pane
-            // (400pt when the detail panel is open) can never compress the
-            // pills into letter-wrapped text.
-            ScrollView(.horizontal, showsIndicators: false) {
+            // Filters — read-state pills left, media pills right. The narrow
+            // list pane (400pt when the detail panel is open) falls back to a
+            // horizontal scroll so the pills can never compress into
+            // letter-wrapped text.
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: Theme.Spacing.md) {
                     BookmarkFilterPicker(selection: $filter)
+                    Spacer(minLength: Theme.Spacing.md)
+                    mediaTypePills
+                }
 
-                    HStack(spacing: Theme.Spacing.xs) {
-                        mediaTypeButton(nil, label: "All")
-                        mediaTypeButton(.readLater, label: "Read Later")
-                        mediaTypeButton(.listenLater, label: "Listen Later")
-                        mediaTypeButton(.watchLater, label: "Watch Later")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.Spacing.md) {
+                        BookmarkFilterPicker(selection: $filter)
+                        mediaTypePills
                     }
                 }
             }
         }
         .padding(.horizontal, Theme.Spacing.xl)
-        .padding(.top, Theme.Spacing.xl)
-        .padding(.bottom, Theme.Spacing.md)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
-    private func mediaTypeButton(_ type: Bookmark.MediaType?, label: String) -> some View {
-        let isActive = mediaFilter == type
+    private var unreadCount: Int {
+        appState.bookmarks.filter { !$0.isRead }.count
+    }
 
-        return Button {
-            withAnimation(.easeInOut(duration: 0.15)) {
-                mediaFilter = type
-            }
-        } label: {
-            HStack(spacing: 4) {
-                if let mediaType = type {
-                    Image(systemName: mediaType.iconName)
-                        .font(.system(size: 10))
-                }
-                Text(label)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                    .fill(isActive ? Theme.Colors.selectTint : Color.clear)
-            )
-            .foregroundStyle(isActive ? Theme.Colors.accentText : Theme.Colors.textDim)
-        }
-        .buttonStyle(.plain)
+    private var mediaTypePills: some View {
+        OttoPillRail(options: mediaTypeOptions, selection: $mediaFilter)
+    }
+
+    private var mediaTypeOptions: [(value: Bookmark.MediaType?, label: String)] {
+        [
+            (nil, "All"),
+            (.readLater, "Read Later"),
+            (.listenLater, "Listen Later"),
+            (.watchLater, "Watch Later"),
+        ]
     }
 
     // MARK: - Bookmark List
 
     private var bookmarkList: some View {
         ScrollView {
-            LazyVStack(spacing: Theme.Spacing.sm) {
+            LazyVStack(spacing: 2) {
                 ForEach(filteredBookmarks) { bookmark in
                     BookmarkRowView(bookmark: bookmark, isSelected: selectedBookmarkId == bookmark.id)
                         .contentShape(Rectangle())
@@ -192,27 +181,19 @@ struct BookmarkListView: View {
                 }
             }
             .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.bottom, Theme.Spacing.xl)
         }
     }
 
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Image(systemName: "bookmark")
-                .font(.system(size: 56, weight: .thin))
-                .foregroundStyle(Theme.Colors.tertiaryText)
-
-            VStack(spacing: Theme.Spacing.xs) {
-                Text(emptyStateTitle)
-                    .font(Theme.Typography.title)
-                Text("Paste a URL to save it for later")
-                    .font(Theme.Typography.body)
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        OttoEmptyState(
+            systemImage: "bookmark",
+            title: emptyStateTitle,
+            message: "Paste a URL to save it for later.",
+            tip: "Saved links become readable by the agent"
+        )
     }
 
     private var emptyStateTitle: String {

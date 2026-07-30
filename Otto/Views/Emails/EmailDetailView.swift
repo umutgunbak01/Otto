@@ -199,7 +199,7 @@ struct EmailDetailView: View {
                     Text("Back")
                         .font(Theme.Typography.body)
                 }
-                .foregroundStyle(Theme.Colors.accent)
+                .foregroundStyle(Theme.Colors.secondaryText)
             }
             .buttonStyle(.plain)
 
@@ -238,6 +238,16 @@ struct EmailDetailView: View {
 
                 // More menu
                 Menu {
+                    if EmailTriageSettings.isEnabled {
+                        Button {
+                            ReplyDraftService.shared.beginDraft(for: email, appState: appState)
+                        } label: {
+                            Label("Draft Reply", systemImage: "arrowshape.turn.up.left")
+                        }
+
+                        Divider()
+                    }
+
                     Button {
                         Task {
                             var updated = email

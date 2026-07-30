@@ -107,8 +107,8 @@ struct DaySection: View {
         } label: {
             HStack(spacing: Theme.Spacing.sm) {
                 Text(formattedHeader)
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.xwide)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .tracking(Theme.Tracking.xxwide)
                     .textCase(.uppercase)
                     .foregroundStyle(headerColor)
 
@@ -278,8 +278,8 @@ struct OverdueSection: View {
                     .foregroundStyle(Theme.Colors.red)
 
                 Text("Overdue")
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.xwide)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .tracking(Theme.Tracking.xxwide)
                     .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.red)
 
@@ -312,8 +312,8 @@ struct OverdueSection: View {
                     .foregroundStyle(Theme.Colors.tertiaryText)
 
                 Text("No Date")
-                    .font(Theme.Typography.label)
-                    .tracking(Theme.Tracking.xwide)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .tracking(Theme.Tracking.xxwide)
                     .textCase(.uppercase)
                     .foregroundStyle(Theme.Colors.tertiaryText)
 

@@ -47,6 +47,8 @@ enum AgentWorkspaceExporter {
         var communities: [Community] = []
         var files: [FileItem] = []
         var habits: [Habit] = []
+        var savedPrompts: [SavedPrompt] = []
+        var scheduledTasks: [ScheduledTask] = []
         var calendarEvents: [CalendarEvent] = []
         var xFollowers: [XFollower] = []
         var xPosts: [XPost] = []
@@ -63,7 +65,7 @@ enum AgentWorkspaceExporter {
     static func snapshot(from appState: AppState) -> Snapshot {
         var s = Snapshot()
         s.todos = appState.todos
-        s.notes = appState.notes
+        s.notes = appState.activeNotes
         s.ideas = appState.ideas
         s.reminders = appState.reminders
         s.bookmarks = appState.bookmarks
@@ -76,6 +78,8 @@ enum AgentWorkspaceExporter {
         s.communities = appState.communities
         s.files = appState.files
         s.habits = appState.habits.filter { !$0.isArchived }
+        s.savedPrompts = appState.savedPrompts
+        s.scheduledTasks = appState.scheduledTasks
         s.calendarEvents = appState.calendarEvents
         s.xFollowers = appState.xFollowers
         s.xPosts = appState.xPosts
@@ -164,10 +168,10 @@ enum AgentWorkspaceExporter {
         switch access {
         case .localFiles:
             out.append("## Data workspace (files in your working directory)")
-            out.append("Your cwd contains a fresh snapshot of the user's Otto data, one record per line. For bulk, multi-entity, relational, or analytical questions (\"which funds…\", \"count by city\", \"cross-reference emails and connections\") — Grep/Read these files FIRST. One `grep -iE \"acme|globex\" connections.csv` beats a chain of search_items calls and returns only the matching lines.")
+            out.append("Your cwd contains a fresh snapshot of the user's Otto data, one record per line. For bulk, multi-entity, relational, or analytical questions with known literal strings (\"which funds…\", \"count by city\", \"cross-reference emails and connections\") — Grep/Read these files FIRST. One `grep -iE \"acme|globex\" connections.csv` beats a chain of search_items calls and returns only the matching lines. When you don't know the literal wording (conceptual or paraphrased recall), `semantic_search` remains the better first move — grep can't match meaning.")
         case .mcpGrep:
             out.append("## Data workspace (grep_data tool)")
-            out.append("The `grep_data` tool regex-searches snapshot tables of the user's Otto data (one record per line) and returns ONLY the matching lines. For bulk, multi-entity, relational, or analytical questions (\"which funds…\", \"who do I know in <city>…\", \"cross-reference emails and connections\") call grep_data FIRST — one call with an alternation pattern, e.g. grep_data(file: \"connections.csv\", pattern: \"molten|wing|revo\"), replaces a whole chain of search_items calls. NEVER call search_items once per entity.")
+            out.append("The `grep_data` tool regex-searches snapshot tables of the user's Otto data (one record per line) and returns ONLY the matching lines. For bulk, multi-entity, relational, or analytical questions with known literal strings (\"which funds…\", \"who do I know in <city>…\", \"cross-reference emails and connections\") call grep_data FIRST — one call with an alternation pattern, e.g. grep_data(file: \"connections.csv\", pattern: \"molten|wing|revo\"), replaces a whole chain of search_items calls. NEVER call search_items once per entity. When you don't know the literal wording (conceptual or paraphrased recall), `semantic_search` remains the better first move — regex can't match meaning.")
         }
         for spec in specs {
             out.append("- \(spec.filename) — \(spec.count) rows: \(spec.doc)")
@@ -178,7 +182,7 @@ enum AgentWorkspaceExporter {
             Workspace rules:
             - Every row carries the item's `id` — chain into `get_item` for the full record (email bodies, meeting content; file text via `read_file`) and `attach_item_preview` for clickable cards.
             - The snapshot is taken when your turn starts. Anything you create/update/delete mid-turn shows up only via search_items/get_item — not in these files.
-            - Prefer these files over repeated search_items calls for anything bulk or analytical; keep search_items for single targeted lookups or post-mutation freshness. This overrides the earlier guidance about calling search_items for relational / cross-source questions — Grep the workspace instead, then synthesize.
+            - Prefer these files over repeated search_items calls for anything bulk or analytical; keep search_items for single targeted lookups or post-mutation freshness, and semantic_search for meaning-based recall where literal patterns won't hit. For relational / cross-source questions: known strings → Grep the workspace; vague or conceptual → semantic_search; then synthesize.
             """)
         case .mcpGrep:
             out.append("""
@@ -186,7 +190,7 @@ enum AgentWorkspaceExporter {
             - Every row carries the item's `id` — chain into `get_item` for the full record (email bodies, meeting content; file text via `read_file`) and `attach_item_preview` for clickable cards.
             - Tables are generated fresh on every grep_data call, so they always reflect current data — including items you just created or updated this turn.
             - Case-insensitive regex per line; pattern \".\" lists rows (rows are pre-sorted: people alphabetical, time-series newest first; cap with max_results).
-            - Prefer grep_data over repeated search_items calls for anything bulk or analytical. This overrides the earlier guidance about calling search_items for relational / cross-source questions — grep the workspace instead, then synthesize.
+            - Prefer grep_data over repeated search_items calls for anything bulk or analytical; keep search_items for single targeted lookups, and semantic_search for meaning-based recall where literal patterns won't hit. For relational / cross-source questions: known strings → grep_data; vague or conceptual → semantic_search; then synthesize.
             """)
         }
         return out.joined(separator: "\n")
@@ -286,8 +290,8 @@ enum AgentWorkspaceExporter {
         }
 
         add("network_hub.csv", snap.networkEntries.count,
-            "id,name,company,type,individual_type,title,industry,location,email,closeness,past_companies,skills,notes (curated people/orgs CRM)") {
-            var rows = [csvRow(["id", "name", "company", "type", "individual_type", "title", "industry", "location", "email", "closeness", "past_companies", "skills", "notes"])]
+            "id,name,company,type,individual_type,title,industry,location,email,closeness,last_contacted,follow_up_cadence,follow_up_overdue_days,past_companies,skills,notes (curated people/orgs CRM; follow_up_overdue_days non-empty = keep-in-touch follow-up is due)") {
+            var rows = [csvRow(["id", "name", "company", "type", "individual_type", "title", "industry", "location", "email", "closeness", "last_contacted", "follow_up_cadence", "follow_up_overdue_days", "past_companies", "skills", "notes"])]
             for n in snap.networkEntries.sorted(by: { $0.name.lowercased() < $1.name.lowercased() }) {
                 let pastCompanies = (n.profile?.experiences.map(\.company) ?? [])
                     .filter { !$0.isEmpty }
@@ -296,6 +300,9 @@ enum AgentWorkspaceExporter {
                 rows.append(csvRow([
                     n.id.uuidString, n.name, n.company, n.type.label, n.individualType.label,
                     n.title, n.industry, n.location, n.email, n.closeness.label,
+                    n.lastContactedAt.map(day) ?? "",
+                    n.followUpCadence?.rawValue ?? "",
+                    n.followUpOverdueDays().map(String.init) ?? "",
                     uniqPast.prefix(8).joined(separator: "|"),
                     (n.profile?.skills ?? []).prefix(8).joined(separator: "|"),
                     clip(n.notes, 200)
@@ -396,6 +403,30 @@ enum AgentWorkspaceExporter {
                     h.id.uuidString, h.title, h.kind.rawValue,
                     num(h.dailyTarget), h.unit ?? "", h.frequency.displayName,
                     String(h.currentStreak(asOf: snap.generatedAt)), today
+                ]))
+            }
+            return rows.joined(separator: "\n")
+        }
+
+        add("saved_prompts.csv", snap.savedPrompts.count,
+            "id,name,prompt (user's reusable prompt library)") {
+            var rows = [csvRow(["id", "name", "prompt"])]
+            for p in snap.savedPrompts {
+                rows.append(csvRow([p.id.uuidString, p.name, clip(p.prompt, 300)]))
+            }
+            return rows.joined(separator: "\n")
+        }
+
+        add("scheduled_tasks.csv", snap.scheduledTasks.count,
+            "id,name,schedule,enabled,next_due,last_run_status,prompt (recurring agent tasks)") {
+            var rows = [csvRow(["id", "name", "schedule", "enabled", "next_due", "last_run_status", "prompt"])]
+            for t in snap.scheduledTasks {
+                rows.append(csvRow([
+                    t.id.uuidString, t.name, t.schedule.displaySummary,
+                    t.isEnabled ? "yes" : "no",
+                    t.nextDueAt.map(iso) ?? "",
+                    t.latestRun.map { $0.status.rawValue } ?? "",
+                    clip(t.prompt, 300)
                 ]))
             }
             return rows.joined(separator: "\n")
